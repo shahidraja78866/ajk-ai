@@ -10,6 +10,19 @@
 //              enable_safety_checker (boolean, default true)
 //   output   : { video: { url, content_type, file_name, file_size } }
 //   queue    : POST https://queue.fal.run/<model>  (Authorization: Key <FAL_KEY>)
+//
+// Native-4K endpoint verified against fal.ai's official API docs (2026-10-22):
+//   model id : fal-ai/kling-video/o3/4k/text-to-video
+//   inputs   : prompt (string, required), duration (DurationEnum as string,
+//              "3"-"15", e.g. "5"), aspect_ratio ("16:9" | "9:16" | "1:1"),
+//              generate_audio (boolean), enable_safety_checker (boolean,
+//              default true)
+//   note     : NO `resolution` input — 4K output is fixed by the endpoint
+//              (genuine native 4K, no upscaling stage); 4K is served from
+//              fal's Singapore region only; flat $0.42/second with audio
+//              bundled at no extra cost (durations 3-15s)
+//   output   : { video: { url, content_type, file_name, file_size } }
+//   docs     : https://fal.ai/models/fal-ai/kling-video/o3/4k/text-to-video/api
 
 import 'dotenv/config';
 import express from 'express';
@@ -32,11 +45,12 @@ if (!FAL_KEY || !JWT_SECRET) {
 // ---------- Public configuration (safe to expose via /api/config) ----------
 const CONFIG = {
   model: process.env.FAL_MODEL || 'minimax/h3/text-to-video',
-  // Model used for native-4K generations (Extra Pro plan). The exact fal
-  // endpoint for native 4K is provider-side configuration: set FAL_MODEL_4K
-  // to the verified Kling O3 4K endpoint id once confirmed on fal.ai. Until
-  // then it falls back to the main model — we never hardcode an unverified id.
-  model4k: process.env.FAL_MODEL_4K || process.env.FAL_MODEL || 'minimax/h3/text-to-video',
+  // Model used for native-4K generations (Extra Pro plan). Verified against
+  // fal.ai's official API docs (2026-10-22): fal-ai/kling-video/o3/4k/text-to-video
+  // is genuine native 4K (no upscaling stage), flat $0.42/second, aspect
+  // ratios 16:9/9:16/1:1. Override with FAL_MODEL_4K only if the provider
+  // changes the endpoint id.
+  model4k: process.env.FAL_MODEL_4K || 'fal-ai/kling-video/o3/4k/text-to-video',
   resolution: process.env.FAL_RESOLUTION || '768P',
   aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'],
   durations: [5, 10],                       // seconds offered in the UI
@@ -55,6 +69,12 @@ const CONFIG = {
 
 // Resolutions the model API accepts, cheapest → most expensive.
 const RESOLUTIONS = ['480P', '768P', '2K', '4K'];
+
+// Aspect ratios the native-4K endpoint supports (fal.ai o3/4k schema,
+// verified 2026-10-22). Requests at other ratios are routed to the H3 model
+// at 2K with the standard credit rate — they are not native 4K, so they are
+// never charged or recorded as 4K.
+const FOUR_K_ASPECTS = ['16:9', '9:16', '1:1'];
 
 // Subscription plan catalogue. Prices/credits are seeded into the `plans`
 // table on first boot and are afterwards editable in the admin panel — boot
@@ -460,8 +480,19 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
       return res.status(400).json({ error: `resolution must be one of: ${RESOLUTIONS.join(', ')}` });
     if (RESOLUTIONS.indexOf(wanted) <= RESOLUTIONS.indexOf(planResolution)) resolution = wanted;
   }
-  const model = resolution === '4K' ? (plan && plan.resolution === '4K' ? plan.model : CONFIG.model4k)
+  let model = resolution === '4K' ? (plan && plan.resolution === '4K' ? plan.model : CONFIG.model4k)
                                      : CONFIG.model;
+  // The native-4K endpoint only renders 16:9, 9:16 and 1:1. A 4K-quality
+  // request at any other ratio falls back to the H3 model at 2K with the
+  // standard (non-doubled) credit rate — it is not native 4K, so it must
+  // not be charged or recorded as 4K.
+  let fallbackNote = null;
+  if (resolution === '4K' && !FOUR_K_ASPECTS.includes(aspect_ratio)) {
+    resolution = '2K';
+    model = CONFIG.model;
+    fallbackNote = 'Native 4K is only available for 16:9, 9:16 and 1:1 videos; ' +
+                   'this video was generated at 2K instead.';
+  }
   // Native-4K generations cost double credits; everything else is the
   // standard per-duration rate.
   const cost = (CONFIG.costByDuration[Number(duration)] ?? 1) *
@@ -504,17 +535,25 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
 
   // Submit to fal.ai queue (key never leaves the server) — routed to the
   // model + resolution the user's plan entitles them to.
+  // The Kling native-4K endpoint has no `resolution` parameter (4K is fixed
+  // by the endpoint itself) and expects `duration` as a string enum
+  // ("5"/"10" — fal.ai's official schema, verified 2026-10-22). We also pin
+  // generate_audio:false because the app does its own voice-over and mixing.
+  // The H3 model keeps the original body shape with `resolution`.
+  const isNative4k = resolution === '4K' && model !== CONFIG.model;
+  const falBody = isNative4k
+    ? { prompt: `${prompt.trim()} — style: ${style}`,
+        duration: String(duration), aspect_ratio,
+        generate_audio: false, enable_safety_checker: true }
+    : { prompt: `${prompt.trim()} — style: ${style}`,
+        duration: Number(duration), aspect_ratio, resolution,
+        enable_safety_checker: true };
+  lastFalBody = falBody; // test hook (recorded only, never sent anywhere else)
   try {
     const r = await fetch(`https://queue.fal.run/${model}`, {
       method: 'POST',
       headers: { 'Authorization': `Key ${FAL_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        prompt: `${prompt.trim()} — style: ${style}`,
-        duration: Number(duration),
-        aspect_ratio,
-        resolution,
-        enable_safety_checker: true,
-      }),
+      body: JSON.stringify(falBody),
     });
     if (!r.ok) throw new Error(`fal.ai returned ${r.status}`);
     const data = await r.json();
@@ -522,12 +561,21 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
                 updated_at = datetime('now') WHERE id = ?`).run(data.request_id, jobId);
     const me = db.prepare('SELECT credits FROM users WHERE id = ?').get(req.user.id);
     res.json({ id: jobId, status: 'in_progress', credits_left: me.credits,
-               cost_credits: cost, resolution, model });
+               cost_credits: cost, resolution, model,
+               ...(fallbackNote ? { note: fallbackNote } : {}) });
   } catch (e) {
     failAndRefund(jobId, `Provider submission failed (${e.message})`);
     res.status(502).json({ error: 'Video service is unavailable right now. Your credit was refunded.' });
   }
 });
+
+// ---------- Test hook: last fal request body (only when env-gated) ----------
+// test.sh starts the server with TEST_RECORD_FAL_BODY=1 so the suite can
+// assert the exact fal request shape without making a real provider call.
+let lastFalBody = null;
+if (process.env.TEST_RECORD_FAL_BODY === '1') {
+  app.get('/api/_test/fal-body', (req, res) => res.json({ body: lastFalBody }));
+}
 
 // Transition a job to failed exactly once, refunding its credits exactly once.
 function failAndRefund(jobId, message) {

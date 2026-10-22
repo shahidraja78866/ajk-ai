@@ -54,6 +54,27 @@ Verified against fal.ai's official API docs on 2026-10-20 (no account needed):
 - Output: `{ video: { url, content_type, file_name, file_size } }`
 - fal.ai's docs also state the key must be used through a **server-side proxy**, never client-side — which is exactly this architecture.
 
+## Native-4K endpoint (Kling O3 4K)
+Verified against fal.ai's official API docs on 2026-10-22
+(https://fal.ai/models/fal-ai/kling-video/o3/4k/text-to-video/api):
+- Model id: `fal-ai/kling-video/o3/4k/text-to-video` — genuine native 4K in
+  one pass, **no upscaling stage**
+- Inputs: `prompt` (string, required), `duration` (DurationEnum **as a
+  string**, "3"-"15", e.g. `"5"` — this differs from the H3 model's integer),
+  `aspect_ratio` (`16:9` | `9:16` | `1:1` only), `generate_audio` (boolean),
+  `enable_safety_checker` (default true)
+- **There is no `resolution` parameter** — 4K output is fixed by the endpoint,
+  so the backend omits it for 4K generations (H3 generations keep it)
+- Pricing: flat **$0.42/second**, audio bundled at no extra cost; 5s = $2.10,
+  10s = $4.20. 4K is served from fal's **Singapore region** only
+- Output: same shape as H3 (`{ video: { url, ... } }`) — the existing polling
+  code already parses it
+
+**Aspect-ratio fallback:** the 4K endpoint only renders 16:9, 9:16 and 1:1.
+An Extra Pro generation requested at any other ratio falls back to the H3
+model at 2K with the **standard credit rate** (not doubled) — it is neither
+charged nor recorded as 4K, and the response carries a `note` explaining this.
+
 ## Test results (backend, 2026-10-20)
 Run locally with `bash test.sh` — **19/19 tests passed** with a dummy key (no paid calls):
 - ✅ health + config endpoint exposes no secrets
@@ -86,13 +107,16 @@ they are edited in the Admin Panel and boot never overwrites an admin's edits.
 |---|---|---|---|---|---|
 | Normal | Rs 1,500 | Rs 15,000 | 5 | 768P | H3 model, resolution `768P` |
 | Pro | Rs 3,000 | Rs 30,000 | 6 | 2K | H3 model, resolution `2K` |
-| Extra Pro | Rs 5,000 | Rs 50,000 | 10 | Native 4K | 4K model (see below), resolution `4K` |
+| Extra Pro | Rs 5,000 | Rs 50,000 | 10 | Native 4K | Kling O3 4K native-4K endpoint (no `resolution` param; 16:9/9:16/1:1 only) |
 
 **Quality honesty:** on the H3 model, fal's own docs describe 2K/4K as
 upscaling a 768P base — the UI labels Pro's quality simply "2K". Extra Pro's
-4K is routed to a **separate native-4K model**: set `FAL_MODEL_4K` to the
-verified Kling O3 4K fal endpoint id. Until that env var is set, 4K falls
-back to the main model — no endpoint id is hardcoded or claimed.
+4K is routed to the **native-4K endpoint** (`fal-ai/kling-video/o3/4k/text-to-video`,
+verified against fal.ai's API docs 2026-10-22 — genuine native 4K, no upscaling
+stage, flat $0.42/s). The endpoint id is configurable via `FAL_MODEL_4K` but the
+verified id is the built-in default; it is not a guess. Requests at aspect
+ratios the 4K endpoint can't render (only 16:9, 9:16, 1:1) fall back to H3 at
+2K with the standard credit rate — never charged or recorded as 4K.
 
 **Credit accounting (two buckets):**
 - Every user has `free_credits` (the 10 sign-up credits — never expire) and
@@ -105,8 +129,10 @@ back to the main model — no endpoint id is hardcoded or claimed.
 - Costs: 5s = 1 credit, 10s = 2 credits at plan quality — except native-4K
   generations, which cost **double** (5s = 2, 10s = 4). If an Extra Pro user
   explicitly picks a lower resolution, normal rates and the H3 model apply.
-  The existing daily cap counts these weighted costs, and failed generations
-  keep the exact-once auto-refund.
+  The same applies to the automatic fallback: a 4K-quality request at an
+  aspect ratio the 4K endpoint can't render goes to H3 at 2K at the normal
+  rate, and the row is recorded as H3/2K. The existing daily cap counts these
+  weighted costs, and failed generations keep the exact-once auto-refund.
 
 **Subscription lifecycle:** `active → canceled` (benefits continue to the
 period end) `→ expired` (period end passes; unused plan credits are removed

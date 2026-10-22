@@ -5,10 +5,12 @@
 #
 # Server prerequisites for the monetization tests: start the server with
 #   ADMIN_EMAIL=admin@example.com        (bootstrap admin account)
-#   FAL_MODEL_4K=$TEST_FAL_MODEL_4K      (defaults to the H3 model id)
-# e.g.  ADMIN_EMAIL=admin@example.com FAL_MODEL_4K=test-4k-model npm start
+#   FAL_MODEL_4K=$TEST_FAL_MODEL_4K      (defaults to the verified o3 4K endpoint)
+#   TEST_RECORD_FAL_BODY=1               (enables the /api/_test/fal-body hook
+#                                        used to assert the fal request shape)
+# e.g.  ADMIN_EMAIL=admin@example.com FAL_MODEL_4K=test-4k-model TEST_RECORD_FAL_BODY=1 npm start
 # Run against a FRESH database (fixed test emails are registered each run).
-TEST_FAL_MODEL_4K=${TEST_FAL_MODEL_4K:-minimax/h3/text-to-video}
+TEST_FAL_MODEL_4K=${TEST_FAL_MODEL_4K:-fal-ai/kling-video/o3/4k/text-to-video}
 B=http://localhost:8080
 PASS=0; FAIL=0
 check() { # name expected actual
@@ -138,6 +140,28 @@ PHIST3=$(curl -s $B/api/history -H "Authorization: Bearer $PTOKEN")
 check "extrapro lower-quality pick routed at 768P" "768P" "$(echo $PHIST3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["resolution"])')"
 check "lower-quality pick cost normal = 1 credit" "1" "$(echo $PHIST3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
 check "lower-quality pick uses H3 model" "minimax/h3/text-to-video" "$(echo $PHIST3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["model"])')"
+
+echo "--- monetization: 4K fal request body shape (o3 schema: no resolution, string duration) ---"
+curl -s -o /dev/null -X POST $B/api/generate -H "Authorization: Bearer $PTOKEN" -H 'Idempotency-Key: plan-4k-body' -H 'Content-Type: application/json' -d '{"prompt":"falcon gliding over desert dunes at dawn","aspect_ratio":"16:9","duration":5}'
+FB=$(curl -s $B/api/_test/fal-body)
+check "4K fal body omits resolution" "absent" "$(echo $FB | python3 -c 'import sys,json;print("absent" if "resolution" not in json.load(sys.stdin)["body"] else "PRESENT")')"
+check "4K fal body duration is string 5" "5-str" "$(echo $FB | python3 -c 'import sys,json;b=json.load(sys.stdin)["body"];print(str(b["duration"])+("-str" if isinstance(b["duration"],str) else "-NOTSTR"))')"
+check "4K fal body pins generate_audio false" "False" "$(echo $FB | python3 -c 'import sys,json;print(json.load(sys.stdin)["body"]["generate_audio"])')"
+check "4K fal body keeps aspect_ratio" "16:9" "$(echo $FB | python3 -c 'import sys,json;print(json.load(sys.stdin)["body"]["aspect_ratio"])')"
+check "4K fal body keeps safety checker on" "True" "$(echo $FB | python3 -c 'import sys,json;print(json.load(sys.stdin)["body"]["enable_safety_checker"])')"
+
+echo "--- monetization: 4K aspect-ratio fallback (21:9 -> H3 at 2K, normal rate) ---"
+R2119=$(curl -s -X POST $B/api/generate -H "Authorization: Bearer $PTOKEN" -H 'Idempotency-Key: plan-4k-2119' -H 'Content-Type: application/json' -d '{"prompt":"wide desert panorama at dusk","aspect_ratio":"21:9","duration":5}')
+PHIST4=$(curl -s $B/api/history -H "Authorization: Bearer $PTOKEN")
+check "21:9 fallback routed at 2K" "2K" "$(echo $PHIST4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["resolution"])')"
+check "21:9 fallback uses H3 model" "minimax/h3/text-to-video" "$(echo $PHIST4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["model"])')"
+check "21:9 fallback cost normal = 1 credit" "1" "$(echo $PHIST4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
+# (The fallback `note` only appears on a successful provider response, which is
+#  unreachable with a dummy key; routing/cost/refund are fully asserted above.)
+FB2=$(curl -s $B/api/_test/fal-body)
+check "fallback fal body keeps resolution param" "2K" "$(echo $FB2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["body"].get("resolution","absent"))')"
+check "fallback fal body duration is integer" "5-int" "$(echo $FB2 | python3 -c 'import sys,json;b=json.load(sys.stdin)["body"];print(str(b["duration"])+("-int" if isinstance(b["duration"],int) else "-NOTINT"))')"
+check "credits refunded to 20 after failed fallback job" "20" "$(echo $PHIST4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 echo "--- monetization: renewal grant + cancel ---"
 RG=$(curl -s -X POST $B/api/admin/users/$PID/grant-renewal -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{}')
