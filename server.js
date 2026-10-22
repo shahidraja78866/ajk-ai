@@ -65,7 +65,43 @@ const CONFIG = {
   // Bootstrap admin: the account with this email gets the admin flag
   // (at registration, at login, and for existing accounts at boot).
   adminEmail: (process.env.ADMIN_EMAIL || '').trim().toLowerCase(),
+  // Base URL for server-side prompt translation (Google Translate "gtx" web
+  // endpoint). Overridable via TRANSLATE_API_BASE — tests point it at a
+  // local stub so the suite never calls the real endpoint.
+  translateBase: (process.env.TRANSLATE_API_BASE || 'https://translate.googleapis.com').replace(/\/+$/, ''),
 };
+
+// ---------- Prompt languages ----------
+// Users may write prompts in 7 languages. English and Chinese are natively
+// understood by the video models and are sent exactly as written. Urdu,
+// Kashmiri, Arabic, Persian and Hindi prompts are translated to English on
+// the server BEFORE any credit is charged — a failed translation charges
+// nothing and creates no job.
+const PROMPT_LANGUAGES = [
+  { code: 'en', name: 'English' },
+  { code: 'ur', name: 'Urdu' },
+  { code: 'ks', name: 'Kashmiri' },
+  { code: 'ar', name: 'Arabic' },
+  { code: 'fa', name: 'Persian' },
+  { code: 'hi', name: 'Hindi' },
+  { code: 'zh', name: 'Chinese' },
+];
+const TRANSLATED_LANGUAGES = new Set(['ur', 'ks', 'ar', 'fa', 'hi']);
+
+// Translate a prompt to English via Google Translate's free web endpoint
+// (client=gtx). The response is nested arrays: data[0] is the list of
+// translated segments and each segment's [0] is its text — join them all.
+// Throws on any HTTP error, malformed body, or empty result.
+async function translatePrompt(text, fromCode) {
+  const url = `${CONFIG.translateBase}/translate_a/single?client=gtx&sl=${encodeURIComponent(fromCode)}&tl=en&dt=t&q=${encodeURIComponent(text)}`;
+  const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  if (!r.ok) throw new Error(`translate returned ${r.status}`);
+  const data = await r.json();
+  const segments = Array.isArray(data?.[0]) ? data[0] : [];
+  const out = segments.map(s => (Array.isArray(s) ? String(s[0] ?? '') : '')).join('').trim();
+  if (!out) throw new Error('translate returned empty text');
+  return out;
+}
 
 // Resolutions the model API accepts, cheapest → most expensive.
 const RESOLUTIONS = ['480P', '768P', '2K', '4K'];
@@ -191,6 +227,12 @@ const MIGRATIONS = [
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );` },
+  // v4 — prompt languages: the language the user wrote the prompt in, and
+  // (for the auto-translated languages) the English text actually sent to
+  // fal.ai. The `prompt` column keeps the user's ORIGINAL text.
+  { version: 4, up: `
+    ALTER TABLE generations ADD COLUMN prompt_language TEXT;
+    ALTER TABLE generations ADD COLUMN translated_prompt TEXT;` },
 ];
 {
   const applied = new Set(db.prepare('SELECT version FROM schema_migrations').all().map(r => r.version));
@@ -390,6 +432,7 @@ app.get('/api/config', (req, res) => res.json({
   aspect_ratios: CONFIG.aspectRatios,
   durations: CONFIG.durations,
   styles: CONFIG.styles,
+  prompt_languages: PROMPT_LANGUAGES,
   cost_by_duration: CONFIG.costByDuration,
   signup_credits: CONFIG.signupCredits,
   max_daily_credits: CONFIG.maxDailyCredits,
@@ -451,7 +494,7 @@ app.get('/api/me', auth, (req, res) => {
 
 // ---------- Generation (idempotent + atomic charge) ----------
 app.post('/api/generate', auth, generateLimiter, async (req, res) => {
-  const { prompt, aspect_ratio = '16:9', duration = 5, style = 'realistic' } = req.body || {};
+  const { prompt, aspect_ratio = '16:9', duration = 5, style = 'realistic', language = 'en' } = req.body || {};
   const idemKey = String(req.headers['idempotency-key'] || req.body?.idempotency_key || '').slice(0, 80) || null;
 
   if (!prompt || prompt.trim().length < 3 || prompt.length > 500)
@@ -462,8 +505,30 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
     return res.status(400).json({ error: `duration must be one of: ${CONFIG.durations.join(', ')} seconds` });
   if (!CONFIG.styles.includes(style))
     return res.status(400).json({ error: `style must be one of: ${CONFIG.styles.join(', ')}` });
+  const languageCode = String(language).toLowerCase();
+  if (!PROMPT_LANGUAGES.some(l => l.code === languageCode))
+    return res.status(400).json({ error: `language must be one of: ${PROMPT_LANGUAGES.map(l => l.code).join(', ')}` });
   if (moderated(prompt))
     return res.status(400).json({ error: 'This prompt was blocked by content moderation. Please rephrase it.' });
+
+  // --- Prompt language -----------------------------------------------------
+  // English and Chinese go to the model exactly as written. The other
+  // supported languages are translated to English here — BEFORE plan
+  // routing, credit deduction and the fal call — so a failed translation
+  // never costs a credit and never creates a job. The user's original text
+  // is what gets stored in `prompt`; the translation is kept alongside it.
+  let effectivePrompt = prompt.trim();
+  let translatedPrompt = null;
+  if (TRANSLATED_LANGUAGES.has(languageCode)) {
+    try {
+      translatedPrompt = await translatePrompt(prompt.trim(), languageCode);
+    } catch {
+      return res.status(502).json({ error: 'We could not translate your prompt into English, so nothing was charged. Please try again.' });
+    }
+    if (moderated(translatedPrompt))
+      return res.status(400).json({ error: 'This prompt was blocked by content moderation. Please rephrase it.' });
+    effectivePrompt = translatedPrompt;
+  }
 
   // --- Plan routing -------------------------------------------------------
   // The user's current plan sets the maximum quality (resolution + model).
@@ -518,8 +583,8 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
       if (creditBuckets(user).total < cost) throw Object.assign(new Error('NO_CREDITS'), { status: 402 });
       spendBuckets(user, cost); // plan credits first, then free credits
       const info = db.prepare(
-        `INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, cost_credits, idempotency_key, resolution, model)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(user.id, prompt.trim(), aspect_ratio, Number(duration), style, cost, idemKey, resolution, model);
+        `INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, cost_credits, idempotency_key, resolution, model, prompt_language, translated_prompt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(user.id, prompt.trim(), aspect_ratio, Number(duration), style, cost, idemKey, resolution, model, languageCode, translatedPrompt);
       return Number(info.lastInsertRowid);
     });
   } catch (e) {
@@ -542,10 +607,10 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
   // The H3 model keeps the original body shape with `resolution`.
   const isNative4k = resolution === '4K' && model !== CONFIG.model;
   const falBody = isNative4k
-    ? { prompt: `${prompt.trim()} — style: ${style}`,
+    ? { prompt: `${effectivePrompt} — style: ${style}`,
         duration: String(duration), aspect_ratio,
         generate_audio: false, enable_safety_checker: true }
-    : { prompt: `${prompt.trim()} — style: ${style}`,
+    : { prompt: `${effectivePrompt} — style: ${style}`,
         duration: Number(duration), aspect_ratio, resolution,
         enable_safety_checker: true };
   lastFalBody = falBody; // test hook (recorded only, never sent anywhere else)
@@ -561,7 +626,8 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
                 updated_at = datetime('now') WHERE id = ?`).run(data.request_id, jobId);
     const me = db.prepare('SELECT credits FROM users WHERE id = ?').get(req.user.id);
     res.json({ id: jobId, status: 'in_progress', credits_left: me.credits,
-               cost_credits: cost, resolution, model,
+               cost_credits: cost, resolution, model, prompt_language: languageCode,
+               ...(translatedPrompt ? { translated_prompt: translatedPrompt } : {}),
                ...(fallbackNote ? { note: fallbackNote } : {}) });
   } catch (e) {
     failAndRefund(jobId, `Provider submission failed (${e.message})`);

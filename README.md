@@ -75,6 +75,45 @@ An Extra Pro generation requested at any other ratio falls back to the H3
 model at 2K with the **standard credit rate** (not doubled) — it is neither
 charged nor recorded as 4K, and the response carries a `note` explaining this.
 
+## Prompt languages (7)
+Users can write their prompt in any of 7 languages. `POST /api/generate`
+accepts an optional `language` code (default `en`); `GET /api/config`
+exposes the same list as `prompt_languages`. Unknown codes are rejected
+with 400 before anything is charged.
+
+| Code | Language | How it reaches the model |
+|---|---|---|
+| `en` | English | Sent as written (natively supported) |
+| `zh` | Chinese | Sent as written (natively supported) |
+| `ur` | Urdu | **Auto-translated to English** on the server first |
+| `ks` | Kashmiri | **Auto-translated to English** on the server first |
+| `ar` | Arabic | **Auto-translated to English** on the server first |
+| `fa` | Persian | **Auto-translated to English** on the server first |
+| `hi` | Hindi | **Auto-translated to English** on the server first |
+
+**How translation works:** for the five auto-translated languages the server
+calls Google Translate's free web endpoint (`client=gtx`) and joins the
+returned segments. Translation happens **before** plan routing, credit
+deduction and the fal.ai call: if translation fails or returns empty text,
+the request fails with 502 and **no credit is deducted and no job is
+created**. The endpoint base URL is configurable via `TRANSLATE_API_BASE`
+(production default `https://translate.googleapis.com`; the test suite
+points it at a local stub — `test-translate-stub.js` — and never calls the
+real endpoint). The translated text is also run through the same
+blocked-words moderation before it is sent to the model.
+
+**Storage (migration v4):** `generations.prompt` always keeps the user's
+**original** text. Two columns record the rest: `prompt_language` (the code
+the user wrote in) and `translated_prompt` (the English text sent to the
+model; `NULL` for English/Chinese). Both are exposed by `GET /api/history`
+and `GET /api/generations/:id`; the app's History shows the original prompt
+plus the language and the English text that was sent.
+
+**Honest limitation:** Kashmiri (`ks`) depends on the live Google Translate
+endpoint's coverage of that language. The automated tests exercise the
+translation plumbing against a local stub only, so real-world Kashmiri
+translation coverage/quality is exercised only in production.
+
 ## Test results (backend, 2026-10-20)
 Run locally with `bash test.sh` — **19/19 tests passed** with a dummy key (no paid calls):
 - ✅ health + config endpoint exposes no secrets
@@ -203,5 +242,6 @@ the privacy policy page is included in the web app.
 - `public/index.html` — the AJK AI web app (Studio, History, Plans & pricing, Settings, Privacy)
 - `public/admin.html` — the Admin Panel, served at `/admin`
 - `schema.sql` — schema reference (`server.js` applies migrations automatically on boot)
-- `test.sh` — the automated test battery (19 original + monetization tests; see its header for the server env it needs)
+- `test.sh` — the automated test battery (original + monetization + prompt-language tests; see its header for the server env it needs)
+- `test-translate-stub.js` — local Google Translate stub used by `test.sh` (tests never call the real translate endpoint)
 - `.env.example` — copy to `.env` and fill in (never commit the real one)

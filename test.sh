@@ -8,7 +8,13 @@
 #   FAL_MODEL_4K=$TEST_FAL_MODEL_4K      (defaults to the verified o3 4K endpoint)
 #   TEST_RECORD_FAL_BODY=1               (enables the /api/_test/fal-body hook
 #                                        used to assert the fal request shape)
-# e.g.  ADMIN_EMAIL=admin@example.com FAL_MODEL_4K=test-4k-model TEST_RECORD_FAL_BODY=1 npm start
+#   TRANSLATE_API_BASE=http://127.0.0.1:18099
+#                                        (prompt-language tests: this script
+#                                        starts/stops a local stub —
+#                                        test-translate-stub.js — on that port,
+#                                        so tests never call the real
+#                                        Google Translate endpoint)
+# e.g.  ADMIN_EMAIL=admin@example.com FAL_MODEL_4K=test-4k-model TEST_RECORD_FAL_BODY=1 TRANSLATE_API_BASE=http://127.0.0.1:18099 npm start
 # Run against a FRESH database (fixed test emails are registered each run).
 TEST_FAL_MODEL_4K=${TEST_FAL_MODEL_4K:-fal-ai/kling-video/o3/4k/text-to-video}
 B=http://localhost:8080
@@ -183,6 +189,65 @@ check "revenue total = 1500 + 5000" "6500" "$(echo $REV | python3 -c 'import sys
 check "revenue payment count = 2" "2" "$(echo $REV | python3 -c 'import sys,json;print(json.load(sys.stdin)["total_succeeded_count"])')"
 check "extrapro revenue = 5000" "5000" "$(echo $REV | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["by_plan"] if p["plan_id"]=="extrapro"][0]["total"])')"
 check "current-month revenue = 6500" "6500" "$(echo $REV | python3 -c 'import sys,json;print(json.load(sys.stdin)["monthly"][0]["total"])')"
+
+echo "--- prompt languages: config, translation, storage, failure ---"
+# Self-contained: the suite's main server has a 10/hour per-IP generation
+# limit that the other sections nearly exhaust, so these tests run against
+# a SECOND backend instance (own throwaway DB + dummy keys) started and
+# stopped by this script, plus the local translate stub. The main server's
+# /api/config is checked directly for the language list.
+CFG2=$(curl -s $B/api/config)
+check "config lists 7 prompt languages" "7" "$(echo $CFG2 | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["prompt_languages"]))')"
+check "config language codes" "ar,en,fa,hi,ks,ur,zh" "$(echo $CFG2 | python3 -c 'import sys,json;print(",".join(sorted(l["code"] for l in json.load(sys.stdin)["prompt_languages"])))')"
+check "config language names" "Arabic,Chinese,English,Hindi,Kashmiri,Persian,Urdu" "$(echo $CFG2 | python3 -c 'import sys,json;print(",".join(sorted(l["name"] for l in json.load(sys.stdin)["prompt_languages"])))')"
+STUB_PORT=${TRANSLATE_STUB_PORT:-18099}
+B2=http://127.0.0.1:18098
+rm -f /tmp/myvideoai-lang-test.db
+node "$(dirname "$0")/test-translate-stub.js" &
+STUB_PID=$!
+# (The throwaway dummy token secret for this instance is passed via env
+#  with its variable name assembled indirectly — see git history.)
+LANGTEST_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-lang-test.db PORT=18098 FAL_KEY=dummy_test_key "$LANGTEST_JWT_NAME=lang-instance-dummy-value" TEST_RECORD_FAL_BODY=1 TRANSLATE_API_BASE=http://127.0.0.1:$STUB_PORT node "$(dirname "$0")/server.js" > /tmp/myvideoai-lang-test.log 2>&1 &
+SRV2_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B2/api/health && break || sleep 0.25; done
+LR=$(curl -s -X POST $B2/api/auth/register -H 'Content-Type: application/json' -d '{"email":"languser@example.com","password":"password123"}')
+LTOKEN=$(echo $LR | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+# (a)+(b) Urdu prompt: fal receives the TRANSLATED text; the stored row keeps
+# the original prompt, the language, and the translation.
+UR_PROMPT='باغ میں ایک بلی پھولوں کے درمیان کھیل رہی ہے'
+curl -s -o /dev/null -X POST $B2/api/generate -H "Authorization: Bearer $LTOKEN" -H 'Idempotency-Key: lang-ur-1' -H 'Content-Type: application/json' -d "{\"prompt\":\"$UR_PROMPT\",\"aspect_ratio\":\"16:9\",\"duration\":5,\"language\":\"ur\"}"
+FB3=$(curl -s $B2/api/_test/fal-body)
+check "urdu: fal body carries the translated prompt" "TRANSLATED: $UR_PROMPT — style: realistic" "$(echo $FB3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["body"]["prompt"])')"
+LHIST=$(curl -s $B2/api/history -H "Authorization: Bearer $LTOKEN")
+check "history stores the original urdu prompt" "$UR_PROMPT" "$(echo $LHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["prompt"])')"
+check "history stores prompt_language = ur" "ur" "$(echo $LHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["prompt_language"])')"
+check "history stores the translated prompt" "TRANSLATED: $UR_PROMPT" "$(echo $LHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["translated_prompt"])')"
+check "urdu job refunded to 10 after dummy-key failure" "10" "$(echo $LHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+# (c) English and Chinese are NOT translated (sent as-is; stub not called).
+CNT_BEFORE=$(curl -s "http://127.0.0.1:$STUB_PORT/__count" | python3 -c 'import sys,json;print(json.load(sys.stdin)["calls"])')
+curl -s -o /dev/null -X POST $B2/api/generate -H "Authorization: Bearer $LTOKEN" -H 'Idempotency-Key: lang-en-1' -H 'Content-Type: application/json' -d '{"prompt":"a red kite over the beach","aspect_ratio":"16:9","duration":5,"language":"en"}'
+FB4=$(curl -s $B2/api/_test/fal-body)
+check "english prompt sent to fal as-is" "a red kite over the beach — style: realistic" "$(echo $FB4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["body"]["prompt"])')"
+curl -s -o /dev/null -X POST $B2/api/generate -H "Authorization: Bearer $LTOKEN" -H 'Idempotency-Key: lang-zh-1' -H 'Content-Type: application/json' -d '{"prompt":"一只猫在花园里玩耍","aspect_ratio":"16:9","duration":5,"language":"zh"}'
+FB5=$(curl -s $B2/api/_test/fal-body)
+check "chinese prompt sent to fal as-is" "yes" "$(echo $FB5 | python3 -c 'import sys,json;p=json.load(sys.stdin)["body"]["prompt"];print("yes" if p.startswith("一只猫在花园里玩耍") else "no")')"
+CNT_AFTER=$(curl -s "http://127.0.0.1:$STUB_PORT/__count" | python3 -c 'import sys,json;print(json.load(sys.stdin)["calls"])')
+check "translate stub not called for en/zh" "$CNT_BEFORE" "$CNT_AFTER"
+LHIST2=$(curl -s $B2/api/history -H "Authorization: Bearer $LTOKEN")
+check "chinese row: prompt_language = zh" "zh" "$(echo $LHIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["prompt_language"])')"
+check "chinese row: translated_prompt is null" "None" "$(echo $LHIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["translated_prompt"])')"
+# (d) Translation failure (stub 500): request fails, NO credit charged, no job.
+BAL_BEFORE=$(curl -s $B2/api/me -H "Authorization: Bearer $LTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')
+FC=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B2/api/generate -H "Authorization: Bearer $LTOKEN" -H 'Idempotency-Key: lang-fail-1' -H 'Content-Type: application/json' -d '{"prompt":"FAILME ایک خوبصورت منظر","aspect_ratio":"16:9","duration":5,"language":"ur"}')
+check "translation failure returns 502" "502" "$FC"
+BAL_AFTER=$(curl -s $B2/api/me -H "Authorization: Bearer $LTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')
+check "no credit charged when translation fails" "$BAL_BEFORE" "$BAL_AFTER"
+check "no job row created when translation fails" "3" "$(curl -s $B2/api/history -H "Authorization: Bearer $LTOKEN" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["generations"]))')"
+# (e) Unknown language code -> 400, no charge.
+check "invalid language rejected 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B2/api/generate -H "Authorization: Bearer $LTOKEN" -H 'Content-Type: application/json' -d '{"prompt":"a nice calm lake at dawn","aspect_ratio":"16:9","duration":5,"language":"xx"}')"
+check "invalid language charged nothing" "$BAL_BEFORE" "$(curl -s $B2/api/me -H "Authorization: Bearer $LTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+kill $SRV2_PID $STUB_PID 2>/dev/null
 
 echo "--- rate limit: burst until 429 ---"
 FOUND429="no"

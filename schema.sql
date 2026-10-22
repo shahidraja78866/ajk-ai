@@ -38,6 +38,11 @@ CREATE TABLE IF NOT EXISTS reports (
 -- users gains: is_admin, free_credits, plan_credits
 --   (users.credits always equals free_credits + plan_credits)
 -- generations gains: resolution, model (the routed quality for the job)
+--
+-- === Prompt languages (migration v4, applied automatically by server.js) ===
+-- generations gains: prompt_language (code the user wrote the prompt in),
+-- translated_prompt (English text sent to the model for the auto-translated
+-- languages ur/ks/ar/fa/hi; NULL for en/zh). `prompt` keeps the original.
 
 CREATE TABLE IF NOT EXISTS plans (
   id              TEXT PRIMARY KEY,               -- normal | pro | extrapro
