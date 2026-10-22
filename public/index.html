@@ -181,6 +181,13 @@
       }
       textarea#prompt:focus{ outline:2px solid var(--amber); outline-offset:1px; border-color:transparent; }
       textarea#prompt::placeholder{ color:var(--faint); }
+      select#promptLang{
+        width:100%;
+        background:var(--panel-2); border:1px solid var(--line); border-radius:11px;
+        color:var(--text); padding:11px 12px; font-size:14.5px;
+      }
+      select#promptLang:focus{ outline:2px solid var(--amber); outline-offset:1px; border-color:transparent; }
+      .lang-hint{ color:var(--muted); font-size:12.5px; margin:6px 0 0; }
       .prompt-tools{ display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
       .tool-btn{
         background:none; border:1px solid var(--line); color:var(--muted);
@@ -507,6 +514,18 @@
             <div class="card">
               <h2>Describe your video</h2>
               <p class="sub">One or two sentences work best. Mention the subject, the setting, and how the camera moves. <span id="modelLine"></span></p>
+
+              <div class="field-label"><span>Prompt language</span></div>
+              <select id="promptLang">
+                <option value="en" selected>English</option>
+                <option value="ur">اردو (Urdu)</option>
+                <option value="ks">کشمیری (Kashmiri)</option>
+                <option value="ar">العربية (Arabic)</option>
+                <option value="fa">فارسی (Persian)</option>
+                <option value="hi">हिन्दी (Hindi)</option>
+                <option value="zh">中文 (Chinese)</option>
+              </select>
+              <p class="lang-hint">Write in your language — the app translates it automatically before generating.</p>
 
               <div class="field-label"><span>Prompt</span><span class="count"><span id="charCount">0</span> / 500</span></div>
               <textarea id="prompt" maxlength="500" placeholder="A drone flies over a turquoise coastline at sunrise, gentle waves, cinematic light…"></textarea>
@@ -1389,7 +1408,8 @@
           api("/api/generate", {
             method: "POST",
             headers: { "Idempotency-Key": idemKey },
-            body: { prompt: prompt, aspect_ratio: state.aspect, duration: state.duration, style: state.style }
+            body: { prompt: prompt, aspect_ratio: state.aspect, duration: state.duration, style: state.style,
+                    language: ($("#promptLang") ? $("#promptLang").value : "en") }
           }).then(function (res) {
             if (res.network) {
               failStudio("Backend not connected",
@@ -1518,6 +1538,7 @@
           if (status === "processing" || status === "queued" || status === "pending") return "chip " + status;
           return "chip other";
         }
+        var LANG_NAMES = { en: "English", ur: "Urdu", ks: "Kashmiri", ar: "Arabic", fa: "Persian", hi: "Hindi", zh: "Chinese" };
         function loadHistory() {
           if (!token) { renderHistoryState("signedout"); return; }
           api("/api/history").then(function (res) {
@@ -1545,6 +1566,18 @@
                 (g.duration || "") + "s · " + (g.cost_credits !== undefined ? g.cost_credits + " credits · " : "") + fmtDate(g.created_at);
               main.appendChild(p);
               main.appendChild(m);
+              if (g.prompt_language && g.prompt_language !== "en") {
+                var lg = document.createElement("p");
+                lg.className = "job-meta";
+                lg.textContent = "Prompt language: " + (LANG_NAMES[g.prompt_language] || g.prompt_language);
+                main.appendChild(lg);
+                if (g.translated_prompt) {
+                  var tp = document.createElement("p");
+                  tp.className = "job-meta";
+                  tp.textContent = "Sent to the model in English: " + g.translated_prompt;
+                  main.appendChild(tp);
+                }
+              }
               if (String(g.status).toLowerCase() === "failed" && g.error) {
                 var er = document.createElement("p");
                 er.className = "job-error";
