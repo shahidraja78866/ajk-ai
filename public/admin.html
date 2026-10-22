@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AJK AI — Admin Panel</title>
+<style>
+  :root{ --bg:#0b0e1a; --panel:#141828; --panel2:#1b2036; --line:#2a3050; --text:#eef; --muted:#9aa3c0; --accent:#6366f1; --green:#43b06e; --red:#e5534b; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  .wrap{ max-width:1080px; margin:0 auto; padding:22px 16px 70px; }
+  h1{ font-size:22px; margin:0 0 4px; } h2{ font-size:16px; margin:26px 0 10px; }
+  p.sub{ color:var(--muted); margin:0 0 14px; font-size:14px; }
+  .card{ background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
+  label{ display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; text-transform:uppercase; letter-spacing:.06em; }
+  input, select{ background:var(--panel2); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:8px 10px; font-size:14px; width:100%; }
+  .row{ display:flex; gap:8px; flex-wrap:wrap; align-items:end; }
+  .row > div{ flex:1; min-width:130px; }
+  button{ background:var(--panel2); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:8px 13px; font-size:13px; font-weight:600; cursor:pointer; }
+  button.primary{ background:var(--accent); border-color:transparent; color:#fff; }
+  button:hover{ filter:brightness(1.2); }
+  table{ width:100%; border-collapse:collapse; font-size:13px; }
+  th, td{ text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th{ color:var(--muted); font-weight:600; }
+  .scroll{ overflow-x:auto; }
+  .msg{ min-height:20px; font-size:13.5px; } .msg.ok{ color:var(--green); } .msg.err{ color:var(--red); }
+  .stat{ display:inline-block; background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:10px 14px; margin:0 8px 8px 0; }
+  .stat strong{ display:block; font-size:18px; }
+  .stat span{ color:var(--muted); font-size:12px; }
+  .hidden{ display:none; }
+  td button{ margin:0 4px 4px 0; padding:5px 9px; font-size:12px; }
+  td select, td input{ padding:5px 7px; font-size:12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>AJK AI — Admin Panel</h1>
+  <p class="sub">Users, plans, subscriptions, payments and revenue. Admin accounts only (ADMIN_EMAIL).</p>
+
+  <div class="card" id="loginCard">
+    <h2 style="margin-top:0;">Admin sign in</h2>
+    <div class="row">
+      <div><label>Email</label><input type="email" id="email" autocomplete="email" /></div>
+      <div><label>Password</label><input type="password" id="password" autocomplete="current-password" /></div>
+      <div style="flex:0;"><button class="primary" id="loginBtn">Sign in</button></div>
+    </div>
+    <p class="msg" id="loginMsg"></p>
+  </div>
+
+  <div id="panel" class="hidden">
+    <div class="row" style="justify-content:space-between;">
+      <p class="sub" id="whoami" style="margin:0;"></p>
+      <button id="logoutBtn">Sign out</button>
+    </div>
+    <p class="msg" id="msg"></p>
+
+    <h2>Revenue (succeeded payments)</h2>
+    <div id="revenue"></div>
+
+    <h2>Plans — prices &amp; credits (edits apply immediately)</h2>
+    <div class="card scroll"><table id="plansTable"></table></div>
+
+    <h2>Users</h2>
+    <div class="card scroll"><table id="usersTable"></table></div>
+
+    <h2>Recent payments</h2>
+    <div class="card scroll"><table id="paymentsTable"></table></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var LS = "ajk_admin_token";
+  var token = "";
+  try { token = localStorage.getItem(LS) || ""; } catch (e) {}
+  function $(id) { return document.getElementById(id); }
+  function api(path, opts) {
+    opts = opts || {};
+    var headers = { "Content-Type": "application/json" };
+    if (token) headers["Authorization"] = "Bearer " + token;
+    return fetch(path, { method: opts.method || "GET", headers: headers,
+      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined })
+      .then(function (r) { return r.text().then(function (t) {
+        var d = null; try { d = t ? JSON.parse(t) : null; } catch (e) {}
+        return { ok: r.ok, status: r.status, data: d }; }); });
+  }
+  function say(el, text, ok) { var m = $(el); m.textContent = text || ""; m.className = "msg " + (ok ? "ok" : "err"); }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+
+  function loadAll() {
+    say("msg", "", true);
+    api("/api/admin/revenue").then(function (r) {
+      if (!r.ok) { say("msg", "Could not load revenue (HTTP " + r.status + ").", false); return; }
+      var d = r.data, html = "";
+      html += '<div class="stat"><strong>Rs ' + d.total_succeeded + '</strong><span>Total revenue · ' + d.total_succeeded_count + ' payments</span></div>';
+      (d.by_plan || []).forEach(function (p) {
+        html += '<div class="stat"><strong>Rs ' + p.total + '</strong><span>' + esc(p.plan_name || p.plan_id) + ' · ' + p.count + ' payments</span></div>';
+      });
+      (d.monthly || []).forEach(function (m) {
+        html += '<div class="stat"><strong>Rs ' + m.total + '</strong><span>' + esc(m.month) + '</span></div>';
+      });
+      $("revenue").innerHTML = html || '<p class="sub">No payments yet.</p>';
+    });
+    api("/api/admin/plans").then(function (r) {
+      if (!r.ok) return;
+      var html = "<tr><th>Plan</th><th>Rs / month</th><th>Rs / year</th><th>Credits / mo</th><th>Quality label</th><th>Resolution</th><th>Model</th><th>Active</th><th></th></tr>";
+      r.data.plans.forEach(function (p) {
+        html += "<tr data-plan='" + esc(p.id) + "'>"
+          + "<td><strong>" + esc(p.name) + "</strong><br><small>" + esc(p.id) + "</small></td>"
+          + "<td><input type='number' data-f='price_monthly' value='" + p.price_monthly + "'></td>"
+          + "<td><input type='number' data-f='price_yearly' value='" + p.price_yearly + "'></td>"
+          + "<td><input type='number' data-f='credits_monthly' value='" + p.credits_monthly + "'></td>"
+          + "<td><input type='text' data-f='quality_label' value='" + esc(p.quality_label) + "'></td>"
+          + "<td><input type='text' data-f='resolution' value='" + esc(p.resolution) + "'></td>"
+          + "<td><input type='text' data-f='model' value='" + esc(p.model) + "'></td>"
+          + "<td><input type='checkbox' data-f='is_active' " + (p.is_active ? "checked" : "") + "></td>"
+          + "<td><button data-act='save-plan'>Save</button></td></tr>";
+      });
+      $("plansTable").innerHTML = html;
+    });
+    api("/api/plans").then(function (r) { window.__plans = r.ok ? r.data.plans : []; renderUsers(); });
+    api("/api/admin/payments").then(function (r) {
+      if (!r.ok) return;
+      var html = "<tr><th>ID</th><th>User</th><th>Plan</th><th>Amount</th><th>Provider</th><th>Status</th><th>Period</th><th>When</th></tr>";
+      (r.data.payments || []).forEach(function (p) {
+        html += "<tr><td>" + p.id + "</td><td>" + esc(p.user_email) + "</td><td>" + esc(p.plan_id || "–") + "</td>"
+          + "<td>Rs " + p.amount + "</td><td>" + esc(p.provider) + "</td><td>" + esc(p.status) + "</td>"
+          + "<td>" + esc(p.period || "–") + "</td><td>" + esc(p.created_at) + "</td></tr>";
+      });
+      $("paymentsTable").innerHTML = html || "<tr><td>No payments yet.</td></tr>";
+    });
+  }
+  var usersCache = [];
+  function renderUsers() {
+    api("/api/admin/users").then(function (r) {
+      if (!r.ok) { say("msg", "Could not load users (HTTP " + r.status + ").", false); return; }
+      usersCache = r.data.users;
+      var planOpts = (window.__plans || []).map(function (p) {
+        return "<option value='" + esc(p.id) + "'>" + esc(p.name) + "</option>"; }).join("");
+      var html = "<tr><th>ID</th><th>Email</th><th>Credits (free + plan)</th><th>Plan</th><th>Status</th><th>Period ends</th><th>Admin</th><th>Actions</th></tr>";
+      usersCache.forEach(function (u) {
+        var s = u.subscription;
+        html += "<tr data-user='" + u.id + "'><td>" + u.id + "</td><td>" + esc(u.email) + "</td>"
+          + "<td>" + u.credits + " (" + (u.free_credits || 0) + " + " + (u.plan_credits || 0) + ")</td>"
+          + "<td>" + (s ? esc(s.plan_name) : "Free") + "</td>"
+          + "<td>" + (s ? esc(s.status) : "none") + "</td>"
+          + "<td>" + (s && s.current_period_end ? esc(s.current_period_end) : "–") + "</td>"
+          + "<td>" + (u.is_admin ? "yes" : "") + "</td>"
+          + "<td><select data-f='plan'>" + planOpts + "</select> "
+          + "<select data-f='period'><option value='monthly'>Monthly</option><option value='yearly'>Yearly</option></select><br>"
+          + "<button data-act='pay'>Manual payment + activate (TEST)</button>"
+          + "<button data-act='activate'>Activate (comp)</button>"
+          + "<button data-act='renew'>Grant renewal credits</button>"
+          + "<button data-act='cancel'>Cancel sub</button></td></tr>";
+      });
+      $("usersTable").innerHTML = html;
+    });
+  }
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest ? e.target.closest("button[data-act]") : null;
+    if (!btn) return;
+    var act = btn.getAttribute("data-act");
+    function done(r, what) {
+      if (r.ok) { say("msg", what + " — done.", true); loadAll(); }
+      else say("msg", what + " failed: " + ((r.data && r.data.error) || ("HTTP " + r.status)), false);
+    }
+    if (act === "save-plan") {
+      var trp = btn.closest("tr"), pid = trp.getAttribute("data-plan"), body = {};
+      trp.querySelectorAll("input[data-f]").forEach(function (inp) {
+        var f = inp.getAttribute("data-f");
+        body[f] = inp.type === "checkbox" ? inp.checked : (inp.type === "number" ? Number(inp.value) : inp.value);
+      });
+      api("/api/admin/plans/" + pid, { method: "PUT", body: body }).then(function (r) { done(r, "Plan " + pid + " saved"); });
+      return;
+    }
+    var tr = btn.closest("tr"), uid = tr.getAttribute("data-user");
+    var plan = tr.querySelector("select[data-f='plan']").value;
+    var period = tr.querySelector("select[data-f='period']").value;
+    if (act === "pay") api("/api/admin/users/" + uid + "/manual-payment", { method: "POST", body: { plan_id: plan, period: period } }).then(function (r) { done(r, "Manual payment + activation"); });
+    if (act === "activate") api("/api/admin/users/" + uid + "/activate", { method: "POST", body: { plan_id: plan, period: period } }).then(function (r) { done(r, "Activation"); });
+    if (act === "renew") api("/api/admin/users/" + uid + "/grant-renewal", { method: "POST", body: {} }).then(function (r) { done(r, "Renewal grant"); });
+    if (act === "cancel") api("/api/admin/users/" + uid + "/cancel-subscription", { method: "POST", body: {} }).then(function (r) { done(r, "Cancellation"); });
+  });
+
+  function enter() {
+    $("loginCard").classList.add("hidden");
+    $("panel").classList.remove("hidden");
+    api("/api/me").then(function (r) { if (r.ok) $("whoami").textContent = "Signed in as " + r.data.email + (r.data.is_admin ? " (admin)" : ""); });
+    loadAll();
+  }
+  $("loginBtn").addEventListener("click", function () {
+    api("/api/auth/login", { method: "POST", body: { email: $("email").value.trim(), password: $("password").value } })
+      .then(function (r) {
+        if (!r.ok || !r.data || !r.data.token) { say("loginMsg", "Sign-in failed.", false); return; }
+        token = r.data.token;
+        try { localStorage.setItem(LS, token); } catch (e) {}
+        api("/api/admin/users").then(function (chk) {
+          if (chk.status === 403) { say("loginMsg", "This account is not an admin.", false); token = ""; return; }
+          enter();
+        });
+      });
+  });
+  $("logoutBtn").addEventListener("click", function () {
+    token = ""; try { localStorage.removeItem(LS); } catch (e) {}
+    $("panel").classList.add("hidden"); $("loginCard").classList.remove("hidden");
+  });
+  if (token) {
+    api("/api/admin/users").then(function (chk) { if (chk.ok) enter(); });
+  }
+})();
+</script>
+</body>
+</html>
