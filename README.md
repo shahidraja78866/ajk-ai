@@ -43,6 +43,7 @@ address (for local testing: `http://localhost:8080`). The app then calls:
 - `POST /api/generate` with an `Idempotency-Key` header (fresh UUID per click → no duplicate charges)
 - `GET /api/generations/:id` (poll every ~4s until `completed`/`failed`)
 - `GET /api/history`, `POST /api/report`
+- `GET /api/plans` (public pricing), `GET /api/payments` (own payment history); `/api/me` also returns the current plan, subscription status, and the free/plan credit split
 
 ## API verification (model & parameters)
 Verified against fal.ai's official API docs on 2026-10-20 (no account needed):
@@ -74,6 +75,61 @@ Not yet testable without your input:
 - Failures refund exactly once (guarded `WHERE status NOT IN ('failed','completed')`).
 - Rate limits: 300 req/15min global + 10 generations/user/hour; daily spending cap via `MAX_DAILY_CREDITS`.
 - Blocked-words moderation runs before any charge; fal's safety checker runs too.
+
+## Monetization (Phase 1 — plans, subscriptions, admin)
+
+Three PKR subscription plans sit on top of the existing credit system.
+Prices and credits are **defaults seeded into the `plans` table** — afterwards
+they are edited in the Admin Panel and boot never overwrites an admin's edits.
+
+| Plan | Monthly | Yearly | Credits/mo | Quality | Generation route |
+|---|---|---|---|---|---|
+| Normal | Rs 1,500 | Rs 15,000 | 5 | 768P | H3 model, resolution `768P` |
+| Pro | Rs 3,000 | Rs 30,000 | 6 | 2K | H3 model, resolution `2K` |
+| Extra Pro | Rs 5,000 | Rs 50,000 | 10 | Native 4K | 4K model (see below), resolution `4K` |
+
+**Quality honesty:** on the H3 model, fal's own docs describe 2K/4K as
+upscaling a 768P base — the UI labels Pro's quality simply "2K". Extra Pro's
+4K is routed to a **separate native-4K model**: set `FAL_MODEL_4K` to the
+verified Kling O3 4K fal endpoint id. Until that env var is set, 4K falls
+back to the main model — no endpoint id is hardcoded or claimed.
+
+**Credit accounting (two buckets):**
+- Every user has `free_credits` (the 10 sign-up credits — never expire) and
+  `plan_credits` (granted by a subscription). `users.credits` is always their
+  sum, so older code paths see one balance.
+- Spending takes **plan credits first**. Refunds go back plan-bucket-first,
+  capped at the plan's monthly grant, so a refund can't inflate plan credits.
+- On activation and on each renewal month, plan credits **reset** to the
+  plan's `credits_monthly` — unused plan credits do **not** roll over.
+- Costs: 5s = 1 credit, 10s = 2 credits at plan quality — except native-4K
+  generations, which cost **double** (5s = 2, 10s = 4). If an Extra Pro user
+  explicitly picks a lower resolution, normal rates and the H3 model apply.
+  The existing daily cap counts these weighted costs, and failed generations
+  keep the exact-once auto-refund.
+
+**Subscription lifecycle:** `active → canceled` (benefits continue to the
+period end) `→ expired` (period end passes; unused plan credits are removed
+lazily on the user's next request). `grace` is reserved for Phase 3 billing
+retries. A new activation supersedes the previous subscription.
+
+**Security rule:** plan credits can only appear through `activateSubscription`,
+which is reachable **only** from a succeeded payment record or an admin
+action. There is no user-facing activation endpoint.
+
+**Payments (Phase 1):** real Google Play Billing arrives in Phase 3. For
+testing there is an **admin-only** manual path —
+`POST /api/admin/users/:id/manual-payment` — which records a payment with
+provider `manual_test` (clearly marked, no real charge) and activates the
+subscription from it. Users can read their own history at `GET /api/payments`.
+
+**Admin:** set `ADMIN_EMAIL` in `.env`; that account gets `is_admin` (at
+registration, login, or boot). Admin Panel: **`/admin`**. Admin API:
+`GET /api/admin/users`, `GET|PUT /api/admin/plans(/:id)`,
+`POST /api/admin/users/:id/manual-payment | activate | grant-renewal |
+cancel-subscription`, `GET /api/admin/payments`, `GET /api/admin/revenue`
+(totals by plan/status + monthly revenue, succeeded payments only).
+All admin endpoints return 403 for non-admin users.
 
 ## The localhost fix: app + API on one address
 This server also serves the AJK AI web app itself (`public/index.html`) at its
@@ -117,7 +173,9 @@ Publishing also needs a Play Console account and your app's privacy policy URL �
 the privacy policy page is included in the web app.
 
 ## Files
-- `server.js` — auth, generate (idempotent), status polling, history, reports, config
+- `server.js` — auth, generate (idempotent, plan-routed), status polling, history, reports, config, plans/subscriptions/payments, admin API
+- `public/index.html` — the AJK AI web app (Studio, History, Plans & pricing, Settings, Privacy)
+- `public/admin.html` — the Admin Panel, served at `/admin`
 - `schema.sql` — schema reference (`server.js` applies migrations automatically on boot)
-- `test.sh` — the 19-test battery used above
+- `test.sh` — the automated test battery (19 original + monetization tests; see its header for the server env it needs)
 - `.env.example` — copy to `.env` and fill in (never commit the real one)
