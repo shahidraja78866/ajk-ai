@@ -14,6 +14,11 @@
 #                                        test-translate-stub.js — on that port,
 #                                        so tests never call the real
 #                                        Google Translate endpoint)
+# The credit-pack tests run against this main server (no generation quota
+# involved). The clip-joining tests are self-contained like the language
+# tests: this script starts a third instance (port 18096, own DB,
+# JOINED_DIR + PAYMENT_EASYPAISA set) plus a python http server for two
+# tiny clips it generates with the pinned ffmpeg-static binary.
 # e.g.  ADMIN_EMAIL=admin@example.com FAL_MODEL_4K=test-4k-model TEST_RECORD_FAL_BODY=1 TRANSLATE_API_BASE=http://127.0.0.1:18099 npm start
 # Run against a FRESH database (fixed test emails are registered each run).
 TEST_FAL_MODEL_4K=${TEST_FAL_MODEL_4K:-fal-ai/kling-video/o3/4k/text-to-video}
@@ -35,7 +40,7 @@ echo "--- auth ---"
 R=$(curl -s -X POST $B/api/auth/register -H 'Content-Type: application/json' -d '{"email":"test@example.com","password":"password123"}')
 echo "$R"
 TOKEN=$(echo $R | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
-check "register gives 10 credits" "10" "$(echo $R | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "register gives 100 credits" "100" "$(echo $R | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 DUP=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/auth/register -H 'Content-Type: application/json' -d '{"email":"test@example.com","password":"password123"}')
 check "duplicate register rejected" "409" "$DUP"
 BAD=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/auth/login -H 'Content-Type: application/json' -d '{"email":"test@example.com","password":"wrongpass1"}')
@@ -43,7 +48,7 @@ check "wrong password rejected" "401" "$BAD"
 L=$(curl -s -X POST $B/api/auth/login -H 'Content-Type: application/json' -d '{"email":"test@example.com","password":"password123"}')
 TOKEN=$(echo $L | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 ME=$(curl -s $B/api/me -H "Authorization: Bearer $TOKEN"); echo "$ME"
-check "me credits = 10" "10" "$(echo $ME | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "me credits = 100" "100" "$(echo $ME | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 NOAUTH=$(curl -s -o /dev/null -w '%{http_code}' $B/api/history)
 check "history requires auth" "401" "$NOAUTH"
 
@@ -53,14 +58,14 @@ check "bad aspect ratio rejected" "400" "$V"
 M=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/generate -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"prompt":"gore and violence scene"}')
 check "blocked prompt rejected" "400" "$M"
 ME2=$(curl -s $B/api/me -H "Authorization: Bearer $TOKEN")
-check "credits untouched by rejected prompts" "10" "$(echo $ME2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "credits untouched by rejected prompts" "100" "$(echo $ME2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 echo "--- generation with dummy key: submit fails -> 502 + refund ---"
 G=$(curl -s -w '\n%{http_code}' -X POST $B/api/generate -H "Authorization: Bearer $TOKEN" -H 'Idempotency-Key: test-key-001' -H 'Content-Type: application/json' -d '{"prompt":"a kitten chasing a butterfly in a sunny garden","aspect_ratio":"16:9","duration":5,"style":"realistic"}')
 echo "$G"
 check "dummy-key generation returns 502" "502" "$(echo "$G" | tail -1)"
 HIST=$(curl -s $B/api/history -H "Authorization: Bearer $TOKEN"); echo "$HIST" | head -c 400; echo
-check "credits refunded after failure" "10" "$(echo $HIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "credits refunded after failure" "100" "$(echo $HIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "history has 1 failed job" "failed" "$(echo $HIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["status"])')"
 JOBID=$(echo $HIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["id"])')
 
@@ -70,7 +75,7 @@ echo "$G2"
 check "duplicate flagged" "True" "$(echo $G2 | python3 -c 'import sys,json;print(json.load(sys.stdin).get("duplicate"))')"
 HIST2=$(curl -s $B/api/history -H "Authorization: Bearer $TOKEN")
 check "still only 1 job in history" "1" "$(echo $HIST2 | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["generations"]))')"
-check "credits still 10" "10" "$(echo $HIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "credits still 100" "100" "$(echo $HIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 echo "--- report endpoint ---"
 RP=$(curl -s -X POST $B/api/report -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "{\"generation_id\":$JOBID,\"reason\":\"test report\"}")
@@ -80,7 +85,7 @@ echo "--- monetization: plans API (public) ---"
 PLANS=$(curl -s $B/api/plans); echo "$PLANS" | head -c 400; echo
 check "plans list has 3 plans" "3" "$(echo $PLANS | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["plans"]))')"
 check "normal plan price Rs 1500" "1500" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="normal"][0]["price_monthly"])')"
-check "normal plan 5 credits/mo" "5" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="normal"][0]["credits_monthly"])')"
+check "normal plan 100 credits/mo" "100" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="normal"][0]["credits_monthly"])')"
 check "extrapro label is Native 4K" "Native 4K" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="extrapro"][0]["quality_label"])')"
 
 echo "--- monetization: admin auth ---"
@@ -100,9 +105,9 @@ MP=$(curl -s -X POST $B/api/admin/users/$PID/manual-payment -H "Authorization: B
 echo "$MP"
 check "manual payment ok" "True" "$(echo $MP | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
 PME=$(curl -s $B/api/me -H "Authorization: Bearer $PTOKEN")
-check "activation: total credits 10 free + 5 plan = 15" "15" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
-check "activation: plan bucket = 5" "5" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
-check "activation: free bucket untouched = 10" "10" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
+check "activation: total credits 100 free + 100 plan = 200" "200" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "activation: plan bucket = 100" "100" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
+check "activation: free bucket untouched = 100" "100" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
 check "activation: current plan is normal" "normal" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan"]["id"])')"
 PAY=$(curl -s $B/api/payments -H "Authorization: Bearer $PTOKEN")
 check "user payment history has 1 payment" "1" "$(echo $PAY | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["payments"]))')"
@@ -118,33 +123,33 @@ check "no self-service activation route (404)" "404" "$(curl -s -o /dev/null -w 
 check "non-admin cannot manual-pay (403)" "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/admin/users/$U2ID/manual-payment -H "Authorization: Bearer $U2TOKEN" -H 'Content-Type: application/json' -d '{"plan_id":"normal","period":"monthly"}')"
 check "other user still has no plan" "None" "$(curl -s $B/api/me -H "Authorization: Bearer $U2TOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan"])')"
 
-echo "--- monetization: plan routing (normal = 768P on H3; 10s costs 2) ---"
+echo "--- monetization: plan routing (normal = 768P on H3; 10s costs 20) ---"
 curl -s -o /dev/null -X POST $B/api/generate -H "Authorization: Bearer $PTOKEN" -H 'Idempotency-Key: plan-norm-1' -H 'Content-Type: application/json' -d '{"prompt":"a river flowing through green hills","aspect_ratio":"16:9","duration":10}'
 PHIST=$(curl -s $B/api/history -H "Authorization: Bearer $PTOKEN")
 check "normal job routed at 768P" "768P" "$(echo $PHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["resolution"])')"
 check "normal job model is H3" "minimax/h3/text-to-video" "$(echo $PHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["model"])')"
-check "normal 10s job cost 2 credits" "2" "$(echo $PHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
-check "credits refunded to 15 after failed normal job" "15" "$(echo $PHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "normal 10s job cost 20 credits" "20" "$(echo $PHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
+check "credits refunded to 200 after failed normal job" "200" "$(echo $PHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 echo "--- monetization: extrapro native-4K routing + double credit cost ---"
 MP2=$(curl -s -X POST $B/api/admin/users/$PID/manual-payment -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{"plan_id":"extrapro","period":"monthly"}')
 check "extrapro activation ok" "True" "$(echo $MP2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
 PME2=$(curl -s $B/api/me -H "Authorization: Bearer $PTOKEN")
-check "extrapro: total credits 10 free + 10 plan = 20" "20" "$(echo $PME2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "extrapro: total credits 100 free + 120 plan = 220" "220" "$(echo $PME2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "extrapro: plan switched" "extrapro" "$(echo $PME2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan"]["id"])')"
 curl -s -o /dev/null -X POST $B/api/generate -H "Authorization: Bearer $PTOKEN" -H 'Idempotency-Key: plan-4k-1' -H 'Content-Type: application/json' -d '{"prompt":"a mountain sunrise above the clouds","aspect_ratio":"16:9","duration":5}'
 PHIST2=$(curl -s $B/api/history -H "Authorization: Bearer $PTOKEN")
 check "4K job routed at 4K" "4K" "$(echo $PHIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["resolution"])')"
 check "4K job uses FAL_MODEL_4K model" "$TEST_FAL_MODEL_4K" "$(echo $PHIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["model"])')"
-check "4K 5s job cost doubled = 2 credits" "2" "$(echo $PHIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
-check "credits refunded to 20 after failed 4K job" "20" "$(echo $PHIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "4K 5s job cost doubled = 20 credits" "20" "$(echo $PHIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
+check "credits refunded to 220 after failed 4K job" "220" "$(echo $PHIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 JOB4K=$(echo $PHIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["id"])')
 curl -s $B/api/generations/$JOB4K -H "Authorization: Bearer $PTOKEN" > /dev/null
-check "no double refund after polling failed 4K job" "20" "$(curl -s $B/api/me -H "Authorization: Bearer $PTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "no double refund after polling failed 4K job" "220" "$(curl -s $B/api/me -H "Authorization: Bearer $PTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 curl -s -o /dev/null -X POST $B/api/generate -H "Authorization: Bearer $PTOKEN" -H 'Idempotency-Key: plan-4k-low' -H 'Content-Type: application/json' -d '{"prompt":"a quiet forest stream in soft light","aspect_ratio":"16:9","duration":5,"resolution":"768P"}'
 PHIST3=$(curl -s $B/api/history -H "Authorization: Bearer $PTOKEN")
 check "extrapro lower-quality pick routed at 768P" "768P" "$(echo $PHIST3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["resolution"])')"
-check "lower-quality pick cost normal = 1 credit" "1" "$(echo $PHIST3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
+check "lower-quality pick cost normal = 10 credits" "10" "$(echo $PHIST3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
 check "lower-quality pick uses H3 model" "minimax/h3/text-to-video" "$(echo $PHIST3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["model"])')"
 
 echo "--- monetization: 4K fal request body shape (o3 schema: no resolution, string duration) ---"
@@ -161,18 +166,18 @@ R2119=$(curl -s -X POST $B/api/generate -H "Authorization: Bearer $PTOKEN" -H 'I
 PHIST4=$(curl -s $B/api/history -H "Authorization: Bearer $PTOKEN")
 check "21:9 fallback routed at 2K" "2K" "$(echo $PHIST4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["resolution"])')"
 check "21:9 fallback uses H3 model" "minimax/h3/text-to-video" "$(echo $PHIST4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["model"])')"
-check "21:9 fallback cost normal = 1 credit" "1" "$(echo $PHIST4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
+check "21:9 fallback cost normal = 10 credits" "10" "$(echo $PHIST4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
 # (The fallback `note` only appears on a successful provider response, which is
 #  unreachable with a dummy key; routing/cost/refund are fully asserted above.)
 FB2=$(curl -s $B/api/_test/fal-body)
 check "fallback fal body keeps resolution param" "2K" "$(echo $FB2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["body"].get("resolution","absent"))')"
 check "fallback fal body duration is integer" "5-int" "$(echo $FB2 | python3 -c 'import sys,json;b=json.load(sys.stdin)["body"];print(str(b["duration"])+("-int" if isinstance(b["duration"],int) else "-NOTINT"))')"
-check "credits refunded to 20 after failed fallback job" "20" "$(echo $PHIST4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "credits refunded to 220 after failed fallback job" "220" "$(echo $PHIST4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 echo "--- monetization: renewal grant + cancel ---"
 RG=$(curl -s -X POST $B/api/admin/users/$PID/grant-renewal -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{}')
 check "renewal grant ok" "True" "$(echo $RG | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
-check "renewal resets plan bucket to 10" "10" "$(curl -s $B/api/me -H "Authorization: Bearer $PTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
+check "renewal resets plan bucket to 120" "120" "$(curl -s $B/api/me -H "Authorization: Bearer $PTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
 CX=$(curl -s -X POST $B/api/admin/users/$PID/cancel-subscription -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{}')
 check "cancel sets status canceled" "canceled" "$(echo $CX | python3 -c 'import sys,json;print(json.load(sys.stdin)["subscription"]["status"])')"
 
@@ -189,6 +194,68 @@ check "revenue total = 1500 + 5000" "6500" "$(echo $REV | python3 -c 'import sys
 check "revenue payment count = 2" "2" "$(echo $REV | python3 -c 'import sys,json;print(json.load(sys.stdin)["total_succeeded_count"])')"
 check "extrapro revenue = 5000" "5000" "$(echo $REV | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["by_plan"] if p["plan_id"]=="extrapro"][0]["total"])')"
 check "current-month revenue = 6500" "6500" "$(echo $REV | python3 -c 'import sys,json;print(json.load(sys.stdin)["monthly"][0]["total"])')"
+
+echo "--- credit packs: catalogue, purchase flow, admin approval (exactly once) ---"
+PK=$(curl -s $B/api/packs); echo "$PK" | head -c 300; echo
+check "packs list has 3 packs" "3" "$(echo $PK | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["packs"]))')"
+check "pack 50 credits = Rs 899" "50/899" "$(echo $PK | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["packs"] if x["credits"]==50][0];print(str(p["credits"])+"/"+str(p["price_pkr"]))')"
+check "pack 100 credits = Rs 1499" "100/1499" "$(echo $PK | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["packs"] if x["credits"]==100][0];print(str(p["credits"])+"/"+str(p["price_pkr"]))')"
+check "pack 250 credits = Rs 3499" "250/3499" "$(echo $PK | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["packs"] if x["credits"]==250][0];print(str(p["credits"])+"/"+str(p["price_pkr"]))')"
+check "config exposes payment_methods object" "dict" "$(curl -s $B/api/config | python3 -c 'import sys,json;print(type(json.load(sys.stdin)["payment_methods"]).__name__)')"
+check "NayaPay QR image is served (/nayapay-qr.jpg)" "200" "$(curl -s -o /dev/null -w '%{http_code}' $B/nayapay-qr.jpg)"
+PACK100=$(echo $PK | python3 -c 'import sys,json;d=json.load(sys.stdin);print([x for x in d["packs"] if x["credits"]==100][0]["id"])')
+PACK50=$(echo $PK | python3 -c 'import sys,json;d=json.load(sys.stdin);print([x for x in d["packs"] if x["credits"]==50][0]["id"])')
+PACK250=$(echo $PK | python3 -c 'import sys,json;d=json.load(sys.stdin);print([x for x in d["packs"] if x["credits"]==250][0]["id"])')
+KR=$(curl -s -X POST $B/api/auth/register -H 'Content-Type: application/json' -d '{"email":"packuser@example.com","password":"password123"}')
+KTOKEN=$(echo $KR | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+PUR=$(curl -s -w '\n%{http_code}' -X POST $B/api/packs/$PACK100/purchase -H "Authorization: Bearer $KTOKEN" -H 'Content-Type: application/json' -d '{"method":"easypaisa","transaction_ref":"TXN-99887766"}')
+check "pack purchase created (201)" "201" "$(echo "$PUR" | tail -1)"
+PURBODY=$(echo "$PUR" | sed '$d')
+check "purchase starts pending" "pending" "$(echo $PURBODY | python3 -c 'import sys,json;print(json.load(sys.stdin)["purchase"]["status"])')"
+check "purchase snapshots 100 credits / Rs 1499" "100/1499" "$(echo $PURBODY | python3 -c 'import sys,json;p=json.load(sys.stdin)["purchase"];print(str(p["credits"])+"/"+str(p["amount_pkr"]))')"
+PURID=$(echo $PURBODY | python3 -c 'import sys,json;print(json.load(sys.stdin)["purchase"]["id"])')
+check "pending purchase grants nothing yet" "100" "$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "short transaction ref rejected 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/packs/$PACK100/purchase -H "Authorization: Bearer $KTOKEN" -H 'Content-Type: application/json' -d '{"method":"easypaisa","transaction_ref":"abc"}')"
+check "unknown method rejected 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/packs/$PACK100/purchase -H "Authorization: Bearer $KTOKEN" -H 'Content-Type: application/json' -d '{"method":"paypal","transaction_ref":"TXN-123456"}')"
+check "unknown pack rejected 404" "404" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/packs/999/purchase -H "Authorization: Bearer $KTOKEN" -H 'Content-Type: application/json' -d '{"method":"bank","transaction_ref":"TXN-123456"}')"
+check "no user-facing approve route (404)" "404" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/packs/$PACK100/approve -H "Authorization: Bearer $KTOKEN" -H 'Content-Type: application/json' -d '{}')"
+check "buyer sees own purchase (1)" "1" "$(curl -s $B/api/my/pack-purchases -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["purchases"]))')"
+check "other user sees no pack purchases" "0" "$(curl -s $B/api/my/pack-purchases -H "Authorization: Bearer $U2TOKEN" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["purchases"]))')"
+check "non-admin cannot list pack purchases (403)" "403" "$(curl -s -o /dev/null -w '%{http_code}' $B/api/admin/pack-purchases -H "Authorization: Bearer $KTOKEN")"
+check "non-admin cannot approve (403)" "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/admin/pack-purchases/$PURID/approve -H "Authorization: Bearer $KTOKEN" -H 'Content-Type: application/json' -d '{}')"
+check "admin pending list contains the purchase" "yes" "$(curl -s "$B/api/admin/pack-purchases?status=pending" -H "Authorization: Bearer $ATOKEN" | python3 -c "import sys,json;print('yes' if any(p['id']==$PURID for p in json.load(sys.stdin)['purchases']) else 'no')")"
+APPR=$(curl -s -X POST $B/api/admin/pack-purchases/$PURID/approve -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{}')
+check "admin approve ok" "True" "$(echo $APPR | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
+KME=$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN")
+check "approve granted pack into free bucket (100 signup + 100 pack)" "200" "$(echo $KME | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
+check "balance after approve = 200" "200" "$(echo $KME | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "second approve is a conflict (409)" "409" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/admin/pack-purchases/$PURID/approve -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{}')"
+check "double approve did NOT double-grant" "200" "$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+PUR2=$(curl -s -X POST $B/api/packs/$PACK50/purchase -H "Authorization: Bearer $KTOKEN" -H 'Content-Type: application/json' -d '{"method":"jazzcash","transaction_ref":"JC-55544433"}')
+PUR2ID=$(echo $PUR2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["purchase"]["id"])')
+REJ=$(curl -s -X POST $B/api/admin/pack-purchases/$PUR2ID/reject -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{"note":"No matching payment found"}')
+check "admin reject ok" "rejected" "$(echo $REJ | python3 -c 'import sys,json;print(json.load(sys.stdin)["purchase"]["status"])')"
+check "rejected purchase granted nothing" "200" "$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+echo "--- credit packs: nayapay purchase -> approve grants exactly once ---"
+PUR3=$(curl -s -X POST $B/api/packs/$PACK50/purchase -H "Authorization: Bearer $KTOKEN" -H 'Content-Type: application/json' -d '{"method":"nayapay","transaction_ref":"NP-2026-445566"}')
+check "nayapay purchase created pending" "pending" "$(echo $PUR3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["purchase"]["status"])')"
+check "nayapay purchase method recorded" "nayapay" "$(echo $PUR3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["purchase"]["method"])')"
+PUR3ID=$(echo $PUR3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["purchase"]["id"])')
+check "nayapay pending purchase grants nothing" "200" "$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+APPR3=$(curl -s -X POST $B/api/admin/pack-purchases/$PUR3ID/approve -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{}')
+check "nayapay approve ok" "True" "$(echo $APPR3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
+check "nayapay approve granted 50 into free bucket (250 total)" "250" "$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
+check "nayapay double approve is a conflict (409)" "409" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/admin/pack-purchases/$PUR3ID/approve -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{}')"
+check "nayapay double approve did NOT double-grant" "250" "$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+PE2=$(curl -s -X PUT $B/api/admin/packs/$PACK250 -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{"price_pkr":3599}')
+check "admin pack price edit returns 3599" "3599" "$(echo $PE2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["pack"]["price_pkr"])')"
+check "public packs API shows edited price" "3599" "$(curl -s $B/api/packs | python3 -c "import sys,json;d=json.load(sys.stdin);print([x for x in d['packs'] if x['id']==$PACK250][0]['price_pkr'])")"
+curl -s -X PUT $B/api/admin/packs/$PACK250 -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{"price_pkr":3499}' > /dev/null
+curl -s -X PUT $B/api/admin/packs/$PACK50 -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{"is_active":false}' > /dev/null
+check "deactivated pack cannot be purchased (404)" "404" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/packs/$PACK50/purchase -H "Authorization: Bearer $KTOKEN" -H 'Content-Type: application/json' -d '{"method":"bank","transaction_ref":"TXN-77788899"}')"
+check "deactivated pack hidden from public list" "2" "$(curl -s $B/api/packs | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["packs"]))')"
+curl -s -X PUT $B/api/admin/packs/$PACK50 -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{"is_active":true}' > /dev/null
+check "pack reactivated" "3" "$(curl -s $B/api/packs | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["packs"]))')"
 
 echo "--- prompt languages: config, translation, storage, failure ---"
 # Self-contained: the suite's main server has a 10/hour per-IP generation
@@ -223,7 +290,7 @@ LHIST=$(curl -s $B2/api/history -H "Authorization: Bearer $LTOKEN")
 check "history stores the original urdu prompt" "$UR_PROMPT" "$(echo $LHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["prompt"])')"
 check "history stores prompt_language = ur" "ur" "$(echo $LHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["prompt_language"])')"
 check "history stores the translated prompt" "TRANSLATED: $UR_PROMPT" "$(echo $LHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["translated_prompt"])')"
-check "urdu job refunded to 10 after dummy-key failure" "10" "$(echo $LHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "urdu job refunded to 100 after dummy-key failure" "100" "$(echo $LHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 # (c) English and Chinese are NOT translated (sent as-is; stub not called).
 CNT_BEFORE=$(curl -s "http://127.0.0.1:$STUB_PORT/__count" | python3 -c 'import sys,json;print(json.load(sys.stdin)["calls"])')
 curl -s -o /dev/null -X POST $B2/api/generate -H "Authorization: Bearer $LTOKEN" -H 'Idempotency-Key: lang-en-1' -H 'Content-Type: application/json' -d '{"prompt":"a red kite over the beach","aspect_ratio":"16:9","duration":5,"language":"en"}'
@@ -248,6 +315,66 @@ check "no job row created when translation fails" "3" "$(curl -s $B2/api/history
 check "invalid language rejected 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B2/api/generate -H "Authorization: Bearer $LTOKEN" -H 'Content-Type: application/json' -d '{"prompt":"a nice calm lake at dawn","aspect_ratio":"16:9","duration":5,"language":"xx"}')"
 check "invalid language charged nothing" "$BAL_BEFORE" "$(curl -s $B2/api/me -H "Authorization: Bearer $LTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 kill $SRV2_PID $STUB_PID 2>/dev/null
+
+echo "--- clip joining: merge the user's own clips (own instance + local clip server) ---"
+# Self-contained like the language tests: a THIRD backend instance with its
+# own DB, plus a static file server standing in for the video host. The two
+# tiny clips are generated with the pinned ffmpeg-static binary — clipA is
+# 320x240@30 WITH audio, clipB is 640x360@24 with NO audio, so a successful
+# join proves size/fps normalization AND silent-audio generation.
+B3=http://127.0.0.1:18096
+CLIP_PORT=18097
+FFBIN=$(node --input-type=module -e "import f from 'ffmpeg-static'; console.log(f)" 2>/dev/null)
+rm -rf /tmp/joinclips /tmp/joinout /tmp/myvideoai-join-test.db; mkdir -p /tmp/joinclips /tmp/joinout
+"$FFBIN" -y -v error -f lavfi -i color=c=red:size=320x240:rate=30:duration=1 -f lavfi -i sine=frequency=440:duration=1 -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest /tmp/joinclips/clipA.mp4
+"$FFBIN" -y -v error -f lavfi -i color=c=blue:size=640x360:rate=24:duration=1 -c:v libx264 -pix_fmt yuv420p /tmp/joinclips/clipB.mp4
+(cd /tmp/joinclips && python3 -m http.server $CLIP_PORT > /dev/null 2>&1) &
+CLIP_PID=$!
+JOIN_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-join-test.db PORT=18096 FAL_KEY=dummy_test_key "$JOIN_JWT_NAME=join-instance-dummy-value" JOINED_DIR=/tmp/joinout PAYMENT_EASYPAISA=0300-1111111 PAYMENT_JAZZCASH= PAYMENT_NAYAPAY= PAYMENT_BANK= node "$(dirname "$0")/server.js" > /tmp/myvideoai-join-test.log 2>&1 &
+SRV3_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B3/api/health && break || sleep 0.25; done
+CFG3=$(curl -s $B3/api/config)
+check "config cost 5s = 10 credits (rescaled)" "10" "$(echo $CFG3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_by_duration"]["5"])')"
+check "config cost 10s = 20 credits (rescaled)" "20" "$(echo $CFG3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_by_duration"]["10"])')"
+check "config signup credits = 100 (rescaled)" "100" "$(echo $CFG3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["signup_credits"])')"
+check "config daily cap = 200 (rescaled)" "200" "$(echo $CFG3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["max_daily_credits"])')"
+check "config payment_methods includes set easypaisa" "0300-1111111" "$(echo $CFG3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["payment_methods"].get("easypaisa"))')"
+check "config payment_methods omits unset jazzcash" "absent" "$(echo $CFG3 | python3 -c 'import sys,json;print("present" if "jazzcash" in json.load(sys.stdin)["payment_methods"] else "absent")')"
+JR=$(curl -s -X POST $B3/api/auth/register -H 'Content-Type: application/json' -d '{"email":"joiner@example.com","password":"password123"}')
+JTOKEN=$(echo $JR | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+JID=$(curl -s $B3/api/me -H "Authorization: Bearer $JTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+OR2=$(curl -s -X POST $B3/api/auth/register -H 'Content-Type: application/json' -d '{"email":"other@example.com","password":"password123"}')
+OTOKEN=$(echo $OR2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+OID=$(curl -s $B3/api/me -H "Authorization: Bearer $OTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+SEED=$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-join-test.db');
+const ins = (uid, url, status) => Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(uid, 'seed clip', '16:9', 1, 'realistic', status, url, 10).lastInsertRowid);
+console.log([ins($JID, 'http://127.0.0.1:$CLIP_PORT/clipA.mp4', 'completed'),
+             ins($JID, 'http://127.0.0.1:$CLIP_PORT/clipB.mp4', 'completed'),
+             ins($JID, null, 'failed'),
+             ins($OID, 'http://127.0.0.1:$CLIP_PORT/clipA.mp4', 'completed')].join(' '));
+")
+read JA1 JA2 JAF JB1 <<< "$SEED"
+check "joining 1 clip rejected 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B3/api/generations/join -H "Authorization: Bearer $JTOKEN" -H 'Content-Type: application/json' -d "{\"ids\":[$JA1]}")"
+check "joining another user's clip rejected 404" "404" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B3/api/generations/join -H "Authorization: Bearer $JTOKEN" -H 'Content-Type: application/json' -d "{\"ids\":[$JA1,$JB1]}")"
+check "joining a failed clip rejected 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B3/api/generations/join -H "Authorization: Bearer $JTOKEN" -H 'Content-Type: application/json' -d "{\"ids\":[$JA1,$JAF]}")"
+JOIN=$(curl -s -w '\n%{http_code}' -X POST $B3/api/generations/join -H "Authorization: Bearer $JTOKEN" -H 'Content-Type: application/json' -d "{\"ids\":[$JA1,$JA2]}")
+check "join returns 201" "201" "$(echo "$JOIN" | tail -1)"
+JBODY=$(echo "$JOIN" | sed '$d')
+check "joined prompt text" "Joined video (2 clips)" "$(echo $JBODY | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["prompt"])')"
+check "joined job cost 0 credits" "0" "$(echo $JBODY | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["cost_credits"])')"
+check "joined job status completed" "completed" "$(echo $JBODY | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["status"])')"
+JURL=$(echo $JBODY | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["video_url"])')
+check "joined video_url under /files/joined/" "yes" "$(echo $JBODY | python3 -c 'import sys,json;u=json.load(sys.stdin)["generation"]["video_url"];print("yes" if u.startswith("/files/joined/") else "no")')"
+JHIST=$(curl -s $B3/api/history -H "Authorization: Bearer $JTOKEN")
+check "joined row is newest in history" "Joined video (2 clips)" "$(echo $JHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["prompt"])')"
+check "join charged nothing (balance still 100)" "100" "$(echo $JHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "joined file is served (200)" "200" "$(curl -s -o /tmp/joined-dl.mp4 -w '%{http_code}' $B3$JURL)"
+check "joined output duration ~2s" "ok" "$("$FFBIN" -i /tmp/joined-dl.mp4 2>&1 | python3 -c 'import sys,re; m=re.search(r"Duration: (\d+):(\d+):([\d.]+)", sys.stdin.read()); d=int(m.group(1))*3600+int(m.group(2))*60+float(m.group(3)) if m else -1; print("ok" if 1.4 <= d <= 2.6 else "bad")')"
+check "joined output normalized to first clip 320x240" "320x240" "$("$FFBIN" -i /tmp/joined-dl.mp4 2>&1 | python3 -c 'import sys,re; m=re.search(r"[,\s](\d{2,5})x(\d{2,5})(?=[,\s\[])", sys.stdin.read()); print(m.group(1)+"x"+m.group(2) if m else "none")')"
+kill $SRV3_PID $CLIP_PID 2>/dev/null
 
 echo "--- rate limit: burst until 429 ---"
 FOUND429="no"

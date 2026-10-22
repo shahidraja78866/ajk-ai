@@ -88,3 +88,32 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   created_at           TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at           TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Migration v5: credit rescale (one-time UPDATE of plans.credits:
+-- normal=100, pro=120, extrapro=120 — prices untouched) plus credit packs.
+CREATE TABLE IF NOT EXISTS credit_packs (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  credits    INTEGER NOT NULL,
+  price_pkr  INTEGER NOT NULL,
+  is_active  INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+-- Seeded on boot when empty: 50 credits Rs 899; 100 credits Rs 1,499;
+-- 250 credits Rs 3,499. Admin-editable via /api/admin/packs.
+
+CREATE TABLE IF NOT EXISTS pack_purchases (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id         INTEGER NOT NULL REFERENCES users(id),
+  pack_id         INTEGER NOT NULL REFERENCES credit_packs(id),
+  credits         INTEGER NOT NULL,  -- snapshot at purchase time
+  amount_pkr      INTEGER NOT NULL,  -- snapshot at purchase time
+  method          TEXT NOT NULL,     -- easypaisa | jazzcash | bank | nayapay | other
+  transaction_ref TEXT NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'pending', -- pending | approved | rejected
+  admin_note      TEXT,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  decided_at      TEXT,
+  decided_by      INTEGER REFERENCES users(id)
+);

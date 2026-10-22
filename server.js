@@ -31,8 +31,15 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import rateLimit from 'express-rate-limit';
 import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
+import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite'; // built into Node 22.5+/24 — no native build step
+import ffmpegStatic from 'ffmpeg-static'; // pinned binary for clip joining
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -55,13 +62,14 @@ const CONFIG = {
   aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'],
   durations: [5, 10],                       // seconds offered in the UI
   styles: ['realistic', 'cinematic', 'cartoon', 'anime'],
-  // Credits charged per generation, by duration. Charged on submit,
+  // Credits charged per generation, by duration (owner's rescaled system:
+  // bigger numbers, same shape — 10s costs twice a 5s). Charged on submit,
   // automatically refunded if the provider fails the job.
-  costByDuration: { 5: 1, 10: 2 },
+  costByDuration: { 5: 10, 10: 20 },
   // Native-4K generations cost double credits (Extra Pro plan quality).
   costMultiplier4k: 2,
-  signupCredits: Number(process.env.SIGNUP_CREDITS || 10),
-  maxDailyCredits: Number(process.env.MAX_DAILY_CREDITS || 20),
+  signupCredits: Number(process.env.SIGNUP_CREDITS || 100),
+  maxDailyCredits: Number(process.env.MAX_DAILY_CREDITS || 200),
   // Bootstrap admin: the account with this email gets the admin flag
   // (at registration, at login, and for existing accounts at boot).
   adminEmail: (process.env.ADMIN_EMAIL || '').trim().toLowerCase(),
@@ -69,6 +77,19 @@ const CONFIG = {
   // endpoint). Overridable via TRANSLATE_API_BASE — tests point it at a
   // local stub so the suite never calls the real endpoint.
   translateBase: (process.env.TRANSLATE_API_BASE || 'https://translate.googleapis.com').replace(/\/+$/, ''),
+  // Manual payment destinations for credit-pack purchases, shown to buyers
+  // on the Buy Credits page. Only the methods actually set in the
+  // environment are exposed (via /api/config as payment_methods).
+  paymentMethods: {
+    ...((process.env.PAYMENT_EASYPAISA || '').trim() ? { easypaisa: process.env.PAYMENT_EASYPAISA.trim() } : {}),
+    ...((process.env.PAYMENT_JAZZCASH || '').trim() ? { jazzcash: process.env.PAYMENT_JAZZCASH.trim() } : {}),
+    ...((process.env.PAYMENT_BANK || '').trim() ? { bank: process.env.PAYMENT_BANK.trim() } : {}),
+    ...((process.env.PAYMENT_NAYAPAY || '').trim() ? { nayapay: process.env.PAYMENT_NAYAPAY.trim() } : {}),
+  },
+  // Where joined videos are written and served from (/files/joined/...).
+  // NOTE: local disk — on ephemeral hosting (Render free tier) these files
+  // disappear when the instance restarts or redeploys.
+  joinedDir: process.env.JOINED_DIR || path.join(__dirname, 'data', 'joined'),
 };
 
 // ---------- Prompt languages ----------
@@ -118,12 +139,22 @@ const FOUR_K_ASPECTS = ['16:9', '9:16', '1:1'];
 // never overwrites prices or credit amounts an admin has changed.
 const PLAN_DEFAULTS = [
   { id: 'normal',   name: 'Normal',    price_monthly: 1500, price_yearly: 15000,
-    credits_monthly: 5,  quality: '768P', quality_label: '768P',      resolution: '768P', model: CONFIG.model,   sort_order: 1 },
+    credits_monthly: 100, quality: '768P', quality_label: '768P',      resolution: '768P', model: CONFIG.model,   sort_order: 1 },
   { id: 'pro',      name: 'Pro',       price_monthly: 3000, price_yearly: 30000,
-    credits_monthly: 6,  quality: '2K',   quality_label: '2K',        resolution: '2K',   model: CONFIG.model,   sort_order: 2 },
+    credits_monthly: 120, quality: '2K',   quality_label: '2K',        resolution: '2K',   model: CONFIG.model,   sort_order: 2 },
   { id: 'extrapro', name: 'Extra Pro', price_monthly: 5000, price_yearly: 50000,
-    credits_monthly: 10, quality: '4K',   quality_label: 'Native 4K', resolution: '4K',   model: CONFIG.model4k, sort_order: 3 },
+    credits_monthly: 120, quality: '4K',   quality_label: 'Native 4K', resolution: '4K',   model: CONFIG.model4k, sort_order: 3 },
 ];
+
+// One-time credit packs (top-ups bought outside subscriptions). Seeded into
+// the `credit_packs` table on first boot; afterwards editable in the admin
+// panel — boot never overwrites an admin's edits.
+const PACK_DEFAULTS = [
+  { credits: 50,  price_pkr: 899,  sort_order: 1 },
+  { credits: 100, price_pkr: 1499, sort_order: 2 },
+  { credits: 250, price_pkr: 3499, sort_order: 3 },
+];
+const PACK_METHODS = ['easypaisa', 'jazzcash', 'bank', 'nayapay', 'other'];
 
 // ---------- Database with migrations (data survives restarts) ----------
 const db = new DatabaseSync(process.env.DB_PATH || 'myvideoai.db');
@@ -233,6 +264,40 @@ const MIGRATIONS = [
   { version: 4, up: `
     ALTER TABLE generations ADD COLUMN prompt_language TEXT;
     ALTER TABLE generations ADD COLUMN translated_prompt TEXT;` },
+  // v5 — credit rescale + credit packs. The rescale (one-time UPDATE of the
+  // plans' monthly credits to the owner's new 100/120/120 system; prices
+  // untouched) runs exactly once because migrations are version-gated, so
+  // any prices/credits an admin edits afterwards are respected. Fresh DBs
+  // get the same values from PLAN_DEFAULTS. Also the credit-pack tables:
+  // packs are one-time top-up purchases paid manually (easypaisa / jazzcash
+  // / bank transfer) and granted by an admin after verifying payment.
+  { version: 5, up: `
+    UPDATE plans SET credits_monthly = 100 WHERE id = 'normal';
+    UPDATE plans SET credits_monthly = 120 WHERE id = 'pro';
+    UPDATE plans SET credits_monthly = 120 WHERE id = 'extrapro';
+    CREATE TABLE IF NOT EXISTS credit_packs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      credits INTEGER NOT NULL,
+      price_pkr INTEGER NOT NULL,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS pack_purchases (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      pack_id INTEGER NOT NULL REFERENCES credit_packs(id),
+      credits INTEGER NOT NULL,
+      amount_pkr INTEGER NOT NULL,
+      method TEXT NOT NULL,
+      transaction_ref TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      admin_note TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      decided_at TEXT,
+      decided_by INTEGER REFERENCES users(id)
+    );` },
 ];
 {
   const applied = new Set(db.prepare('SELECT version FROM schema_migrations').all().map(r => r.version));
@@ -262,6 +327,18 @@ for (const p of PLAN_DEFAULTS) {
     db.prepare(`UPDATE plans SET name = ?, quality = ?, quality_label = ?,
                 resolution = ?, model = ?, sort_order = ? WHERE id = ?`)
       .run(p.name, p.quality, p.quality_label, p.resolution, p.model, p.sort_order, p.id);
+  }
+}
+// Seed the credit-pack catalogue on first boot only (when the table is
+// empty). After that the admin panel owns the rows — boot never re-seeds or
+// overwrites prices/credits an admin has changed.
+{
+  const { c } = db.prepare('SELECT COUNT(*) AS c FROM credit_packs').get();
+  if (Number(c) === 0) {
+    for (const p of PACK_DEFAULTS) {
+      db.prepare('INSERT INTO credit_packs (credits, price_pkr, sort_order) VALUES (?, ?, ?)')
+        .run(p.credits, p.price_pkr, p.sort_order);
+    }
   }
 }
 // Bootstrap admin for an already-registered account (see also register/login).
@@ -384,6 +461,10 @@ function publicPlan(p) {
     currency: p.currency, credits_monthly: p.credits_monthly, quality: p.quality,
     quality_label: p.quality_label, resolution: p.resolution };
 }
+function publicPack(p) {
+  return { id: p.id, credits: p.credits, price_pkr: p.price_pkr, currency: 'PKR',
+    is_active: !!p.is_active };
+}
 function subscriptionView(sub) {
   if (!sub) return null;
   const plan = getPlan(sub.plan_id);
@@ -400,6 +481,10 @@ app.use(express.json({ limit: '100kb' }));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
 const generateLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 10,
   message: { error: 'Rate limit: max 10 generations per hour.' } });
+// Clip joining is CPU-heavy (ffmpeg) — separately limited per signed-in user.
+const joinLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 10,
+  keyGenerator: (req) => String(req.user?.id || req.ip),
+  message: { error: 'Rate limit: max 10 joins per hour.' } });
 
 function auth(req, res, next) {
   const token = (req.headers.authorization || '').replace('Bearer ', '');
@@ -436,6 +521,9 @@ app.get('/api/config', (req, res) => res.json({
   cost_by_duration: CONFIG.costByDuration,
   signup_credits: CONFIG.signupCredits,
   max_daily_credits: CONFIG.maxDailyCredits,
+  // Manual payment destinations for credit packs — only the methods the
+  // owner configured in the environment are listed (may be empty).
+  payment_methods: CONFIG.paymentMethods,
 }));
 app.get('/api/health', (req, res) => res.json({ ok: true, model: CONFIG.model }));
 
@@ -450,6 +538,43 @@ app.get('/api/payments', auth, (req, res) => {
   const rows = db.prepare('SELECT * FROM payments WHERE user_id = ? ORDER BY id DESC LIMIT 100')
     .all(req.user.id);
   res.json({ payments: rows });
+});
+
+// ---------- Credit packs (one-time top-ups, manual payment + admin approval) ----------
+// Flow: the user sends money to one of the owner's published destinations
+// (easypaisa / jazzcash / bank — see payment_methods in /api/config), then
+// submits the transaction reference here. That creates a PENDING purchase
+// and grants NOTHING. An admin verifies the payment in the Admin Panel and
+// approves (credits land in the user's free_credits bucket, exactly once)
+// or rejects it. There is deliberately no user-facing approval route.
+app.get('/api/packs', (req, res) => {
+  const packs = db.prepare('SELECT * FROM credit_packs WHERE is_active = 1 ORDER BY sort_order, id').all();
+  res.json({ packs: packs.map(publicPack), currency: 'PKR' });
+});
+
+app.post('/api/packs/:id/purchase', auth, (req, res) => {
+  const pack = db.prepare('SELECT * FROM credit_packs WHERE id = ?').get(req.params.id);
+  if (!pack || !pack.is_active)
+    return res.status(404).json({ error: 'That credit pack is not available.' });
+  const b = req.body || {};
+  const method = String(b.method || '').toLowerCase();
+  if (!PACK_METHODS.includes(method))
+    return res.status(400).json({ error: `method must be one of: ${PACK_METHODS.join(', ')}` });
+  const ref = String(b.transaction_ref || '').trim();
+  if (ref.length < 6)
+    return res.status(400).json({ error: 'Please enter the payment transaction ID (at least 6 characters).' });
+  const info = db.prepare(
+    `INSERT INTO pack_purchases (user_id, pack_id, credits, amount_pkr, method, transaction_ref, status)
+     VALUES (?, ?, ?, ?, ?, ?, 'pending')`)
+    .run(req.user.id, pack.id, pack.credits, pack.price_pkr, method, ref.slice(0, 120));
+  const row = db.prepare('SELECT * FROM pack_purchases WHERE id = ?').get(Number(info.lastInsertRowid));
+  res.status(201).json({ purchase: row });
+});
+
+app.get('/api/my/pack-purchases', auth, (req, res) => {
+  const rows = db.prepare('SELECT * FROM pack_purchases WHERE user_id = ? ORDER BY id DESC LIMIT 100')
+    .all(req.user.id);
+  res.json({ purchases: rows });
 });
 
 // ---------- Auth ----------
@@ -692,6 +817,145 @@ app.get('/api/history', auth, (req, res) => {
   res.json({ credits: me.credits, generations: rows });
 });
 
+// ---------- Clip joining (merge 2–6 of the user's own clips, free) ----------
+// Uses the pinned ffmpeg-static binary. Each clip is downloaded, normalized
+// to the FIRST clip's width/height/fps (scale + pad, H.264 + AAC — silent
+// audio is generated for clips that have none), then concatenated. The
+// result is stored on local disk and served from /files/joined/. Joining
+// costs 0 credits and creates a normal completed generations row.
+const JOIN_MAX_CLIPS = 6;
+const JOIN_MAX_BYTES = 200 * 1024 * 1024; // total download cap across clips
+
+function runFfmpeg(args, timeoutMs = 300000) {
+  return new Promise((resolve, reject) => {
+    execFile(ffmpegStatic, args, { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 },
+      (err, _stdout, stderr) => err
+        ? reject(new Error(`ffmpeg failed: ${String(stderr || err.message).slice(-300)}`))
+        : resolve());
+  });
+}
+// Probe a media file by parsing `ffmpeg -i` output (ffmpeg-static ships no
+// ffprobe binary). Throws when the file has no readable video stream.
+async function probeMedia(file) {
+  const info = await new Promise((resolve) => {
+    execFile(ffmpegStatic, ['-i', file], { timeout: 30000 },
+      (_err, _stdout, stderr) => resolve(String(stderr || '')));
+  });
+  const dur = info.match(/Duration:\s*(\d+):(\d+):([\d.]+)/);
+  const dim = info.match(/[,\s](\d{2,5})x(\d{2,5})(?=[,\s\[])/);
+  const fps = info.match(/([\d.]+)\s*fps/);
+  if (!dur || !dim) throw new Error('Could not read one of the clips — it may not be a valid video file.');
+  return {
+    duration: Number(dur[1]) * 3600 + Number(dur[2]) * 60 + Number(dur[3]),
+    width: Number(dim[1]), height: Number(dim[2]),
+    fps: fps ? Number(fps[1]) : 30,
+    hasAudio: /\bAudio:/.test(info),
+  };
+}
+async function downloadClip(url, dest, budget) {
+  // Our own joined files are referenced by path only — fetch them back from
+  // this same server over loopback.
+  const abs = /^https?:\/\//i.test(url) ? url
+    : `http://127.0.0.1:${process.env.PORT || 8080}${url}`;
+  const r = await fetch(abs, { redirect: 'follow', signal: AbortSignal.timeout(120000) });
+  if (!r.ok || !r.body) throw new Error('Could not download one of the clips.');
+  const declared = Number(r.headers.get('content-length') || 0);
+  if (declared > budget.left) throw new Error('These clips are too large to join (200 MB total limit).');
+  let seen = 0;
+  const counter = new Transform({
+    transform(chunk, _enc, cb) {
+      seen += chunk.length;
+      if (seen > budget.left) cb(new Error('These clips are too large to join (200 MB total limit).'));
+      else cb(null, chunk);
+    },
+  });
+  await pipeline(Readable.fromWeb(r.body), counter, fs.createWriteStream(dest));
+  budget.left -= seen;
+}
+
+app.post('/api/generations/join', auth, joinLimiter, async (req, res) => {
+  const ids = Array.isArray(req.body?.ids)
+    ? req.body.ids.map(Number).filter(Number.isInteger) : [];
+  if (ids.length < 2 || ids.length > JOIN_MAX_CLIPS)
+    return res.status(400).json({ error: `Choose between 2 and ${JOIN_MAX_CLIPS} clips to join.` });
+  const unique = [...new Set(ids)];
+  const rows = db.prepare(
+    `SELECT * FROM generations WHERE id IN (${unique.map(() => '?').join(',')}) AND user_id = ?`)
+    .all(...unique, req.user.id);
+  if (rows.length !== unique.length)
+    return res.status(404).json({ error: 'One or more clips were not found.' });
+  const byId = new Map(rows.map(r => [r.id, r]));
+  const clips = unique.map(id => byId.get(id));
+  if (clips.some(c => c.status !== 'completed' || !c.video_url))
+    return res.status(400).json({ error: 'Only completed videos can be joined.' });
+
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ajk-join-'));
+  try {
+    const budget = { left: JOIN_MAX_BYTES };
+    const srcs = [];
+    for (let i = 0; i < clips.length; i++) {
+      const dest = path.join(work, `src${i}.mp4`);
+      await downloadClip(clips[i].video_url, dest, budget);
+      srcs.push(dest);
+    }
+    const probes = [];
+    for (const s of srcs) probes.push(await probeMedia(s));
+    const target = probes[0]; // normalize everything to the first clip
+    const vf = `scale=${target.width}:${target.height}:force_original_aspect_ratio=decrease,` +
+               `pad=${target.width}:${target.height}:(ow-iw)/2:(oh-ih)/2,` +
+               `fps=${target.fps},setsar=1,format=yuv420p`;
+    const norms = [];
+    for (let i = 0; i < srcs.length; i++) {
+      const out = path.join(work, `norm${i}.mp4`);
+      const enc = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
+                   '-c:a', 'aac', '-ar', '48000', '-ac', '2'];
+      if (probes[i].hasAudio) {
+        await runFfmpeg(['-y', '-i', srcs[i], '-map', '0:v:0', '-map', '0:a:0',
+                         '-vf', vf, ...enc, out]);
+      } else {
+        // No audio stream: add a silent track of the same length so every
+        // intermediate has identical stream layout for the concat step.
+        await runFfmpeg(['-y', '-i', srcs[i],
+                         '-f', 'lavfi', '-t', String(probes[i].duration),
+                         '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
+                         '-map', '0:v:0', '-map', '1:a:0', '-vf', vf, ...enc,
+                         '-shortest', out]);
+      }
+      norms.push(out);
+    }
+    const listFile = path.join(work, 'list.txt');
+    fs.writeFileSync(listFile, norms.map(n => `file '${n}'`).join('\n'));
+    const joinedTmp = path.join(work, 'joined.mp4');
+    try {
+      await runFfmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', joinedTmp]);
+    } catch {
+      await runFfmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', listFile,
+                       '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
+                       '-c:a', 'aac', joinedTmp]);
+    }
+    fs.mkdirSync(CONFIG.joinedDir, { recursive: true });
+    const name = `${randomUUID()}.mp4`;
+    fs.copyFileSync(joinedTmp, path.join(CONFIG.joinedDir, name));
+
+    const totalDuration = Math.max(1, Math.round(probes.reduce((s, p) => s + p.duration, 0)));
+    const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+    const g = gcd(target.width, target.height) || 1;
+    const info = db.prepare(
+      `INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits)
+       VALUES (?, ?, ?, ?, 'realistic', 'completed', ?, 0)`)
+      .run(req.user.id, `Joined video (${clips.length} clips)`,
+           `${target.width / g}:${target.height / g}`, totalDuration,
+           `/files/joined/${name}`);
+    const row = db.prepare('SELECT * FROM generations WHERE id = ?').get(Number(info.lastInsertRowid));
+    res.status(201).json({ generation: row });
+  } catch (e) {
+    console.error('join failed:', e.message);
+    res.status(500).json({ error: `Could not join those clips. ${e.message}` });
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+});
+
 // ---------- Report inappropriate content ----------
 app.post('/api/report', auth, (req, res) => {
   const { generation_id, reason } = req.body || {};
@@ -851,6 +1115,81 @@ app.get('/api/admin/revenue', auth, requireAdmin, (req, res) => {
              by_plan: byPlan, by_status: byStatus, monthly });
 });
 
+// ---------- Admin: credit packs & pack purchases ----------
+app.get('/api/admin/packs', auth, requireAdmin, (req, res) => {
+  res.json({ packs: db.prepare('SELECT * FROM credit_packs ORDER BY sort_order, id').all() });
+});
+
+app.put('/api/admin/packs/:id', auth, requireAdmin, (req, res) => {
+  const pack = db.prepare('SELECT * FROM credit_packs WHERE id = ?').get(req.params.id);
+  if (!pack) return res.status(404).json({ error: 'Pack not found.' });
+  const b = req.body || {};
+  const intField = (name) => {
+    if (b[name] === undefined) return pack[name];
+    const v = Number(b[name]);
+    if (!Number.isInteger(v) || v < 0) throw Object.assign(new Error(`BAD_${name}`), { status: 400 });
+    return v;
+  };
+  try {
+    const credits = intField('credits');
+    const price = intField('price_pkr');
+    const active = b.is_active !== undefined ? (b.is_active ? 1 : 0) : pack.is_active;
+    db.prepare(`UPDATE credit_packs SET credits = ?, price_pkr = ?, is_active = ?,
+                updated_at = datetime('now') WHERE id = ?`).run(credits, price, active, pack.id);
+    res.json({ pack: db.prepare('SELECT * FROM credit_packs WHERE id = ?').get(pack.id) });
+  } catch (e) {
+    if (e.status === 400) return res.status(400).json({ error: 'Credits and price must be non-negative whole numbers.' });
+    throw e;
+  }
+});
+
+app.get('/api/admin/pack-purchases', auth, requireAdmin, (req, res) => {
+  const status = String(req.query.status || '');
+  const base = `SELECT pp.*, u.email AS user_email FROM pack_purchases pp
+                JOIN users u ON u.id = pp.user_id`;
+  const rows = ['pending', 'approved', 'rejected'].includes(status)
+    ? db.prepare(`${base} WHERE pp.status = ? ORDER BY pp.id DESC LIMIT 200`).all(status)
+    : db.prepare(`${base} ORDER BY pp.id DESC LIMIT 200`).all();
+  res.json({ purchases: rows });
+});
+
+// Approve a pack purchase: grants the pack's credits (snapshot taken at
+// purchase time) into the buyer's FREE bucket — exactly once. The status
+// flip and the grant happen in one transaction, and approving an
+// already-decided purchase is a 409 conflict, never a second grant.
+app.post('/api/admin/pack-purchases/:id/approve', auth, requireAdmin, (req, res) => {
+  const outcome = tx(() => {
+    const p = db.prepare('SELECT * FROM pack_purchases WHERE id = ?').get(req.params.id);
+    if (!p) return { code: 404 };
+    if (p.status !== 'pending') return { code: 409, purchase: p };
+    db.prepare(`UPDATE pack_purchases SET status = 'approved', decided_at = datetime('now'),
+                decided_by = ? WHERE id = ?`).run(req.adminUser.id, p.id);
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(p.user_id);
+    const b = creditBuckets(user);
+    setBuckets(user.id, b.free + p.credits, b.plan);
+    return { code: 200, purchase: db.prepare('SELECT * FROM pack_purchases WHERE id = ?').get(p.id) };
+  });
+  if (outcome.code === 404) return res.status(404).json({ error: 'Purchase not found.' });
+  if (outcome.code === 409) return res.status(409).json({ error: 'That purchase was already decided.', purchase: outcome.purchase });
+  const me = db.prepare('SELECT credits, free_credits, plan_credits FROM users WHERE id = ?').get(outcome.purchase.user_id);
+  res.json({ ok: true, purchase: outcome.purchase, user_credits: me });
+});
+
+app.post('/api/admin/pack-purchases/:id/reject', auth, requireAdmin, (req, res) => {
+  const note = req.body?.note !== undefined ? String(req.body.note).slice(0, 500) : null;
+  const outcome = tx(() => {
+    const p = db.prepare('SELECT * FROM pack_purchases WHERE id = ?').get(req.params.id);
+    if (!p) return { code: 404 };
+    if (p.status !== 'pending') return { code: 409, purchase: p };
+    db.prepare(`UPDATE pack_purchases SET status = 'rejected', admin_note = ?, decided_at = datetime('now'),
+                decided_by = ? WHERE id = ?`).run(note, req.adminUser.id, p.id);
+    return { code: 200, purchase: db.prepare('SELECT * FROM pack_purchases WHERE id = ?').get(p.id) };
+  });
+  if (outcome.code === 404) return res.status(404).json({ error: 'Purchase not found.' });
+  if (outcome.code === 409) return res.status(409).json({ error: 'That purchase was already decided.', purchase: outcome.purchase });
+  res.json({ ok: true, purchase: outcome.purchase });
+});
+
 // ---------- Admin panel page ----------
 app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 
@@ -858,6 +1197,10 @@ app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'adm
 // The app and the API now live on ONE address, so there is no separate
 // frontend URL to configure: open this server's address and everything works.
 // The app's API-base-URL setting still exists for split deployments.
+// Joined videos live on local disk (see CONFIG.joinedDir) and are served
+// here — mounted before the SPA fallback so the files win over index.html.
+fs.mkdirSync(CONFIG.joinedDir, { recursive: true });
+app.use('/files/joined', express.static(CONFIG.joinedDir));
 app.use(express.static(path.join(__dirname, 'public')));
 app.get(/^\/(?!api\/).*/, (req, res) =>
   res.sendFile(path.join(__dirname, 'public', 'index.html')));

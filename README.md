@@ -129,6 +129,12 @@ Not yet testable without your input:
 - ❌ a real generation end-to-end (needs your real `FAL_KEY` — your call when to do the one paid test)
 - ❌ the frontend build (in progress) against this live backend
 
+**Update (2026-10-23):** the suite has since grown — rescale ×10, credit
+packs (incl. NayaPay approve-exactly-once and the served QR image) and clip
+joining with real ffmpeg normalization are covered. Latest full run:
+**150/150 checks passed** (dummy fal key only; see `test.sh` header for the
+server env the battery expects).
+
 ## Safety built in
 - Key and JWT secret live only in `.env`; `/api/config` returns only public settings.
 - Credits are deducted and the job recorded in **one atomic transaction** (double-spend safe).
@@ -144,9 +150,9 @@ they are edited in the Admin Panel and boot never overwrites an admin's edits.
 
 | Plan | Monthly | Yearly | Credits/mo | Quality | Generation route |
 |---|---|---|---|---|---|
-| Normal | Rs 1,500 | Rs 15,000 | 5 | 768P | H3 model, resolution `768P` |
-| Pro | Rs 3,000 | Rs 30,000 | 6 | 2K | H3 model, resolution `2K` |
-| Extra Pro | Rs 5,000 | Rs 50,000 | 10 | Native 4K | Kling O3 4K native-4K endpoint (no `resolution` param; 16:9/9:16/1:1 only) |
+| Normal | Rs 1,500 | Rs 15,000 | 100 | 768P | H3 model, resolution `768P` |
+| Pro | Rs 3,000 | Rs 30,000 | 120 | 2K | H3 model, resolution `2K` |
+| Extra Pro | Rs 5,000 | Rs 50,000 | 120 | Native 4K | Kling O3 4K native-4K endpoint (no `resolution` param; 16:9/9:16/1:1 only) |
 
 **Quality honesty:** on the H3 model, fal's own docs describe 2K/4K as
 upscaling a 768P base — the UI labels Pro's quality simply "2K". Extra Pro's
@@ -158,15 +164,16 @@ ratios the 4K endpoint can't render (only 16:9, 9:16, 1:1) fall back to H3 at
 2K with the standard credit rate — never charged or recorded as 4K.
 
 **Credit accounting (two buckets):**
-- Every user has `free_credits` (the 10 sign-up credits — never expire) and
+- Every user has `free_credits` (the 100 sign-up credits — never expire) and
   `plan_credits` (granted by a subscription). `users.credits` is always their
   sum, so older code paths see one balance.
 - Spending takes **plan credits first**. Refunds go back plan-bucket-first,
   capped at the plan's monthly grant, so a refund can't inflate plan credits.
 - On activation and on each renewal month, plan credits **reset** to the
   plan's `credits_monthly` — unused plan credits do **not** roll over.
-- Costs: 5s = 1 credit, 10s = 2 credits at plan quality — except native-4K
-  generations, which cost **double** (5s = 2, 10s = 4). If an Extra Pro user
+- Costs (rescaled ×10 in migration v5): 5s = 10 credits, 10s = 20 credits at
+  plan quality — except native-4K generations, which cost **double** (5s = 20,
+  10s = 40). If an Extra Pro user
   explicitly picks a lower resolution, normal rates and the H3 model apply.
   The same applies to the automatic fallback: a 4K-quality request at an
   aspect ratio the 4K endpoint can't render goes to H3 at 2K at the normal
@@ -195,6 +202,64 @@ registration, login, or boot). Admin Panel: **`/admin`**. Admin API:
 cancel-subscription`, `GET /api/admin/payments`, `GET /api/admin/revenue`
 (totals by plan/status + monthly revenue, succeeded payments only).
 All admin endpoints return 403 for non-admin users.
+
+## Credit packs (one-time top-ups, manual payment verification)
+
+Besides subscriptions, users can buy one-time credit packs from the app's
+**Buy Credits** view. Pack credits land in the `free_credits` bucket, so they
+**never expire** and stack on top of any plan credits.
+
+| Pack | Price |
+|---|---|
+| 50 credits | Rs 899 |
+| 100 credits | Rs 1,499 |
+| 250 credits | Rs 3,499 |
+
+Packs are seeded into the `credit_packs` table and are editable (credits,
+price, active) in the Admin Panel or via `GET|PUT /api/admin/packs(/:id)`.
+
+**Flow (manual, no payment gateway):**
+1. The buyer picks a pack and a payment method — **easypaisa, JazzCash,
+   NayaPay, or bank transfer**. The destination number/details for each
+   method come from the server env (`PAYMENT_EASYPAISA`, `PAYMENT_JAZZCASH`,
+   `PAYMENT_NAYAPAY`, `PAYMENT_BANK`) and are exposed via
+   `GET /api/config → payment_methods` (only the methods that are set). If
+   none are set, the page shows "Payment details will appear here soon."
+   Selecting NayaPay also shows the owner's QR code (`/nayapay-qr.jpg`) so
+   buyers can scan to pay.
+2. The buyer pays manually, then submits the **transaction ID**
+   (`POST /api/packs/:id/purchase`). This creates a **pending** purchase in
+   `pack_purchases` with a snapshot of the pack's credits/price — it grants
+   **nothing**.
+3. An admin verifies the payment arrived, then approves in the Admin Panel
+   (or `POST /api/admin/pack-purchases/:id/approve`). Approval grants the
+   credits **exactly once**, transactionally — approving again returns 409
+   and never double-grants. `POST .../reject {note}` rejects without
+   granting. Buyers track their orders at `GET /api/my/pack-purchases`.
+
+**Honest limitation:** this is manual verification, not a checkout. Live
+gateway checkout (automatic payment confirmation) needs the owner's own
+merchant accounts with easypaisa/JazzCash/NayaPay or a bank — those do not
+exist yet, so nothing here pretends to charge a card or wallet directly.
+(PayPal is not officially available in Pakistan.)
+
+## Joining clips (free, server-side ffmpeg)
+
+From History, a user can tick **2–6** of their own completed videos and join
+them into one MP4 (`POST /api/generations/join`, rate-limited to 10 joins per
+hour per user). The backend (using the pinned `ffmpeg-static` binary)
+downloads each clip (200 MB total cap), normalizes every clip to the **first
+clip's** width/height/fps (scale + pad, libx264 + AAC; clips without audio
+get a silent track), concatenates them, and saves the result as a normal
+history entry — prompt `Joined video (N clips)`, **cost 0 credits**, served
+from `/files/joined/<uuid>.mp4`. Joining another user's clip returns 404;
+failures return a clear error and never create a charge.
+
+**Storage caveat:** joined files live on the server's **local disk**
+(`JOINED_DIR`, default `data/joined/`). On the free Render tier that disk is
+**ephemeral** — joined videos disappear when the instance restarts or
+redeploys. Users should **download joined videos promptly**; the history row
+remains, but the file behind it may not.
 
 ## The localhost fix: app + API on one address
 This server also serves the AJK AI web app itself (`public/index.html`) at its
@@ -238,10 +303,11 @@ Publishing also needs a Play Console account and your app's privacy policy URL �
 the privacy policy page is included in the web app.
 
 ## Files
-- `server.js` — auth, generate (idempotent, plan-routed), status polling, history, reports, config, plans/subscriptions/payments, admin API
-- `public/index.html` — the AJK AI web app (Studio, History, Plans & pricing, Settings, Privacy)
-- `public/admin.html` — the Admin Panel, served at `/admin`
+- `server.js` — auth, generate (idempotent, plan-routed), status polling, history, reports, config, plans/subscriptions/payments, credit packs, clip joining (ffmpeg-static), admin API
+- `public/index.html` — the AJK AI web app (Studio, History with clip joining, Plans & pricing, Buy Credits, Settings, Privacy)
+- `public/admin.html` — the Admin Panel, served at `/admin` (includes credit-pack editing and pack-purchase approval)
+- `public/nayapay-qr.jpg` — the owner's NayaPay QR code, shown on the Buy Credits page when NayaPay is selected
 - `schema.sql` — schema reference (`server.js` applies migrations automatically on boot)
-- `test.sh` — the automated test battery (original + monetization + prompt-language tests; see its header for the server env it needs)
+- `test.sh` — the automated test battery (original + monetization + prompt-language + credit-pack + clip-join tests; see its header for the server env it needs)
 - `test-translate-stub.js` — local Google Translate stub used by `test.sh` (tests never call the real translate endpoint)
 - `.env.example` — copy to `.env` and fill in (never commit the real one)
