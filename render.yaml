@@ -1,0 +1,20 @@
+# Render Blueprint — AJK AI backend
+# Upload the `backend/` folder to GitHub, then create a Web Service on Render:
+# this file fills the build/start settings and environment automatically.
+services:
+  - type: web
+    name: ajk-ai
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      # Your fal.ai API key (server-side only). Fill in on the Render dashboard —
+      # never paste it in chat.
+      - key: FAL_KEY
+        sync: false
+      # Render auto-generates a secure random secret on first deploy.
+      - key: JWT_SECRET
+        generateValue: true
+      # Optional: leave empty for same-origin use (backend serves the app itself).
+      - key: FRONTEND_ORIGIN
+        sync: false
