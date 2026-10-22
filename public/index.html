@@ -106,6 +106,26 @@
       .pay-item{ display:flex; justify-content:space-between; gap:10px; background:var(--panel-2);
         border:1px solid var(--line-soft); border-radius:10px; padding:10px 14px; font-size:13.5px; }
       .pay-item .meta{ color:var(--muted); font-size:12.5px; }
+      /* ---------- buy credits / clip joining ---------- */
+      .credits-chip{ cursor:pointer; }
+      .pack-methods{ display:grid; gap:7px 14px; font-size:14.5px; }
+      .buy-form select, .buy-form input[type="text"]{
+        width:100%; background:var(--panel-2); border:1px solid var(--line); border-radius:10px;
+        color:var(--text); padding:11px 12px; font-size:14.5px;
+      }
+      .buy-form select:focus, .buy-form input[type="text"]:focus{ outline:2px solid var(--amber); outline-offset:1px; border-color:transparent; }
+      .pack-note{ background:var(--green-soft); border:1px solid rgba(67,176,110,.5); color:#b9d9c4;
+        border-radius:10px; padding:11px 14px; font-size:14px; display:none; }
+      .pack-note.show{ display:block; }
+      .buy-qr{ text-align:center; margin-top:16px; }
+      .buy-qr img{ width:220px; max-width:80%; height:auto; background:#fff; padding:10px;
+        border-radius:12px; border:1px solid var(--line); }
+      .buy-qr p{ margin-top:8px; }
+      .join-bar{ display:none; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:12px;
+        background:var(--panel); border:1px solid var(--line-soft); border-radius:var(--radius); padding:11px 14px; font-size:14px; }
+      .join-bar.show{ display:flex; }
+      .join-pick{ display:inline-flex; align-items:center; gap:6px; font-size:13px; color:var(--muted); cursor:pointer; padding:5px 2px; }
+      .join-pick input{ width:16px; height:16px; accent-color:#6366f1; }
       .btn{
         border:1px solid var(--line); background:var(--panel-2); color:var(--text);
         border-radius:10px; padding:9px 16px; font-size:14px; font-weight:600;
@@ -477,6 +497,7 @@
         <button type="button" class="tab active" data-view="studio">Studio</button>
         <button type="button" class="tab" data-view="history">History</button>
         <button type="button" class="tab" data-view="plans">Plans</button>
+        <button type="button" class="tab" data-view="buy">Buy Credits</button>
         <button type="button" class="tab" data-view="settings">Settings</button>
         <button type="button" class="tab" data-view="privacy">Privacy</button>
       </nav>
@@ -615,6 +636,11 @@
           Credit balance: <strong id="balanceNum">–</strong>
           <button type="button" class="btn small" id="refreshHistoryBtn">Refresh</button>
         </div>
+        <div class="join-bar" id="joinBar">
+          <span id="joinCount">0 clips selected</span>
+          <button type="button" class="btn small primary" id="joinBtn">Join selected clips</button>
+          <span id="joinMsg" style="color:var(--muted);font-size:13px;">Joining is free — pick 2 to 6 finished videos.</span>
+        </div>
         <div class="empty-state" id="historyEmpty">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/><path d="M12 7v5l3.5 2"/></svg>
           <p id="historyEmptyText">Sign in to see your generation history.</p>
@@ -643,6 +669,63 @@
             <p id="paymentsEmptyText">Sign in to see your payment history.</p>
           </div>
           <div class="pay-list" id="payList"></div>
+        </div>
+        <div class="card">
+          <h2>Need credits right away?</h2>
+          <p class="sub">Subscriptions renew monthly — credit packs top you up immediately and never expire.</p>
+          <button type="button" class="btn primary" id="buyFromPlansBtn">Buy a credit pack</button>
+        </div>
+      </section>
+
+      <!-- ================= BUY CREDITS ================= -->
+      <section class="view" id="view-buy">
+        <div class="page-head">
+          <h1>Buy credits</h1>
+          <p>One-time credit packs — they never expire and are added on top of any plan credits. Pay by easypaisa, JazzCash, NayaPay or bank transfer, then submit the transaction ID from your payment. Credits are added as soon as the payment is verified (usually within a few hours).</p>
+        </div>
+        <div class="card">
+          <h2>1 · Choose a pack</h2>
+          <p class="sub">Packs and prices are loaded from the server.</p>
+          <div class="plan-grid" id="packGrid">
+            <p style="color:var(--muted);">Loading packs…</p>
+          </div>
+        </div>
+        <div class="card buy-form">
+          <h2>2 · Send the payment</h2>
+          <p class="sub">Send the pack price to one of these destinations, exactly as shown:</p>
+          <div id="packMethods">
+            <p style="color:var(--muted);">Payment details will appear here soon.</p>
+          </div>
+          <div class="buy-qr" id="buyQr" hidden>
+            <img src="/nayapay-qr.jpg" alt="NayaPay QR code — pay rajashahidiqbal@nayapay (Shahid Iqbal)" />
+            <p class="sub">Scan this QR with your NayaPay app to pay <strong>rajashahidiqbal@nayapay</strong> (Shahid Iqbal).</p>
+          </div>
+          <h2 style="margin-top:22px;">3 · Tell us the transaction ID</h2>
+          <p class="sub">After paying, enter the transaction ID from your easypaisa / JazzCash / NayaPay / bank receipt so we can verify it.</p>
+          <div class="field-label"><span>Pack</span></div>
+          <select id="buyPackSelect"></select>
+          <div class="field-label"><span>Payment method</span></div>
+          <select id="buyMethod">
+            <option value="easypaisa">easypaisa</option>
+            <option value="jazzcash">JazzCash</option>
+            <option value="bank">Bank transfer</option>
+            <option value="nayapay">NayaPay</option>
+            <option value="other">Other</option>
+          </select>
+          <div class="field-label"><span>Transaction ID</span></div>
+          <input type="text" id="buyRef" placeholder="e.g. 12345678901" autocomplete="off" />
+          <div class="form-error" id="buyError" role="alert"></div>
+          <div class="pack-note" id="buySuccess"></div>
+          <button type="button" class="btn primary generate-btn" id="buySubmitBtn" style="margin-top:14px;">Submit for verification</button>
+          <p class="fineprint">Submitting does not add credits by itself — they arrive once the payment is verified. Never share your bank/easypaisa password or PIN with anyone; we only need the transaction ID.</p>
+        </div>
+        <div class="card">
+          <h2>My pack purchases</h2>
+          <p class="sub">Your credit-pack orders and their verification status.</p>
+          <div class="empty-state" id="myPacksEmpty">
+            <p id="myPacksEmptyText">Sign in to see your pack purchases.</p>
+          </div>
+          <div class="pay-list" id="myPacksList"></div>
         </div>
       </section>
 
@@ -776,6 +859,10 @@
         <button type="button" class="tab" data-view="plans">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18M7 15h4"/></svg>
           Plans
+        </button>
+        <button type="button" class="tab" data-view="buy">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v9M14.8 9.4c-.5-.7-1.5-1.1-2.8-1.1-1.6 0-2.8.8-2.8 2 0 2.7 5.6 1.5 5.6 3.9 0 1.2-1.2 2-2.8 2-1.2 0-2.3-.5-2.8-1.2"/></svg>
+          Buy
         </button>
         <button type="button" class="tab" data-view="settings">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3.2"/><path d="M19 12a7 7 0 0 0-.14-1.4l2-1.55-2-3.46-2.36.95A7 7 0 0 0 14.1 5.1L13.7 2.6h-3.4l-.4 2.5a7 7 0 0 0-2.4 1.44l-2.36-.95-2 3.46 2 1.55a7 7 0 0 0 0 2.8l-2 1.55 2 3.46 2.36-.95a7 7 0 0 0 2.4 1.44l.4 2.5h3.4l.4-2.5a7 7 0 0 0 2.4-1.44l2.36.95 2-3.46-2-1.55c.1-.45.14-.92.14-1.4z"/></svg>
@@ -956,6 +1043,7 @@
           window.scrollTo({ top: 0, behavior: "smooth" });
           if (name === "history") loadHistory();
           if (name === "plans") { renderPlans(); loadPayments(); }
+          if (name === "buy") loadBuy();
           if (name === "settings" && token) loadMe();
         }
         $$(".tab").forEach(function (b) {
@@ -1594,6 +1682,14 @@
               var actions = document.createElement("div");
               actions.className = "job-actions";
               if (String(g.status).toLowerCase() === "completed" && g.video_url) {
+                var pick = document.createElement("label");
+                pick.className = "join-pick";
+                var cb = document.createElement("input");
+                cb.type = "checkbox"; cb.className = "join-check"; cb.setAttribute("data-id", g.id);
+                cb.addEventListener("change", updateJoinBar);
+                pick.appendChild(cb);
+                pick.appendChild(document.createTextNode("Join"));
+                actions.appendChild(pick);
                 var pv = makeBtn("Preview");
                 pv.addEventListener("click", function () {
                   state.lastStudioJob = g;
@@ -1713,6 +1809,187 @@
             });
           });
         }
+
+        /* ---------- clip joining ---------- */
+        function selectedJoinIds() {
+          return $$(".join-check").filter(function (c) { return c.checked; })
+            .map(function (c) { return Number(c.getAttribute("data-id")); });
+        }
+        function updateJoinBar() {
+          var n = selectedJoinIds().length;
+          $("#joinBar").classList.toggle("show", n > 0);
+          $("#joinCount").textContent = n + (n === 1 ? " clip selected" : " clips selected");
+          $("#joinBtn").disabled = n < 2 || n > 6;
+          $("#joinMsg").textContent = n > 6 ? "You can join at most 6 clips at a time."
+            : n < 2 ? "Joining is free — pick 2 to 6 finished videos."
+            : "Joining is free — the joined video will appear at the top of your history.";
+        }
+        $("#joinBtn").addEventListener("click", function () {
+          var ids = selectedJoinIds();
+          if (ids.length < 2 || ids.length > 6) { updateJoinBar(); return; }
+          var btn = $("#joinBtn");
+          btn.disabled = true; btn.textContent = "Joining…";
+          $("#joinMsg").textContent = "Downloading and joining your clips — this can take a little while…";
+          api("/api/generations/join", { method: "POST", body: { ids: ids } }).then(function (res) {
+            btn.textContent = "Join selected clips";
+            if (!res.ok || !res.data || !res.data.generation) {
+              $("#joinMsg").textContent = errText(res, "Joining failed.");
+              btn.disabled = false;
+              return;
+            }
+            toast("Clips joined — the new video is at the top of your history.");
+            loadHistory();
+          });
+        });
+
+        /* ---------- credit packs (buy view) ---------- */
+        var METHOD_LABELS = { easypaisa: "easypaisa", jazzcash: "JazzCash", bank: "Bank transfer", nayapay: "NayaPay", other: "Other" };
+        function packChipClass(status) {
+          status = String(status || "").toLowerCase();
+          if (status === "approved") return "chip completed";
+          if (status === "rejected") return "chip failed";
+          return "chip pending";
+        }
+        function renderPackMethods() {
+          var box = $("#packMethods");
+          var methods = (cfg && cfg.payment_methods) || {};
+          var keys = Object.keys(methods);
+          if (!keys.length) {
+            box.innerHTML = '<p style="color:var(--muted);">Payment details will appear here soon.</p>';
+            return;
+          }
+          box.innerHTML = "";
+          var dl = document.createElement("dl");
+          dl.className = "kv pack-methods";
+          keys.forEach(function (k) {
+            var dt = document.createElement("dt"); dt.textContent = METHOD_LABELS[k] || k;
+            var dd = document.createElement("dd"); dd.className = "mono"; dd.textContent = methods[k];
+            dl.appendChild(dt); dl.appendChild(dd);
+          });
+          box.appendChild(dl);
+        }
+        function updateBuyQr() {
+          $("#buyQr").hidden = $("#buyMethod").value !== "nayapay";
+        }
+        $("#buyMethod").addEventListener("change", updateBuyQr);
+        function loadBuy() {
+          renderPackMethods();
+          updateBuyQr();
+          api("/api/packs").then(function (res) {
+            var grid = $("#packGrid"), sel = $("#buyPackSelect");
+            grid.innerHTML = ""; sel.innerHTML = "";
+            if (!res.ok || !res.data || !res.data.packs) {
+              grid.innerHTML = '<p style="color:var(--muted);">Packs could not be loaded — the backend is unreachable.</p>';
+              return;
+            }
+            var packs = res.data.packs;
+            if (!packs.length) {
+              grid.innerHTML = '<p style="color:var(--muted);">No credit packs are available right now.</p>';
+              return;
+            }
+            packs.forEach(function (p) {
+              var card = document.createElement("div");
+              card.className = "card plan-card";
+              var badge = document.createElement("span");
+              badge.className = "plan-badge"; badge.textContent = "Credit pack";
+              card.appendChild(badge);
+              var h = document.createElement("h3");
+              h.textContent = Number(p.credits).toLocaleString() + " credits";
+              card.appendChild(h);
+              var price = document.createElement("div");
+              price.className = "price";
+              price.innerHTML = "Rs " + Number(p.price_pkr).toLocaleString() + " <small>one-time</small>";
+              card.appendChild(price);
+              var ul = document.createElement("ul");
+              ["Never expires", "Added on top of any plan credits",
+               "Granted after your payment is verified"].forEach(function (t) {
+                var li = document.createElement("li"); li.textContent = t; ul.appendChild(li);
+              });
+              card.appendChild(ul);
+              var sp = document.createElement("div"); sp.className = "spacer"; card.appendChild(sp);
+              var btn = makeBtn("Choose this pack", true);
+              btn.addEventListener("click", function () {
+                sel.value = String(p.id);
+                $("#buyRef").focus();
+                window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+              });
+              card.appendChild(btn);
+              grid.appendChild(card);
+              var opt = document.createElement("option");
+              opt.value = String(p.id);
+              opt.textContent = Number(p.credits).toLocaleString() + " credits — Rs " + Number(p.price_pkr).toLocaleString();
+              sel.appendChild(opt);
+            });
+          });
+          loadMyPacks();
+        }
+        function loadMyPacks() {
+          var empty = $("#myPacksEmpty"), list = $("#myPacksList");
+          list.innerHTML = "";
+          if (!token) {
+            empty.style.display = "block";
+            $("#myPacksEmptyText").textContent = "Sign in to see your pack purchases.";
+            return;
+          }
+          api("/api/my/pack-purchases").then(function (res) {
+            if (!res.ok || !res.data) {
+              empty.style.display = "block";
+              $("#myPacksEmptyText").textContent = "Your pack purchases could not be loaded.";
+              return;
+            }
+            var rows = res.data.purchases || [];
+            if (!rows.length) {
+              empty.style.display = "block";
+              $("#myPacksEmptyText").textContent = "No pack purchases yet.";
+              return;
+            }
+            empty.style.display = "none";
+            rows.forEach(function (p) {
+              var item = document.createElement("div");
+              item.className = "pay-item";
+              var left = document.createElement("div");
+              var title = document.createElement("div");
+              title.textContent = Number(p.credits).toLocaleString() + " credits — Rs " + Number(p.amount_pkr).toLocaleString();
+              var meta = document.createElement("div");
+              meta.className = "meta";
+              meta.textContent = fmtDate(p.created_at) + " · " + (METHOD_LABELS[p.method] || p.method) +
+                " · ref " + (p.transaction_ref || "") +
+                (p.status === "pending" ? " · Pending approval — credits arrive once payment is verified" : "") +
+                (p.admin_note ? " · Note: " + p.admin_note : "");
+              left.appendChild(title); left.appendChild(meta);
+              var st = document.createElement("span");
+              st.className = packChipClass(p.status);
+              st.textContent = p.status || "";
+              item.appendChild(left); item.appendChild(st);
+              list.appendChild(item);
+            });
+          });
+        }
+        $("#buySubmitBtn").addEventListener("click", function () {
+          var err = $("#buyError"), ok = $("#buySuccess");
+          err.classList.remove("show"); ok.classList.remove("show");
+          function fail(msg) { err.textContent = msg; err.classList.add("show"); }
+          if (!token) { fail("Please sign in first — pack purchases are tied to your account."); return; }
+          var packId = $("#buyPackSelect").value;
+          var ref = $("#buyRef").value.trim();
+          if (!packId) { fail("Choose a pack first."); return; }
+          if (ref.length < 6) { fail("Enter the transaction ID from your payment (at least 6 characters)."); return; }
+          var btn = $("#buySubmitBtn");
+          btn.disabled = true; btn.textContent = "Submitting…";
+          api("/api/packs/" + encodeURIComponent(packId) + "/purchase", {
+            method: "POST",
+            body: { method: $("#buyMethod").value, transaction_ref: ref }
+          }).then(function (res) {
+            btn.disabled = false; btn.textContent = "Submit for verification";
+            if (!res.ok || !res.data) { fail(errText(res, "The purchase could not be submitted.")); return; }
+            ok.textContent = "Submitted — pending approval. Your credits will arrive once the payment is verified.";
+            ok.classList.add("show");
+            $("#buyRef").value = "";
+            loadMyPacks();
+          });
+        });
+        $("#creditsChip").addEventListener("click", function () { showView("buy"); });
+        $("#buyFromPlansBtn").addEventListener("click", function () { showView("buy"); });
 
         /* ---------- reporting ---------- */
         function openReport(genId, promptText) {

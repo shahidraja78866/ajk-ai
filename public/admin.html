@@ -60,6 +60,22 @@
     <h2>Plans — prices &amp; credits (edits apply immediately)</h2>
     <div class="card scroll"><table id="plansTable"></table></div>
 
+    <h2>Credit packs — one-time top-ups (edits apply immediately)</h2>
+    <div class="card scroll"><table id="packsTable"></table></div>
+
+    <h2>Pack purchases — verify the payment first, then approve (grants credits once) or reject</h2>
+    <div class="row" style="margin-bottom:10px;">
+      <div style="flex:0 0 200px;"><label>Status filter</label>
+        <select id="packPurchaseFilter">
+          <option value="pending" selected>Pending</option>
+          <option value="">All</option>
+          <option value="approved">Approved</option>
+          <option value="rejected">Rejected</option>
+        </select></div>
+      <div style="flex:0;"><button id="packPurchaseRefresh">Refresh</button></div>
+    </div>
+    <div class="card scroll"><table id="packPurchasesTable"></table></div>
+
     <h2>Users</h2>
     <div class="card scroll"><table id="usersTable"></table></div>
 
@@ -118,6 +134,20 @@
       });
       $("plansTable").innerHTML = html;
     });
+    api("/api/admin/packs").then(function (r) {
+      if (!r.ok) return;
+      var html = "<tr><th>Pack</th><th>Credits</th><th>Price (Rs)</th><th>Active</th><th></th></tr>";
+      r.data.packs.forEach(function (p) {
+        html += "<tr data-pack='" + p.id + "'>"
+          + "<td><strong>" + p.credits + " credits</strong><br><small>id " + p.id + "</small></td>"
+          + "<td><input type='number' data-f='credits' value='" + p.credits + "'></td>"
+          + "<td><input type='number' data-f='price_pkr' value='" + p.price_pkr + "'></td>"
+          + "<td><input type='checkbox' data-f='is_active' " + (p.is_active ? "checked" : "") + "></td>"
+          + "<td><button data-act='save-pack'>Save</button></td></tr>";
+      });
+      $("packsTable").innerHTML = html;
+    });
+    renderPackPurchases();
     api("/api/plans").then(function (r) { window.__plans = r.ok ? r.data.plans : []; renderUsers(); });
     api("/api/admin/payments").then(function (r) {
       if (!r.ok) return;
@@ -130,6 +160,26 @@
       $("paymentsTable").innerHTML = html || "<tr><td>No payments yet.</td></tr>";
     });
   }
+  function renderPackPurchases() {
+    var f = $("packPurchaseFilter") ? $("packPurchaseFilter").value : "pending";
+    api("/api/admin/pack-purchases" + (f ? "?status=" + encodeURIComponent(f) : "")).then(function (r) {
+      if (!r.ok) return;
+      var html = "<tr><th>ID</th><th>User</th><th>Pack</th><th>Amount</th><th>Method</th><th>Transaction ref</th><th>Status</th><th>When</th><th>Actions</th></tr>";
+      (r.data.purchases || []).forEach(function (p) {
+        html += "<tr data-purchase='" + p.id + "'><td>" + p.id + "</td><td>" + esc(p.user_email) + "</td>"
+          + "<td>" + p.credits + " credits</td><td>Rs " + p.amount_pkr + "</td><td>" + esc(p.method) + "</td>"
+          + "<td>" + esc(p.transaction_ref) + "</td>"
+          + "<td>" + esc(p.status) + (p.admin_note ? "<br><small>" + esc(p.admin_note) + "</small>" : "") + "</td>"
+          + "<td>" + esc(p.created_at) + "</td>"
+          + "<td>" + (p.status === "pending"
+              ? "<button data-act='approve-pack'>Approve + grant</button><button data-act='reject-pack'>Reject</button>"
+              : "<small>" + (p.decided_at ? "decided " + esc(p.decided_at) : "") + "</small>") + "</td></tr>";
+      });
+      $("packPurchasesTable").innerHTML = html || "<tr><td>No purchases.</td></tr>";
+    });
+  }
+  $("packPurchaseFilter").addEventListener("change", renderPackPurchases);
+  $("packPurchaseRefresh").addEventListener("click", renderPackPurchases);
   var usersCache = [];
   function renderUsers() {
     api("/api/admin/users").then(function (r) {
@@ -171,6 +221,27 @@
         body[f] = inp.type === "checkbox" ? inp.checked : (inp.type === "number" ? Number(inp.value) : inp.value);
       });
       api("/api/admin/plans/" + pid, { method: "PUT", body: body }).then(function (r) { done(r, "Plan " + pid + " saved"); });
+      return;
+    }
+    if (act === "save-pack") {
+      var trk = btn.closest("tr"), pkid = trk.getAttribute("data-pack"), kbody = {};
+      trk.querySelectorAll("input[data-f]").forEach(function (inp) {
+        var f = inp.getAttribute("data-f");
+        kbody[f] = inp.type === "checkbox" ? inp.checked : (inp.type === "number" ? Number(inp.value) : inp.value);
+      });
+      api("/api/admin/packs/" + pkid, { method: "PUT", body: kbody }).then(function (r) { done(r, "Pack saved"); });
+      return;
+    }
+    if (act === "approve-pack" || act === "reject-pack") {
+      var trpp = btn.closest("tr"), ppid = trpp.getAttribute("data-purchase");
+      if (act === "approve-pack") {
+        api("/api/admin/pack-purchases/" + ppid + "/approve", { method: "POST", body: {} })
+          .then(function (r) { done(r, "Purchase approved — credits granted"); });
+      } else {
+        var note = window.prompt("Reason for rejection (optional, shown to the buyer):", "") || "";
+        api("/api/admin/pack-purchases/" + ppid + "/reject", { method: "POST", body: { note: note } })
+          .then(function (r) { done(r, "Purchase rejected"); });
+      }
       return;
     }
     var tr = btn.closest("tr"), uid = tr.getAttribute("data-user");
