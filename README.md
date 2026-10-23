@@ -911,6 +911,28 @@ arrived". Bank payment becomes automatic **only** as a channel inside
 the gateway checkout above. The manual IBAN/wallet flow stays in the app
 purely as a fallback for while the gateway account doesn't exist.
 
+## Advertising preparation (Google AdMob groundwork)
+
+Groundwork only — **no ads run yet**, and nothing calls an ad network.
+Ads will be served by **Google AdMob into the owner's own account** and
+shown to **free-tier users only** (every paid plan is ad-free; no ads on
+admin, payment, login or privacy pages). Configuration is env-driven and
+**fails closed**: `/api/config` reports an `ads` block
+(`enabled` / `configured` / `provider` / `free_tier_only` /
+`placements: ["studio_bottom","home_native"]` / `note`), and `enabled`
+is true **only** when `ADS_ENABLED=1` **and** `ADMOB_PUBLISHER_ID` is a
+valid AdMob publisher id (`pub-` + 16 digits). `GET /app-ads.txt` serves
+the owner's `google.com, pub-…, DIRECT, f08c47fec0942fa0` snippet (or the
+verbatim `ADMOB_APP_ADS_TXT` override) when configured, **404**
+otherwise. The frontend ships two hidden, zero-height slot containers
+(`#adStudioBottom`, `#adHomeNative`) that the gated JS unhides only for
+signed-in free-tier users while ads are enabled — and then shows only a
+neutral "Advertisement" placeholder: no fake ads, no third-party
+scripts. Real ad formats (native/interstitial/rewarded) require the
+Android app build with the AdMob SDK. **Full owner checklist, go-live
+order, payout rules and invalid-traffic warnings: see
+[ADS_SETUP.md](ADS_SETUP.md).**
+
 ## Credit packs (one-time top-ups, manual payment verification)
 
 Besides subscriptions, users can buy one-time credit packs from the app's

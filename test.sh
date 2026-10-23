@@ -54,6 +54,15 @@
 # extended with the minimax/h3/reference-to-video queue endpoint; the
 # character generations complete there and the lip-sync TTS calls are
 # asserted via the recorded voice-calls hook.
+# The advertising-preparation tests use the main server for the default
+# fail-closed checks (config ads block off, /app-ads.txt 404, frontend
+# slot ids + gating greps), a thirteenth instance (port 18078, own DB)
+# with ADS_ENABLED=1 + a valid-format ADMOB_PUBLISHER_ID to prove
+# /app-ads.txt serves the exact google.com snippet and ads.enabled is
+# true, and a fourteenth instance (port 18077, own DB) with an INVALID
+# publisher id to prove both fail closed again, plus a fifteenth
+# instance (port 18076, own DB) proving the ADMOB_APP_ADS_TXT override
+# line is served verbatim. No ad-network calls anywhere.
 # Outgoing provider request shapes are asserted via the TEST_RECORD-style
 # hook GET /api/_test/voice-calls.
 # e.g.  ADMIN_EMAIL=admin@example.com FAL_MODEL_4K=test-4k-model TEST_RECORD_FAL_BODY=1 TRANSLATE_API_BASE=http://127.0.0.1:18099 npm start
@@ -1571,6 +1580,59 @@ const mig = db.prepare('SELECT COUNT(*) AS c FROM schema_migrations WHERE versio
 console.log(t === 1 && cols === 1 && Number(mig) === 1 ? 'ok' : 'bad');
 ")"
 kill $SRV12_PID $CHARSTUB_PID 2>/dev/null
+
+echo "--- advertising preparation (AdMob groundwork): fail closed by default ---"
+CFGA=$(curl -s $B/api/config)
+check "ads: enabled false by default" "False" "$(echo $CFGA | python3 -c 'import sys,json;print(json.load(sys.stdin)["ads"]["enabled"])')"
+check "ads: configured false by default" "False" "$(echo $CFGA | python3 -c 'import sys,json;print(json.load(sys.stdin)["ads"]["configured"])')"
+check "ads: provider null by default" "None" "$(echo $CFGA | python3 -c 'import sys,json;print(json.load(sys.stdin)["ads"]["provider"])')"
+check "ads: free_tier_only is true" "True" "$(echo $CFGA | python3 -c 'import sys,json;print(json.load(sys.stdin)["ads"]["free_tier_only"])')"
+check "ads: placements are home_native,studio_bottom" "home_native,studio_bottom" "$(echo $CFGA | python3 -c 'import sys,json;print(",".join(sorted(json.load(sys.stdin)["ads"]["placements"])))')"
+check "ads: /app-ads.txt is 404 while unconfigured" "404" "$(curl -s -o /dev/null -w '%{http_code}' $B/app-ads.txt)"
+HOMEPAGE=$(curl -s $B/)
+check "frontend: adStudioBottom slot present" "yes" "$(echo "$HOMEPAGE" | grep -q 'id="adStudioBottom"' && echo yes || echo no)"
+check "frontend: adHomeNative slot present" "yes" "$(echo "$HOMEPAGE" | grep -q 'id="adHomeNative"' && echo yes || echo no)"
+check "frontend: both ad slots start hidden" "2" "$(echo "$HOMEPAGE" | python3 -c 'import sys,re;print(len(re.findall(r"class=\"ad-slot\" id=\"ad(?:StudioBottom|HomeNative)\" hidden", sys.stdin.read())))')"
+check "frontend: gating references ads.enabled" "yes" "$(echo "$HOMEPAGE" | grep -q 'ads\.enabled' && echo yes || echo no)"
+check "frontend: gating checks admin + plan state" "yes" "$(echo "$HOMEPAGE" | grep -q 'me\.is_admin' && echo "$HOMEPAGE" | grep -q 'me\.plan' && echo yes || echo no)"
+
+echo "--- advertising: configured instance serves app-ads.txt + enabled ---"
+B13=http://127.0.0.1:18078
+rm -f /tmp/myvideoai-ads-test.db*
+ADS_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-ads-test.db PORT=18078 FAL_KEY=dummy_test_key "$ADS_JWT_NAME=ads-instance-dummy-value" ADS_ENABLED=1 ADMOB_PUBLISHER_ID=pub-1234567890123456 node "$(dirname "$0")/server.js" > /tmp/myvideoai-ads-test.log 2>&1 &
+SRV13_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B13/api/health && break || sleep 0.25; done
+check "ads configured: /app-ads.txt status 200" "200" "$(curl -s -o /dev/null -w '%{http_code}' $B13/app-ads.txt)"
+check "ads configured: /app-ads.txt body is the exact google.com snippet" "google.com, pub-1234567890123456, DIRECT, f08c47fec0942fa0" "$(curl -s $B13/app-ads.txt | head -1)"
+check "ads configured: /app-ads.txt content-type is text/plain" "text/plain" "$(curl -s -I $B13/app-ads.txt | grep -i '^content-type:' | tr -d '\r' | cut -d' ' -f2 | cut -d';' -f1)"
+check "ads configured: /app-ads.txt cacheable for 1h" "yes" "$(curl -s -I $B13/app-ads.txt | grep -qi 'cache-control: public, max-age=3600' && echo yes || echo no)"
+CFG13=$(curl -s $B13/api/config)
+check "ads configured: enabled true (ADS_ENABLED=1 + valid publisher id)" "True" "$(echo $CFG13 | python3 -c 'import sys,json;print(json.load(sys.stdin)["ads"]["enabled"])')"
+check "ads configured: configured true + provider admob" "True/admob" "$(echo $CFG13 | python3 -c 'import sys,json;a=json.load(sys.stdin)["ads"];print(str(a["configured"])+"/"+str(a["provider"]))')"
+kill $SRV13_PID 2>/dev/null
+
+echo "--- advertising: INVALID publisher id fails closed ---"
+B14=http://127.0.0.1:18077
+rm -f /tmp/myvideoai-ads-bad-test.db*
+ADS_BAD_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-ads-bad-test.db PORT=18077 FAL_KEY=dummy_test_key "$ADS_BAD_JWT_NAME=ads-bad-dummy-value" ADS_ENABLED=1 ADMOB_PUBLISHER_ID=pub-123 node "$(dirname "$0")/server.js" > /tmp/myvideoai-ads-bad-test.log 2>&1 &
+SRV14_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B14/api/health && break || sleep 0.25; done
+check "ads invalid id: /app-ads.txt 404" "404" "$(curl -s -o /dev/null -w '%{http_code}' $B14/app-ads.txt)"
+CFG14=$(curl -s $B14/api/config)
+check "ads invalid id: enabled false + configured false" "False/False" "$(echo $CFG14 | python3 -c 'import sys,json;a=json.load(sys.stdin)["ads"];print(str(a["enabled"])+"/"+str(a["configured"]))')"
+kill $SRV14_PID 2>/dev/null
+
+echo "--- advertising: ADMOB_APP_ADS_TXT override served verbatim ---"
+B15=http://127.0.0.1:18076
+rm -f /tmp/myvideoai-ads-ovr-test.db*
+ADS_OVR_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-ads-ovr-test.db PORT=18076 FAL_KEY=dummy_test_key "$ADS_OVR_JWT_NAME=ads-ovr-dummy-value" ADMOB_APP_ADS_TXT='google.com, pub-9999999999999999, DIRECT, f08c47fec0942fa0' node "$(dirname "$0")/server.js" > /tmp/myvideoai-ads-ovr-test.log 2>&1 &
+SRV15_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B15/api/health && break || sleep 0.25; done
+check "ads override: /app-ads.txt serves the override line verbatim" "google.com, pub-9999999999999999, DIRECT, f08c47fec0942fa0" "$(curl -s $B15/app-ads.txt)"
+kill $SRV15_PID 2>/dev/null
 
 echo "--- rate limit: burst until 429 ---"
 FOUND429="no"

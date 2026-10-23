@@ -236,6 +236,21 @@ const CONFIG = {
   // Drafts take no sound/voice add-ons; the full-quality version is a
   // separate standard-rate generation (POST /api/generations/:id/upgrade).
   draftCost: { 5: 7, 10: 14 },
+  // --- Advertising preparation (Google AdMob groundwork) ------------------
+  // INERT until the owner has an AdMob account: ADS_ENABLED=1 AND a valid
+  // ADMOB_PUBLISHER_ID (pub- followed by exactly 16 digits) must BOTH be
+  // set before /api/config reports ads as enabled — anything missing or
+  // malformed fails closed (no ad slots shown, /app-ads.txt answers 404).
+  // ADMOB_APP_ADS_TXT may carry a full custom app-ads.txt line, served
+  // verbatim instead of the generated one. The IDs are the OWNER's own
+  // AdMob values, set only via the environment — never hardcoded. Real ad
+  // rendering (native / interstitial / rewarded formats) arrives with the
+  // Android app build and the AdMob SDK; the web side ships slots, policy
+  // gating and the app-ads.txt endpoint only. Ads are FREE-tier only:
+  // any active paid plan is ad-free (see ADS_SETUP.md).
+  adsEnabled: process.env.ADS_ENABLED === '1',
+  admobPublisherId: (process.env.ADMOB_PUBLISHER_ID || '').trim(),
+  admobAppAdsTxt: (process.env.ADMOB_APP_ADS_TXT || '').trim(),
 };
 
 // ---------- Prompt languages ----------
@@ -1010,7 +1025,34 @@ app.get('/api/config', (req, res) => res.json({
     max_per_user: CHARACTER_MAX_PER_USER,
     model: CONFIG.modelRef,
   },
+  // Advertising preparation (AdMob groundwork): flags and placement names
+  // only — the publisher id itself is never exposed here. `enabled` is
+  // true ONLY when ADS_ENABLED=1 and a valid publisher id are both set;
+  // the frontend shows the (empty) ad slots only to signed-in FREE-tier
+  // users when enabled is true. Paid plans are ad-free; real ad rendering
+  // (native/interstitial/rewarded) requires the Android app build.
+  ads: {
+    enabled: adsEnabled(),
+    configured: adsConfigured(),
+    provider: adsConfigured() ? 'admob' : null,
+    free_tier_only: true,
+    placements: ['studio_bottom', 'home_native'],
+    note: 'Web groundwork only: slot containers + policy gating + app-ads.txt. Native, interstitial and rewarded ad formats require the Android app build with the AdMob SDK.',
+  },
 }));
+
+// app-ads.txt (AdMob app-ownership verification): served ONLY when a
+// valid publisher id or a verbatim override line is configured — 404
+// otherwise, so an unconfigured deployment never claims an ad identity.
+// The body is exactly the AdMob snippet for the owner's publisher id.
+app.get('/app-ads.txt', (req, res) => {
+  const body = appAdsTxtBody();
+  if (!body) return res.status(404).type('text/plain').send('Not configured.\n');
+  res.set('Cache-Control', 'public, max-age=3600');
+  // An override line is served byte-for-byte verbatim; the generated
+  // snippet gets the conventional trailing newline.
+  res.type('text/plain').send(CONFIG.admobAppAdsTxt ? body : body + '\n');
+});
 app.get('/api/health', (req, res) => res.json({ ok: true, model: CONFIG.model }));
 
 // ---------- Plans & payments (user-facing) ----------
@@ -3514,6 +3556,23 @@ function loadPlayCredentials() {
     _playCredsCache = parsed;
     return parsed;
   } catch { return null; }
+}
+// ---------- Advertising (AdMob groundwork — fail closed) -------------------
+// A publisher id is valid only in the exact AdMob format: "pub-" + 16
+// digits. adsConfigured() = a valid id OR a verbatim app-ads.txt override
+// is present; adsEnabled() additionally requires the ADS_ENABLED=1 master
+// switch AND the valid publisher id, per the owner's go-live sequence
+// (account -> Play listing -> link/review -> env). Nothing here ever
+// calls an ad network; it only gates slots and serves app-ads.txt.
+const ADMOB_PUBLISHER_ID_RE = /^pub-\d{16}$/;
+function admobPublisherValid() { return ADMOB_PUBLISHER_ID_RE.test(CONFIG.admobPublisherId); }
+function adsConfigured() { return admobPublisherValid() || !!CONFIG.admobAppAdsTxt; }
+function adsEnabled() { return CONFIG.adsEnabled && admobPublisherValid(); }
+function appAdsTxtBody() {
+  if (CONFIG.admobAppAdsTxt) return CONFIG.admobAppAdsTxt;
+  if (admobPublisherValid())
+    return `google.com, ${CONFIG.admobPublisherId}, DIRECT, f08c47fec0942fa0`;
+  return null;
 }
 function playBillingConfigured() {
   if (CONFIG.playTestMode) return true;
