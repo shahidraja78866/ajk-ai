@@ -522,6 +522,13 @@
       .collapsible.is-collapsed .collapse-chev{ transform:rotate(-90deg); }
       .collapsible.is-collapsed .collapse-body{ display:none; }
 
+      /* ---------- studio: advanced settings container (Phase E) ----------
+         AUTO-FIRST layout: the primary surface is the templates strip,
+         the prompt card (with the AI Auto toggle) and the sticky action
+         bar. Every manual control lives in ONE collapsed container. */
+      #advancedCardBody > .card{ margin-top:14px; }
+      #advancedCardBody > .field-label:first-child{ margin-top:4px; }
+
       /* ---------- studio: sticky action bar (Phase C3) ---------- */
       .studio-actionbar{
         position:sticky; bottom:14px; z-index:30; margin-top:20px;
@@ -659,7 +666,7 @@
         <div class="card tpl-card" id="templateCard">
           <div class="tpl-head">
             <h2>Templates</h2>
-            <p class="tpl-sub">One tap fills in the mode, format and a starter prompt in the form below — edit the words freely. Any supported language works; the app translates automatically.</p>
+            <p class="tpl-sub">One tap fills in a starter prompt and format — edit the words freely.</p>
           </div>
           <div class="tpl-strip" id="templateGrid" role="group" aria-label="Templates">
             <button type="button" class="tpl-chip" data-template="talking-photo">
@@ -693,7 +700,7 @@
           <div>
             <div class="card">
               <h2>Describe your video</h2>
-              <p class="sub">One or two sentences work best. Mention the subject, the setting, and how the camera moves. <span id="modelLine"></span></p>
+              <p class="sub">One or two sentences: the subject, the setting, the camera move. <span id="modelLine"></span></p>
 
               <div class="field-label"><span>Prompt language</span></div>
               <select id="promptLang">
@@ -720,8 +727,8 @@
               </div>
 
               <div class="field-label"><span>AI Auto Director</span></div>
-              <label class="check-row"><input type="checkbox" id="aiAutoToggle" checked /> <span><strong>AI Auto</strong> — the app reads your prompt and picks the fitting settings itself (animal / human / cartoon, dialogue voice, sound effects, orientation and engine). It only asks first when an add-on costs extra credits or the prompt conflicts with your selected option.</span></label>
-              <p class="lang-hint">AI Auto is rule-based: it follows keywords and patterns in your prompt. Where a model does not support something, it says so instead of promising it.</p>
+              <label class="check-row"><input type="checkbox" id="aiAutoToggle" checked /> <span><strong>AI Auto</strong> — the app reads your prompt and picks the settings itself; it asks first only when something costs extra.</span></label>
+              <p class="lang-hint">Rule-based: it follows keywords in your prompt, and says so when a model can't do something.</p>
               <div class="auto-panel" id="autoPlanPanel" hidden>
                 <h3>AI Auto نے یہ سمجھا</h3>
                 <div id="autoPlanSummary"></div>
@@ -733,6 +740,20 @@
                   <button type="button" class="btn ghost" id="autoPlanCancelBtn">منسوخ — ترتیبات خود رکھوں</button>
                 </div>
               </div>
+            </div>
+
+            <!-- Phase E (AUTO-FIRST): every manual control — mode, character,
+                 start image, style/aspect/duration/quality, Voice, Sound,
+                 Watermark — lives in this ONE container, collapsed by
+                 default. AI Auto above + Generate below are all most users
+                 ever touch. All element ids inside are unchanged, and the
+                 generate flow reads their values exactly as before. -->
+            <div class="card collapsible is-collapsed" id="advancedCard">
+              <button type="button" class="collapse-head" data-collapse-head aria-expanded="false" aria-controls="advancedCardBody">
+                <span class="collapse-title">Advanced settings<span class="opt-tag">optional</span> · مزید ترتیبات (اختیاری)</span>
+                <svg class="collapse-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+              </button>
+              <div class="collapse-body" id="advancedCardBody">
 
               <div class="field-label"><span>Video mode</span></div>
               <div class="mode-grid mode-compact" id="modeGrid" role="group" aria-label="Video mode">
@@ -747,7 +768,7 @@
                   <small>Best for cartoon and anime styles.</small>
                 </button>
               </div>
-              <p class="mode-note">Both modes include model-generated audio. If the prompt asks for spoken dialogue, the model may generate speech that follows the prompt, but the dialogue language is not guaranteed — Urdu dialogue is not officially documented for this model.</p>
+              <p class="mode-note">Both modes include model-generated audio; the dialogue language isn't guaranteed — Urdu speech isn't officially documented for this model.</p>
 
               <div class="field-label"><span>Character (optional)</span></div>
               <div style="display:flex;gap:10px;align-items:center;">
@@ -780,7 +801,6 @@
               <p class="lang-hint" id="draftHint" style="display:none;">Draft = a cheap 480P preview of your idea. Sound and voice add-ons are not available on drafts — upgrade the draft from your History to full quality first, then add them there.</p>
 
               <p class="fineprint">Credits are charged by the server when it accepts your job. Failed generations are refunded automatically. Mode, a starting image and watermark text do not change the credit cost — the same duration and quality pricing applies. A sound option adds the credits shown in the Sound &amp; Effects card below. The total cost and the Generate button stay in the bar at the bottom of this screen.</p>
-            </div>
 
             <div class="card collapsible is-collapsed" id="voiceCard">
               <button type="button" class="collapse-head" data-collapse-head aria-expanded="false" aria-controls="voiceCardBody">
@@ -911,6 +931,9 @@
               <input type="text" class="text-input" id="watermarkText" maxlength="30" placeholder="e.g. SMT Movies" disabled style="margin-top:9px;" />
               <p class="lang-hint">Latin letters only, up to 30 characters. It appears at the bottom-right. Watermarking does not change the credit cost.</p>
             </div>
+
+              </div><!-- /advancedCardBody -->
+            </div><!-- /advancedCard -->
 
             <div class="card" id="charactersCard">
               <h2>My Characters</h2>
@@ -2722,8 +2745,8 @@
                   ? p.credits_weekly + " video credits every week"
                   : p.credits_monthly + " video credits every month",
                p.quality_label + " video quality",
-               f.can_veo ? "Veo talking clips included"
-                         : "Veo talking clips: Pro and above",
+               f.can_veo ? "Speaking video clips included"
+                         : "Speaking video clips: Pro and above",
                f.can_lipsync ? "Urdu lip-sync add-on available"
                              : "Lip-sync add-on: Pro and above",
                "Failed generations refunded automatically"].forEach(function (t) {
@@ -3842,6 +3865,23 @@
         if (talking) talking.addEventListener("click", function () { expandCard("voiceCard"); });
         var music = document.querySelector('#templateGrid [data-template="music-video"]');
         if (music) music.addEventListener("click", function () { expandCard("soundCard"); });
+        // Phase E (AUTO-FIRST): every template chip presets something that
+        // lives inside the Advanced settings container (mode / format /
+        // voice / sound), so open the container too — the user sees
+        // exactly what the chip set.
+        document.querySelectorAll('#templateGrid [data-template]').forEach(function (chip) {
+          chip.addEventListener("click", function () { expandCard("advancedCard"); });
+        });
+        // Turning AI Auto OFF means the user wants manual control: open
+        // the Advanced settings container (once per page load).
+        var autoToggle = document.getElementById("aiAutoToggle");
+        var autoExpandedOnce = false;
+        if (autoToggle) autoToggle.addEventListener("change", function () {
+          if (!autoToggle.checked && !autoExpandedOnce) {
+            autoExpandedOnce = true;
+            expandCard("advancedCard");
+          }
+        });
       })();
     </script>
   </body>
