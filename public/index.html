@@ -538,6 +538,22 @@
       .actionbar-cost strong{ color:var(--text); font-family:var(--font-mono); font-weight:500; font-size:17px; }
       .actionbar-btn{ flex:1; width:auto; margin-top:0; }
 
+      /* ---------- ads: groundwork slots (inert until AdMob go-live) ----------
+         The containers start with the `hidden` attribute and are only
+         unhidden by updateAdSlots() when /api/config says ads.enabled AND
+         the signed-in user has no active paid plan (paid = ad-free).
+         While hidden they take zero space — no layout shift, ever. When
+         shown (free tier, ads enabled) they render only a neutral empty
+         box labeled "Advertisement": no fake ads, no third-party
+         scripts — real ads arrive with the Android/AdMob integration. */
+      .ad-slot[hidden]{ display:none !important; }
+      .ad-slot{
+        margin:14px 0; padding:16px; text-align:center;
+        border:1px dashed var(--line); border-radius:12px;
+        color:var(--faint); font-size:11px; font-weight:600;
+        letter-spacing:.14em; text-transform:uppercase;
+      }
+
       @media (min-width:641px){
         .modal-backdrop{ align-items:center; padding:20px; }
         .modal{ border-radius:18px; }
@@ -623,6 +639,8 @@
           </div>
           <button type="button" class="btn small" data-goto="settings">API settings</button>
         </div>
+
+        <div class="ad-slot" id="adHomeNative" hidden aria-hidden="true">Advertisement</div>
 
         <div class="card tpl-card" id="templateCard">
           <div class="tpl-head">
@@ -965,6 +983,8 @@
             </button>
           </div>
         </div>
+
+        <div class="ad-slot" id="adStudioBottom" hidden aria-hidden="true">Advertisement</div>
       </section>
 
       <!-- ================= HISTORY ================= -->
@@ -1145,7 +1165,7 @@
       <section class="view" id="view-privacy">
         <div class="policy">
           <h1>Privacy Policy</h1>
-          <p class="updated">AJK AI — AI Video Generator · Last updated 20 October 2026</p>
+          <p class="updated">AJK AI — AI Video Generator · Last updated 23 October 2026</p>
 
           <h2>What we collect</h2>
           <ul>
@@ -1160,6 +1180,9 @@
 
           <h2>Sharing</h2>
           <p>Data is shared only with the processors needed to run the service: the video generation provider (your prompt and settings), our hosting and database providers, and — if you buy credits — the payment processor. We may disclose data where the law requires it.</p>
+
+          <h2>Advertising</h2>
+          <p>The free version of AJK AI may display advertisements provided by Google AdMob, when advertising is enabled on the service. To provide and measure those ads, Google and its partners may use device identifiers and usage data, as described in <a href="https://policies.google.com/technologies/ads" target="_blank" rel="noopener">Google's advertising and privacy policies</a>. Paid plans are ad-free: while you hold an active subscription, no advertisements are shown to you.</p>
 
           <h2>Retention and deletion</h2>
           <p>Generated videos and prompts are kept while your account is active. You can ask for individual videos to be removed, and deleting your account removes your prompts, videos, and profile within 30 days, except records we must keep for fraud prevention or legal reasons.</p>
@@ -1702,6 +1725,24 @@
         });
 
         /* ---------- config ---------- */
+        /* ---------- ads (groundwork: slots + policy gating only) ----------
+           A slot is unhidden ONLY when /api/config reports ads.enabled
+           AND the signed-in user has no active paid plan and is not an
+           admin — paid plans (weekly/normal/pro/extrapro) are ad-free,
+           and admins never see slots. Even when unhidden, a slot renders
+           only a neutral empty box labeled "Advertisement": no fake ads,
+           no third-party scripts — real ad rendering arrives with the
+           Android app build and the owner's AdMob integration. */
+        function updateAdSlots() {
+          var show = !!(cfg && cfg.ads && cfg.ads.enabled && me && !me.is_admin && !(me.plan && me.plan.id));
+          ["adStudioBottom", "adHomeNative"].forEach(function (id) {
+            var el = document.getElementById(id);
+            if (!el) return;
+            if (show) { el.removeAttribute("hidden"); el.setAttribute("aria-hidden", "false"); }
+            else { el.setAttribute("hidden", ""); el.setAttribute("aria-hidden", "true"); }
+          });
+        }
+
         function loadConfig() {
           setBanner("checking", "Checking the backend connection…", "Contacting " + apiBase + "/api/config …");
           return api("/api/config").then(function (res) {
@@ -1720,6 +1761,7 @@
               fillVoiceUI();
               fillSoundUI();
               fillCharacterVoiceUI();
+              updateAdSlots();
               if (cfg && cfg.draft && cfg.draft.cost_by_duration) {
                 var dh = $("#draftCostHint");
                 if (dh) dh.textContent = (cfg.draft.cost_by_duration["5"] || 7) + " / " + (cfg.draft.cost_by_duration["10"] || 14);
@@ -1786,6 +1828,7 @@
               loadCharacters();
               fillAccountMeta();
               setSignedInUI();
+              updateAdSlots();
               return true;
             }
             if (res.status === 401) { signOut(true); toast("Your session expired — please sign in again."); }
@@ -1851,6 +1894,7 @@
           renderCharacters();
           setSignedInUI();
           fillPlanUI();
+          updateAdSlots();
           renderHistoryState("signedout");
           if (!silent) toast("Signed out.");
         }
