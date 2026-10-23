@@ -440,6 +440,31 @@ endpoint actually does. All finisher quality is **unproven** until
 real outputs are generated on a funded fal.ai balance and reviewed —
 the suite covers everything above with stubs only.
 
+## Unified one-screen Studio (Phase C3, frontend only)
+
+Creating a video is now a **single, compact create screen**. The six
+templates are a slim, horizontally scrolling chip strip at the top of
+the Studio (icon + short name + one-line hint) instead of six stacked
+full-width cards, and everything needed to create a video lives in
+one continuous form in a fixed order: prompt (with its language),
+video mode (compact cards), character picker, starting image, then
+style / aspect ratio / duration / quality (including Draft). The
+optional Voice & Dialogue and Sound & Effects cards are collapsible
+and start collapsed — their "not configured" notices stay visible
+even while collapsed — followed by the Watermark card and the My
+Characters library. Template chips apply exactly the same presets as
+before (Talking Photo still scrolls to the voice card, which now also
+opens; Music Video still preselects the music sound mode, with the
+sound card opened so the choice is visible). A sticky action bar
+pinned to the bottom of the Studio shows the **live total credit
+cost** (video + sound add-on, draft-aware — the same `updateCost()`
+computation and the same `#costNum` / `#generateBtn` elements as
+before, just relocated) and the Generate button, so neither ever
+needs scrolling to find. On phones the hero and connection banner are
+compacted so the prompt box sits in the first screenful. No API, id,
+or pricing behaviour changed — this phase is layout only, and the
+full 506-check suite passes unchanged.
+
 ## Character library — save a character once, reuse it everywhere (Phase C2, migration v13)
 
 The pattern Kling Elements, Pika Character Studio and Google Flow
