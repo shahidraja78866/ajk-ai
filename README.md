@@ -238,7 +238,7 @@ pages / llms.txt on 2026-10-23:
 | Music bed | `cassetteai/music-generator` | $0.02 per output minute |
 | Voice (default TTS) | `fal-ai/gemini-3.1-flash-tts` | $0.05 / 1,000 chars |
 | Voice (premium TTS) | `fal-ai/elevenlabs/tts/eleven-v3` | $0.10 / 1,000 chars |
-| Lip-sync from an image (standalone job only — see the exception) | `minimax/h3-max/lip-sync/image-to-video` | per second of output (= audio length): $0.05 @480p, **$0.08 @768p**, $0.16 @1080p, $0.32 @2K; ×1.2 past 15 s |
+| Lip-sync from an image (standalone job only — see the Phase G2 note) | `minimax/h3-max/lip-sync/image-to-video` | per second of output (= audio length): $0.05 @480p, **$0.08 @768p**, $0.16 @1080p, $0.32 @2K; ×1.2 past 15 s |
 
 Worst case per tier — the video plus EVERY audio step the workflow can
 attach (auto dialogue is capped at 300 chars ≈ $0.03 of premium TTS;
@@ -261,21 +261,28 @@ Rs 19+), so that combination is not purchasable. A Pro user generating
 at 768P with the full lip-sync + premium stack stays inside too
 (≈ $0.98 vs $1.37 at Pro credit value for 10 s).
 
-> ⚠️ **THE ONE EXCEPTION — standalone `POST /api/voice/lipsync` keeps
-> its flat 30 credits.** Unlike every in-generation route, this job's
-> script can run to **6,000 characters (~400 s of speech)**, and its
-> image route bills **per second of output**: at 768P that is
-> 400 s × $0.08 × 1.2 ≈ **$38.40** worst case (the video route ≈ $2.60)
-> — beyond any plan's per-job revenue, so no included price can absorb
-> it. It stays gated (Pro / Extra Pro) and priced exactly as before,
-> and the app keeps showing its real price on its button.
-> **Recommended follow-up (owner's decision):** cap lip-sync scripts
-> (e.g. ≤ 300 chars ≈ 20 s of audio → ≤ $1.92 on the image route),
-> after which this job could be included too. Also noted: a
-> pathological standalone *voiceover* script (6,000 chars on the
-> premium TTS = $0.60) exceeds what its old 10-credit price covered
-> either — typical scripts (≤ 300 chars ≈ $0.03) sit far inside the
-> margin, and the same script cap would close that corner too.
+> ✅ **RESOLVED (Phase G2, owner decision 2026-10-23) — the standalone
+> `POST /api/voice/lipsync` job is INCLUDED (0 credits) too.** In
+> Phase G this was the one exception: with scripts up to 6,000
+> characters (~400 s of speech) and an image route that bills **per
+> second of output**, the worst case was 400 s × $0.08 × 1.2 ≈
+> **$38.40** — beyond any plan's per-job revenue. The owner's fix:
+> **cap the script at 300 characters** (≈ ≤ 20 s of speech → worst
+> case ≈ **$1.92** on the image route, ≈ **$0.23** on the video
+> route), which the Pro / Extra Pro subscription that gates the tool
+> absorbs. The endpoint now enforces the cap end to end: longer
+> scripts are rejected with a 400 before any charge (the same cap
+> applies to a referenced voice job's script), the Pro gate is
+> unchanged, and because the tool is free it carries a **fair-use cap
+> of 10 standalone lip-sync jobs per user per day** (the 11th gets a
+> 429). `/api/config` truthfully reports `lipsync_credits: 0` and the
+> app's button shows the same "Included · قیمت میں شامل" label as the
+> other audio actions.
+> **Still open (owner to decide):** a pathological standalone
+> *voiceover* script (6,000 chars on the premium TTS = $0.60) exceeds
+> what its old 10-credit price covered either — typical scripts
+> (≤ 300 chars ≈ $0.03) sit far inside the margin. Voiceover behaviour
+> is unchanged; the same script cap would close that corner too.
 
 **Unchanged by this phase:** captions (**+5 credits**) and the
 upscale/extend finisher prices keep their rates — they are post-video
@@ -876,6 +883,36 @@ all 189 existing ids are preserved. The two visible differentiators
 from Flow-style composers remain the AI Auto switch and the total
 credit cost shown up front in the sticky bar.
 
+**Premium home finishing (Phase H, frontend only).** The Studio now
+opens like a finished studio, not a bare form. (1) The existing hero
+is a slim band with a gradient wordmark eyebrow ("AJK AI · AI Video
+Generator"), the tagline, and a CSS-only blue/purple glow — compact
+enough that the composer stays in the first screenful. (2) A
+**showcase rail** ("Create anything · سب کچھ بنائیں") shows four
+visual style cards (`public/showcase/*.jpg`, each ≤200 KB, max width
+720px, ~488 KB total, `loading="lazy"`). Every card is labelled
+**"Style preview · انداز کی جھلک"** — the pictures are design
+artwork showing a style, NOT videos the app generated — and every
+card is a real control wired to the existing `applyTemplate()`:
+Realistic & Cinematic and Animals & Wildlife use two new presets in
+the same `TEMPLATES` map; Cartoon & Kids reuses the Kids Story
+template; Talking & Speaking reuses the Talking Photo template
+(opens the Voice card, exactly like the template chip). (3) A
+**feature highlights** row (#featureRow) lists six truthful labels
+with inline SVG icons: AI Auto Director, Urdu voice & lip-sync,
+Speaking video, Native 4K · Extra Pro, Audio included, Your
+characters. (4) A **"Your creations" gallery** (#creationsCard)
+upgrades the Recent concept into a grid of the user's latest 4
+COMPLETED generations with real video thumbnails (same
+`preload="metadata"` + `#t=0.1` poster-frame approach as Recent),
+prompt caption and duration/resolution/aspect meta; tapping opens
+History, and the section stays hidden — no placeholder — until a
+completed video exists. No server changes, no behaviour changes to
+Phases D–G: all 189 pre-existing element ids are preserved, with
+exactly three new container ids (`showcaseRail`, `featureRow`,
+`creationsCard`). Test suite: 602 checks, including 7 Phase H
+presence/serving checks.
+
 ## Test results (backend, 2026-10-20)
 Run locally with `bash test.sh` — **19/19 tests passed** with a dummy key (no paid calls):
 - ✅ health + config endpoint exposes no secrets
@@ -931,8 +968,8 @@ Latest full run: **276/276 checks passed**.
 
 **Update (2026-10-23, Phase G — audio included, migration v15):** the
 suite now also covers the Phase G policy end to end: config reports
-voiceover 0 and all sound modes 0 (the standalone lip-sync exception
-stays 30); generate-time sync/SFX totals equal the base video price,
+voiceover 0 and all sound modes 0 (the standalone lip-sync job was the
+one exception at 30 — resolved in Phase G2 below); generate-time sync/SFX totals equal the base video price,
 and post-hoc applies (incl. the Pro premium gate at 0) and audio-only
 jobs charge 0; Auto Director plans itemize voice/sound at 0 with
 `needs_confirmation` false (the Phase D/E expectations that asserted
@@ -944,6 +981,16 @@ asserted to have no audio stream** (the stub source clip has one);
 omni + mute is an `audio` conflict at plan time and a clear 400 for a
 direct speaking generate; migration v15 re-applies on boot. Latest
 full run: **595/595 checks passed**.
+
+**Update (2026-10-23, Phase G2 — standalone lip-sync included):** the
+one Phase G exception is resolved per the owner's decision: the
+standalone lip-sync job is 0 credits (config reports
+`lipsync_credits: 0`; the Phase B7/C2 expectations that asserted the
+30-credit charge were updated), its script is capped at 300
+characters (301 chars → 400 before any charge, no row; exactly 300 →
+201 at 0 credits), and a fair-use cap of 10 standalone jobs per user
+per day applies (11th → 429). The Pro gate is unchanged and the
+in-generation lip-sync route is untouched.
 
 ## Safety built in
 - Key and JWT secret live only in `.env`; `/api/config` returns only public settings.
@@ -992,7 +1039,8 @@ entitlements, exposed by `/api/plans` in each plan's `features`
 descriptor (with `max_quality`) and shown on the plan cards.
 `can_lipsync` gates lip-sync (wired in Phase B; since Phase G it is a
 feature gate, not a price — in-generation lip-sync is included, and
-only the standalone lip-sync job keeps its 30-credit price; see
+since Phase G2 the standalone lip-sync job is included too, under a
+300-char script cap and a 10-per-day fair-use cap; see
 *Audio included*).
 `can_veo` — the name is historical — gates the one-step **speaking
 video engine** (Gemini Omni, wired in Phase E; the Veo engine it was

@@ -78,6 +78,11 @@
 # negation plans, a silent generation whose delivered file is asserted to
 # have NO audio stream, the omni+mute conflict, the speaking+silent 400,
 # and the migration-v15 re-apply check.
+# The Phase G2 tests (standalone lip-sync included, owner decision
+# 2026-10-23) use a twenty-first instance (port 18051, fal stub 18052):
+# on a dedicated Pro user, the 300-char script cap (301 chars -> 400
+# with no charge and no row; exactly 300 -> 201 at 0 credits) and the
+# fair-use cap of 10 standalone lip-sync jobs per day (11th -> 429).
 # Outgoing provider request shapes are asserted via the TEST_RECORD-style
 # hook GET /api/_test/voice-calls.
 # e.g.  ADMIN_EMAIL=admin@example.com FAL_MODEL_4K=test-4k-model TEST_RECORD_FAL_BODY=1 TRANSLATE_API_BASE=http://127.0.0.1:18099 npm start
@@ -872,7 +877,7 @@ check "voice: gemini provider configured (fal key present)" "True" "$(echo $CV |
 check "voice: azure provider NOT configured (no owner key yet)" "False" "$(echo $CV | python3 -c 'import sys,json;print(json.load(sys.stdin)["voice"]["providers"]["azure"])')"
 check "voice: default provider is gemini" "gemini" "$(echo $CV | python3 -c 'import sys,json;print(json.load(sys.stdin)["voice"]["default_provider"])')"
 check "voice: catalog lists Kore as a female gemini voice" "female" "$(echo $CV | python3 -c 'import sys,json;d=json.load(sys.stdin);g=[x for x in d["voice"]["voices"] if x["provider"]=="gemini"][0];print([v for v in g["voices"] if v["id"]=="Kore"][0]["gender"])')"
-check "voice: standalone lipsync 30 (documented exception) / voiceover 0 (included)" "30/0" "$(echo $CV | python3 -c 'import sys,json;d=json.load(sys.stdin)["voice"]["costs"];print(str(d["lipsync_credits"])+"/"+str(d["voiceover_credits"]))')"
+check "voice: lipsync 0 (included since G2, 300-char cap) / voiceover 0 (included)" "0/0" "$(echo $CV | python3 -c 'import sys,json;d=json.load(sys.stdin)["voice"]["costs"];print(str(d["lipsync_credits"])+"/"+str(d["voiceover_credits"]))')"
 
 echo "--- sound system: config on the main server ---"
 CS=$(curl -s $B/api/config)
@@ -988,15 +993,15 @@ LS=$(curl -s -w '\n%{http_code}' -X POST $B7/api/voice/lipsync -H "Authorization
 check "lipsync (image): -> 201" "201" "$(echo "$LS" | tail -1)"
 LSB=$(echo "$LS" | sed '$d')
 check "lipsync (image): generation kind is lipsync" "lipsync" "$(echo $LSB | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["kind"])')"
-check "lipsync (image): cost is 30 credits" "30" "$(echo $LSB | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["cost_credits"])')"
+check "lipsync (image): included — cost 0 credits" "0" "$(echo $LSB | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["cost_credits"])')"
 check "lipsync (image): status completed" "completed" "$(echo $LSB | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["status"])')"
-check "lipsync (image): credits_left 570 (charged exactly once)" "570" "$(echo $LSB | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
+check "lipsync (image): credits_left 600 (included — nothing charged)" "600" "$(echo $LSB | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
 VC2=$(curl -s $B7/api/_test/voice-calls)
 check "lipsync (image): fal body has data-URI image_url + /files/voice/ audio_url" "ok" "$(echo $VC2 | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x["kind"]=="queue"][-1];b=c["body"];print("ok" if c["model"]=="minimax/h3-max/lip-sync/image-to-video" and b["image_url"].startswith("data:image/png") and "/files/voice/" in b["audio_url"] else "bad")')"
 check "lipsync (image): newest history entry is the lipsync job" "lipsync" "$(curl -s $B7/api/history -H "Authorization: Bearer $RT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["kind"])')"
 LSF=$(curl -s -w '\n%{http_code}' -X POST $B7/api/voice/lipsync -H "Authorization: Bearer $RT7" -H 'Content-Type: application/json' -d "{\"image_path\":\"$VIMG\",\"script\":\"FAILME bolna hai\",\"spoken_language\":\"ur\",\"script_mode\":\"native\"}")
 check "lipsync: TTS failure -> 502" "502" "$(echo "$LSF" | tail -1)"
-check "lipsync failure: full refund (back to 570)" "570" "$(curl -s $B7/api/me -H "Authorization: Bearer $RT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "lipsync failure: credits untouched (still 600 — nothing was charged)" "600" "$(curl -s $B7/api/me -H "Authorization: Bearer $RT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "lipsync failure: job row marked failed" "failed" "$(curl -s $B7/api/history -H "Authorization: Bearer $RT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["status"])')"
 SEED7=$(node --input-type=module -e "
 import { DatabaseSync } from 'node:sqlite';
@@ -1007,7 +1012,7 @@ LSV=$(curl -s -w '\n%{http_code}' -X POST $B7/api/voice/lipsync -H "Authorizatio
 check "lipsync (video): -> 201" "201" "$(echo "$LSV" | tail -1)"
 LSVB=$(echo "$LSV" | sed '$d')
 check "lipsync (video): routed to the latentsync model" "fal-ai/latentsync" "$(echo $LSVB | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["model"])')"
-check "lipsync (video): credits_left 540" "540" "$(echo $LSVB | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
+check "lipsync (video): credits_left 600 (included)" "600" "$(echo $LSVB | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
 
 # -- voiceover: failure refund, then success + mux, then chunking --
 VR7=$(curl -s -X POST $B7/api/auth/register -H 'Content-Type: application/json' -d '{"email":"voiceover@example.com","password":"password123"}')
@@ -1564,7 +1569,7 @@ CHAR_LIP=$(echo $CHL | python3 -c 'import sys,json;print(json.load(sys.stdin)["c
 LS12=$(curl -s -w '\n%{http_code}' -X POST $B12/api/voice/lipsync -H "Authorization: Bearer $TP12" -H 'Content-Type: application/json' -d "{\"character_id\":$CHAR_LIP,\"script\":\"mera naam ahmed hai\",\"script_mode\":\"roman\"}")
 check "lipsync with character -> 201" "201" "$(echo "$LS12" | tail -1)"
 LS12B=$(echo "$LS12" | sed '$d')
-check "lipsync with character: cost 30, credits_left 570" "30/570" "$(echo $LS12B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "lipsync with character: included — cost 0, credits_left 600" "0/600" "$(echo $LS12B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
 check "lipsync with character: row records character + its image" "$CHAR_LIP/$IMGP" "$(echo $LS12B | python3 -c 'import sys,json;g=json.load(sys.stdin)["generation"];print(str(g["character_id"])+"/"+str(g["source_image_path"]))')"
 VC12=$(curl -s $B12/api/_test/voice-calls)
 check "lipsync with character: TTS used the BOUND voice (Charon, Urdu)" "Charon/Urdu (Pakistan)" "$(echo $VC12 | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x["kind"]=="tts"][-1];print(c["body"]["voice"]+"/"+c["body"]["language_code"])')"
@@ -1573,10 +1578,10 @@ LS13=$(curl -s -w '\n%{http_code}' -X POST $B12/api/voice/lipsync -H "Authorizat
 check "lipsync override -> 201" "201" "$(echo "$LS13" | tail -1)"
 VC13=$(curl -s $B12/api/_test/voice-calls)
 check "lipsync override: explicit voice wins over the binding (Rachel)" "elevenlabs/Rachel" "$(echo $VC13 | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x["kind"]=="tts"][-1];print(c["provider"]+"/"+c["body"]["voice"])')"
-check "lipsync override: credits_left 540" "540" "$(curl -s $B12/api/me -H "Authorization: Bearer $TP12" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "lipsync override: credits_left 600 (included)" "600" "$(curl -s $B12/api/me -H "Authorization: Bearer $TP12" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "lipsync with ANOTHER user's character -> 404" "404" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B12/api/voice/lipsync -H "Authorization: Bearer $TP12" -H 'Content-Type: application/json' -d "{\"character_id\":$SARA_ID,\"script\":\"salam dost\",\"script_mode\":\"roman\"}")"
 check "lipsync with a nonexistent character -> 404" "404" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B12/api/voice/lipsync -H "Authorization: Bearer $TP12" -H 'Content-Type: application/json' -d '{"character_id":99999,"script":"salam dost","script_mode":"roman"}')"
-check "lipsync 404s charged nothing (still 540)" "540" "$(curl -s $B12/api/me -H "Authorization: Bearer $TP12" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "lipsync 404s charged nothing (still 600)" "600" "$(curl -s $B12/api/me -H "Authorization: Bearer $TP12" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 # -- delete: cross-user 404, and past generations survive --
 HERO_ID=$(curl -s $B12/api/characters -H "Authorization: Bearer $TA12" | python3 -c 'import sys,json;print([c for c in json.load(sys.stdin)["characters"] if c["name"]=="Hero"][0]["id"])')
@@ -2050,6 +2055,68 @@ const mig = db.prepare('SELECT COUNT(*) AS c FROM schema_migrations WHERE versio
 console.log(cols === 1 && Number(mig) === 1 ? 'ok' : 'bad');
 ")"
 kill $SRV20_PID $GSTUB_PID $GTSTUB_PID 2>/dev/null
+
+echo "--- phase H: home finishing (hero, showcase, features, creations) ---"
+HOMEPAGEH=$(curl -s $B/)
+check "phase H: hero band ships (eyebrow + tagline)" "yes" "$(echo "$HOMEPAGEH" | grep -q 'hero-eyebrow' && echo "$HOMEPAGEH" | grep -q 'Your Imagination' && echo yes || echo no)"
+check "phase H: showcase rail + honest style-preview label ships" "yes" "$(echo "$HOMEPAGEH" | grep -q 'id="showcaseRail"' && echo "$HOMEPAGEH" | grep -q 'Style preview' && echo yes || echo no)"
+check "phase H: showcase cards wired as template controls" "yes" "$(echo "$HOMEPAGEH" | grep -q 'data-showcase="talking-photo"' && echo "$HOMEPAGEH" | grep -q 'data-showcase="showcase-realistic"' && echo yes || echo no)"
+check "phase H: feature highlights row ships" "yes" "$(echo "$HOMEPAGEH" | grep -q 'id="featureRow"' && echo yes || echo no)"
+check "phase H: creations gallery ships (hidden by default)" "yes" "$(echo "$HOMEPAGEH" | grep -q 'id="creationsCard"' && echo "$HOMEPAGEH" | grep -q 'renderCreations' && echo yes || echo no)"
+check "phase H: showcase image served (realistic)" "200" "$(curl -s -o /dev/null -w '%{http_code}' $B/showcase/showcase-realistic.jpg)"
+check "phase H: showcase image served (speaking)" "200" "$(curl -s -o /dev/null -w '%{http_code}' $B/showcase/showcase-speaking.jpg)"
+
+echo "--- Phase G2: standalone lip-sync included (300-char cap + fair-use cap, stub instance) ---"
+G2_STUB_PORT=18052
+B21=http://127.0.0.1:18051
+rm -f /tmp/myvideoai-phaseg2-test.db; rm -rf /tmp/phaseg2gen /tmp/phaseg2voice; mkdir -p /tmp/phaseg2gen /tmp/phaseg2voice
+FAL_STUB_PORT=$G2_STUB_PORT node "$(dirname "$0")/test-fal-stub.js" > /tmp/fal-stub-phaseg2.log 2>&1 &
+G2STUB_PID=$!
+for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:$G2_STUB_PORT/__calls && break || sleep 0.25; done
+G2_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-phaseg2-test.db PORT=18051 FAL_KEY=dummy_test_key "$G2_JWT_NAME=phaseg2-instance-dummy-value" \
+  ADMIN_EMAIL=g2admin@example.com TEST_RECORD_FAL_BODY=1 \
+  FAL_API_BASE_URL=http://127.0.0.1:$G2_STUB_PORT FAL_QUEUE_BASE_URL=http://127.0.0.1:$G2_STUB_PORT \
+  FAL_POLL_INTERVAL_MS=100 \
+  GENERATED_DIR=/tmp/phaseg2gen VOICE_DIR=/tmp/phaseg2voice \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-phaseg2-test.log 2>&1 &
+SRV21_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B21/api/health && break || sleep 0.25; done
+HOMEPAGE21=$(curl -s $B21/)
+check "phase G2 frontend: script textarea capped at 300 with the included note" "yes" "$(echo "$HOMEPAGE21" | grep -q 'id="voiceScript" maxlength="300"' && echo "$HOMEPAGE21" | grep -q '300 حروف تک' && echo yes || echo no)"
+check "phase G2 frontend: lipsync button label uses the Included label logic" "yes" "$(echo "$HOMEPAGE21" | grep -q 'Create talking character — " + audioCostLabel' && echo yes || echo no)"
+AR21=$(curl -s -X POST $B21/api/auth/register -H 'Content-Type: application/json' -d '{"email":"g2admin@example.com","password":"password123"}')
+AT21=$(echo $AR21 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+PR21=$(curl -s -X POST $B21/api/auth/register -H 'Content-Type: application/json' -d '{"email":"g2pro@example.com","password":"password123"}')
+PT21=$(echo $PR21 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+PID21=$(curl -s $B21/api/me -H "Authorization: Bearer $PT21" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+curl -s -o /dev/null -X POST $B21/api/admin/users/$PID21/activate -H "Authorization: Bearer $AT21" -H 'Content-Type: application/json' -d '{"plan_id":"pro","period":"monthly"}'
+check "g2 pro user balance after activation (100 free + 500 plan)" "600" "$(curl -s $B21/api/me -H "Authorization: Bearer $PT21" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+UPG2=$(curl -s -X POST $B21/api/uploads/image -H "Authorization: Bearer $PT21" -H 'Content-Type: application/json' -d "{\"image_base64\":\"$PNG_B64_A\",\"content_type\":\"image/png\"}")
+IMG21=$(echo $UPG2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["image_path"])')
+SCRIPT301=$(python3 -c "print('a'*301)")
+LS301=$(curl -s -w '\n%{http_code}' -X POST $B21/api/voice/lipsync -H "Authorization: Bearer $PT21" -H 'Content-Type: application/json' -d "{\"image_path\":\"$IMG21\",\"script\":\"$SCRIPT301\",\"spoken_language\":\"en\",\"script_mode\":\"native\"}")
+check "g2 lipsync: 301-char script -> 400" "400" "$(echo "$LS301" | tail -1)"
+check "g2 lipsync: 400 error states the 300-character limit" "yes" "$(echo "$LS301" | sed '$d' | python3 -c 'import sys,json;print("yes" if "300" in json.load(sys.stdin)["error"] else "no")')"
+check "g2 lipsync: 301-char attempt charged nothing" "600" "$(curl -s $B21/api/me -H "Authorization: Bearer $PT21" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "g2 lipsync: 301-char attempt created no generation row" "0" "$(curl -s $B21/api/history -H "Authorization: Bearer $PT21" | python3 -c 'import sys,json;print(len([g for g in json.load(sys.stdin)["generations"] if g["kind"]=="lipsync"]))')"
+SCRIPT300=$(python3 -c "print('a'*300)")
+LS300=$(curl -s -w '\n%{http_code}' -X POST $B21/api/voice/lipsync -H "Authorization: Bearer $PT21" -H 'Content-Type: application/json' -d "{\"image_path\":\"$IMG21\",\"script\":\"$SCRIPT300\",\"spoken_language\":\"en\",\"script_mode\":\"native\"}")
+check "g2 lipsync: exactly 300 chars -> 201" "201" "$(echo "$LS300" | tail -1)"
+LS300B=$(echo "$LS300" | sed '$d')
+check "g2 lipsync: 300-char job included — cost 0, credits_left 600" "0/600" "$(echo $LS300B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+# jobs 2..10 (9 more) — the daily fair-use cap is 10 standalone jobs.
+G2OK=0
+for i in $(seq 2 10); do
+  CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B21/api/voice/lipsync -H "Authorization: Bearer $PT21" -H 'Content-Type: application/json' -d "{\"image_path\":\"$IMG21\",\"script\":\"salam dost\",\"spoken_language\":\"ur\",\"script_mode\":\"roman\"}")
+  [[ "$CODE" == "201" ]] && G2OK=$((G2OK+1))
+done
+check "g2 lipsync: jobs 2-10 all succeed (201 x9)" "9" "$G2OK"
+LS11=$(curl -s -w '\n%{http_code}' -X POST $B21/api/voice/lipsync -H "Authorization: Bearer $PT21" -H 'Content-Type: application/json' -d "{\"image_path\":\"$IMG21\",\"script\":\"salam dost\",\"spoken_language\":\"ur\",\"script_mode\":\"roman\"}")
+check "g2 lipsync: 11th standalone job of the day -> 429" "429" "$(echo "$LS11" | tail -1)"
+check "g2 lipsync: 429 names the daily fair-use limit" "yes" "$(echo "$LS11" | sed '$d' | python3 -c 'import sys,json;print("yes" if "fair-use" in json.load(sys.stdin)["error"] else "no")')"
+check "g2 lipsync: fair-use cap charged nothing (still 600)" "600" "$(curl -s $B21/api/me -H "Authorization: Bearer $PT21" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+kill $SRV21_PID $G2STUB_PID 2>/dev/null
 
 echo "--- rate limit: burst until 429 ---"
 FOUND429="no"

@@ -189,15 +189,20 @@ const CONFIG = {
   lipsyncVideoModel: (process.env.FAL_LIPSYNC_VIDEO_MODEL || 'fal-ai/latentsync').trim(),
   // Voice add-on rates (credits). Phase G (owner directive 2026-10-23,
   // point 5 — "audio included"): voiceover is 0 — voice/dialogue is part
-  // of the single generation price, never a separate fee. The standalone
-  // /api/voice/lipsync job keeps its flat 30 as the ONE documented
-  // exception (see the README sustainability table): its script can run
-  // to 6,000 chars (~400 s of speech) and the image route bills per
-  // output second (H3-Max lip-sync 768P $0.08/s, x1.2 past 15 s — up to
-  // ~$38), which no included price can absorb. The in-generation Auto
-  // Director lip-sync route (<=300-char dialogue, LatentSync flat $0.20)
-  // IS included at 0.
-  lipsyncCost: 30,
+  // of the single generation price, never a separate fee. Phase G2
+  // (owner decision 2026-10-23): the standalone /api/voice/lipsync job
+  // is included at 0 too — made sustainable by capping its script at
+  // LIPSYNC_SCRIPT_MAX_CHARS (300 chars ≈ ≤20 s of speech → worst case
+  // ≈ $1.92 on the image route at 768P, ≈ $0.23 on the video route —
+  // absorbed by the Pro / Extra Pro subscription that gates the tool;
+  // see the README sustainability table) plus a per-day fair-use cap
+  // (lipsyncDailyCap below). The in-generation Auto Director lip-sync
+  // route (<=300-char dialogue, LatentSync flat $0.20) is likewise
+  // included at 0.
+  lipsyncCost: 0,
+  // Fair-use guard for the now-free standalone lip-sync tool: max
+  // standalone lip-sync jobs per user per day (env-overridable).
+  lipsyncDailyCap: Number(process.env.LIPSYNC_DAILY_CAP || 10),
   voiceoverCost: 0,
   // Voice previews are free but rate-limited: per user per day, plus a
   // global daily guard so previews can't run up provider cost.
@@ -1760,7 +1765,8 @@ function analyzeAutoDirector(opts) {
         // Phase G: in-generation audio is INCLUDED (cost 0) — the auto
         // route's lip-sync is LatentSync flat $0.20 + capped TTS, absorbed
         // by every tier (see README). The standalone /api/voice/lipsync
-        // job keeps its own separate price; it does not pass through here.
+        // job is likewise included since Phase G2 (300-char script cap
+        // + daily fair-use cap); it does not pass through here.
         cost: 0,
         text: dialogue.text, script_mode: dialogue.script_mode || 'native' };
     } else if (!defaultVoiceProvider()) {
@@ -3090,6 +3096,12 @@ const VOICE_STYLES = ['narration', 'conversation', 'news', 'energetic', 'emotion
 const VOICE_SPEEDS = ['slow', 'normal', 'fast'];
 const VOICE_PREVIEW_MAX_CHARS = 150;
 const VOICE_SCRIPT_MAX_CHARS = 6000;
+// Standalone lip-sync cap (Phase G2, owner decision 2026-10-23): the
+// /api/voice/lipsync script is limited to 300 chars (≈ ≤20 s of speech)
+// so the now-included tool stays inside the Pro subscription's margin.
+// Only that endpoint passes this to parseVoiceSettings — previews,
+// voiceovers and the in-generation routes keep VOICE_SCRIPT_MAX_CHARS.
+const LIPSYNC_SCRIPT_MAX_CHARS = 300;
 const TTS_CHUNK_MAX_CHARS = 3000; // per-request cap; longer scripts chunk
 
 const VOICE_CATALOG = {
@@ -3311,7 +3323,7 @@ function chunkScript(text, maxChars = TTS_CHUNK_MAX_CHARS) {
 // Validate + normalize a voice request body into synthesis settings.
 // Throws { status, error } on bad input. `provider: null` in the result
 // means NO provider is configured — callers answer 503 before charging.
-function parseVoiceSettings(body, { scriptRequired = true } = {}) {
+function parseVoiceSettings(body, { scriptRequired = true, maxScriptChars = VOICE_SCRIPT_MAX_CHARS } = {}) {
   const bad = (msg) => Object.assign(new Error(msg), { status: 400 });
   const language = String(body?.spoken_language || 'ur').toLowerCase();
   if (!VOICE_LANGUAGES.some(l => l.code === language))
@@ -3342,8 +3354,8 @@ function parseVoiceSettings(body, { scriptRequired = true } = {}) {
     } else voice = defaultVoiceFor(provider, language);
   }
   const rawScript = body?.script === undefined || body?.script === null ? '' : String(body.script);
-  if (scriptRequired && (rawScript.trim().length < 1 || rawScript.length > VOICE_SCRIPT_MAX_CHARS))
-    throw bad(`script must be 1–${VOICE_SCRIPT_MAX_CHARS} characters.`);
+  if (scriptRequired && (rawScript.trim().length < 1 || rawScript.length > maxScriptChars))
+    throw bad(`script must be 1–${maxScriptChars} characters.`);
   const text = scriptMode === 'roman' && rawScript
     ? transliterateRoman(rawScript, language) : rawScript;
   return { language, scriptMode, style, speed, provider,
@@ -3587,7 +3599,10 @@ app.post('/api/voice/preview', auth, voiceLimiter, async (req, res) => {
   }
 });
 
-// ---------- Talking character / lip-sync (Pro+ plans, +30 credits) ---------
+// ---------- Talking character / lip-sync (Pro+ plans, included) ------------
+// Phase G2 (owner decision 2026-10-23): price 0 — the script is capped
+// at LIPSYNC_SCRIPT_MAX_CHARS (300) and a fair-use cap of
+// CONFIG.lipsyncDailyCap standalone jobs per user per day applies.
 app.post('/api/voice/lipsync', auth, voiceLimiter, async (req, res) => {
   const b = req.body || {};
   // Entitlement first: the existing plan flag gates the feature.
@@ -3649,13 +3664,28 @@ app.post('/api/voice/lipsync', auth, voiceLimiter, async (req, res) => {
         settingsBody.spoken_language = character.voice_language;
       if (!settingsBody.style && character.voice_style) settingsBody.style = character.voice_style;
     }
-    try { settings = parseVoiceSettings(settingsBody); }
+    try { settings = parseVoiceSettings(settingsBody, { maxScriptChars: LIPSYNC_SCRIPT_MAX_CHARS }); }
     catch (e) { return res.status(e.status || 400).json({ error: e.message }); }
     if (!settings.provider)
       return res.status(503).json({ error: 'voice_not_configured', message: VOICE_NOT_CONFIGURED_MSG });
     if (moderated(settings.rawScript))
       return res.status(400).json({ error: 'This script was blocked by content moderation. Please rephrase it.' });
   }
+  // A referenced voice job carries its own script: the same 300-char
+  // cap applies to its text, so the included price cannot be bypassed
+  // by synthesizing a long script elsewhere first.
+  if (audioJob && String(audioJob.script_text || '').length > LIPSYNC_SCRIPT_MAX_CHARS)
+    return res.status(400).json({ error: `Lip-sync scripts are limited to ${LIPSYNC_SCRIPT_MAX_CHARS} characters — the referenced voice job's script is longer than that. Please use a shorter script.` });
+  // Fair use (Phase G2): the standalone tool is free now, so bound it —
+  // at most CONFIG.lipsyncDailyCap standalone lip-sync jobs per user per
+  // day. Standalone jobs are the generations rows of kind 'lipsync',
+  // which only this endpoint creates (the in-generation routes process
+  // an existing generation and record voice_jobs instead).
+  const lipJobsToday = db.prepare(
+    `SELECT COUNT(*) AS c FROM generations WHERE user_id = ? AND kind = 'lipsync'
+     AND date(created_at) = date('now')`).get(req.user.id).c;
+  if (Number(lipJobsToday) >= CONFIG.lipsyncDailyCap)
+    return res.status(429).json({ error: `Daily fair-use limit reached: standalone lip-sync is limited to ${CONFIG.lipsyncDailyCap} jobs per day. Please try again tomorrow.` });
   const model = hasImage ? CONFIG.lipsyncImageModel : CONFIG.lipsyncVideoModel;
   let jobId;
   try {
