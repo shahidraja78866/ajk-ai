@@ -480,6 +480,64 @@
       .sound-apply-panel input[type="range"]{ width:100%; }
       .job-actions audio{ width:100%; max-width:340px; }
 
+      /* ---------- studio: template strip (Phase C3) ---------- */
+      .tpl-card{ padding:14px 16px; margin-bottom:20px; }
+      .tpl-head{ display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:10px; }
+      .tpl-head h2{ font-family:var(--font-display); font-size:16px; margin:0; letter-spacing:-.01em; }
+      .tpl-sub{ color:var(--muted); font-size:12.5px; margin:0; }
+      .tpl-strip{
+        display:flex; gap:8px; overflow-x:auto; padding-bottom:4px;
+        scrollbar-width:thin; -webkit-overflow-scrolling:touch;
+      }
+      .tpl-chip{
+        flex:0 0 auto; display:flex; align-items:center; gap:9px;
+        background:var(--panel-2); border:1px solid var(--line); border-radius:11px;
+        padding:8px 12px; color:var(--text); text-align:left; cursor:pointer;
+      }
+      .tpl-chip:hover{ background:var(--panel-3); border-color:var(--faint); }
+      .tpl-chip svg{ width:17px; height:17px; color:var(--amber); flex:none; }
+      .tpl-texts{ display:flex; flex-direction:column; line-height:1.3; }
+      .tpl-name{ font-family:var(--font-display); font-weight:700; font-size:13.5px; white-space:nowrap; }
+      .tpl-hint{ color:var(--faint); font-size:11.5px; white-space:nowrap; }
+
+      /* ---------- studio: compact mode cards (Phase C3) ---------- */
+      .mode-compact{ grid-template-columns:1fr 1fr; gap:8px; }
+      .mode-compact .mode-card{ padding:10px 12px; border-radius:11px; }
+      .mode-compact .mode-card strong{ font-size:14px; margin-bottom:3px; }
+      .mode-compact .mode-card span{ font-size:12px; }
+      .mode-compact .mode-card small{ margin-top:5px; font-size:11.5px; }
+
+      /* ---------- studio: collapsible optional cards (Phase C3) ---------- */
+      .collapse-head{
+        width:100%; display:flex; align-items:center; justify-content:space-between; gap:10px;
+        background:none; border:0; padding:2px 0; color:var(--text); text-align:left; cursor:pointer;
+      }
+      .collapse-title{ font-family:var(--font-display); font-size:16px; font-weight:700; letter-spacing:-.01em; }
+      .collapse-title .opt-tag{
+        font-family:var(--font-body); font-size:10.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase;
+        color:var(--faint); background:var(--panel-3); border:1px solid var(--line);
+        border-radius:999px; padding:2px 8px; margin-left:8px; vertical-align:2px;
+      }
+      .collapse-chev{ width:18px; height:18px; color:var(--faint); flex:none; transition:transform .2s; }
+      .collapsible.is-collapsed .collapse-chev{ transform:rotate(-90deg); }
+      .collapsible.is-collapsed .collapse-body{ display:none; }
+
+      /* ---------- studio: sticky action bar (Phase C3) ---------- */
+      .studio-actionbar{
+        position:sticky; bottom:14px; z-index:30; margin-top:20px;
+        background:rgba(16,19,29,.94); backdrop-filter:blur(10px);
+        border:1px solid var(--line); border-radius:14px; padding:12px 14px;
+        box-shadow:0 10px 30px rgba(0,0,0,.45);
+      }
+      .studio-actionbar .form-error{ margin:0 0 10px; }
+      .actionbar-row{ display:flex; align-items:center; gap:14px; }
+      .actionbar-cost{ display:flex; flex-direction:column; line-height:1.3; flex:none; }
+      .actionbar-label{
+        font-size:11px; font-weight:600; letter-spacing:.07em; text-transform:uppercase; color:var(--faint);
+      }
+      .actionbar-cost strong{ color:var(--text); font-family:var(--font-mono); font-weight:500; font-size:17px; }
+      .actionbar-btn{ flex:1; width:auto; margin-top:0; }
+
       @media (min-width:641px){
         .modal-backdrop{ align-items:center; padding:20px; }
         .modal{ border-radius:18px; }
@@ -503,6 +561,16 @@
         footer{ padding-bottom:110px; }
         .conn-banner{ flex-wrap:wrap; }
         .conn-banner button{ margin-left:23px; }
+        /* Phase C3: keep the prompt reachable in the first screenful */
+        .hero{ margin:0 0 10px; }
+        .hero h1{ font-size:24px; }
+        .hero p{ display:none; }
+        .conn-banner{ padding:10px 12px; margin-bottom:14px; }
+        .conn-banner p{ font-size:12.5px; }
+        #view-studio .card{ padding:16px; }
+        #view-studio .tpl-card{ padding:12px 14px; margin-bottom:14px; }
+        .mode-compact .mode-card small{ display:none; }
+        .studio-actionbar{ bottom:calc(64px + env(safe-area-inset-bottom)); padding:10px 12px; }
         .kv{ grid-template-columns:105px 1fr; }
       }
       @media (prefers-reduced-motion: reduce){
@@ -556,39 +624,35 @@
           <button type="button" class="btn small" data-goto="settings">API settings</button>
         </div>
 
-        <div class="card" id="templateCard">
-          <h2>Start from a template</h2>
-          <p class="sub">One tap fills in the mode, format and a starter prompt below — edit the words freely before generating. You can write your prompt in any supported language (English, اردو, کشمیری, العربية, فارسی, हिन्दी, 中文) — the app translates it automatically.</p>
-          <div class="mode-grid" id="templateGrid" role="group" aria-label="Templates">
-            <button type="button" class="mode-card" data-template="talking-photo">
-              <strong>Talking Photo</strong>
-              <span>Turn a photo into a talking character with a voice and lip-sync.</span>
-              <small>Opens the Voice &amp; Dialogue card below.</small>
+        <div class="card tpl-card" id="templateCard">
+          <div class="tpl-head">
+            <h2>Templates</h2>
+            <p class="tpl-sub">One tap fills in the mode, format and a starter prompt in the form below — edit the words freely. Any supported language works; the app translates automatically.</p>
+          </div>
+          <div class="tpl-strip" id="templateGrid" role="group" aria-label="Templates">
+            <button type="button" class="tpl-chip" data-template="talking-photo">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4M8 22h8"/></svg>
+              <span class="tpl-texts"><span class="tpl-name">Talking Photo</span><span class="tpl-hint">Opens Voice &amp; Dialogue</span></span>
             </button>
-            <button type="button" class="mode-card" data-template="kids-story">
-              <strong>Kids Story</strong>
-              <span>A gentle cartoon story scene for children.</span>
-              <small>Cartoon mode · story starter prompt.</small>
+            <button type="button" class="tpl-chip" data-template="kids-story">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 6c-1.6-1.6-4.2-2.2-8-2.2v14.4c3.8 0 6.4.6 8 2.2 1.6-1.6 4.2-2.2 8-2.2V3.8C16.2 3.8 13.6 4.4 12 6z"/><path d="M12 6v14.4"/></svg>
+              <span class="tpl-texts"><span class="tpl-name">Kids Story</span><span class="tpl-hint">Cartoon · story starter</span></span>
             </button>
-            <button type="button" class="mode-card" data-template="product-ad">
-              <strong>Product Ad</strong>
-              <span>A vertical product showcase made for social feeds.</span>
-              <small>Realistic mode · 9:16.</small>
+            <button type="button" class="tpl-chip" data-template="product-ad">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1.3"/></svg>
+              <span class="tpl-texts"><span class="tpl-name">Product Ad</span><span class="tpl-hint">Realistic · 9:16</span></span>
             </button>
-            <button type="button" class="mode-card" data-template="breaking-news">
-              <strong>Breaking-News Short</strong>
-              <span>A vertical news-style short with a studio look.</span>
-              <small>Realistic mode · 9:16 · AI visuals, always labelled.</small>
+            <button type="button" class="tpl-chip" data-template="breaking-news">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="2"/><path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M4.9 4.9a10 10 0 0 0 0 14.2M19.1 4.9a10 10 0 0 1 0 14.2"/></svg>
+              <span class="tpl-texts"><span class="tpl-name">Breaking-News Short</span><span class="tpl-hint">Realistic · 9:16 · AI-labelled</span></span>
             </button>
-            <button type="button" class="mode-card" data-template="music-video">
-              <strong>Music Video</strong>
-              <span>A performance scene with a background music bed.</span>
-              <small>Realistic mode · music sound preselected.</small>
+            <button type="button" class="tpl-chip" data-template="music-video">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+              <span class="tpl-texts"><span class="tpl-name">Music Video</span><span class="tpl-hint">Realistic · music preselected</span></span>
             </button>
-            <button type="button" class="mode-card" data-template="cartoon-episode">
-              <strong>Cartoon Episode</strong>
-              <span>An episode opening scene with recurring cartoon characters.</span>
-              <small>Cartoon mode · episode starter prompt.</small>
+            <button type="button" class="tpl-chip" data-template="cartoon-episode">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M8.5 14s1.2 2.2 3.5 2.2 3.5-2.2 3.5-2.2"/><circle cx="9" cy="9.5" r=".6" fill="currentColor"/><circle cx="15" cy="9.5" r=".6" fill="currentColor"/></svg>
+              <span class="tpl-texts"><span class="tpl-name">Cartoon Episode</span><span class="tpl-hint">Cartoon · episode starter</span></span>
             </button>
           </div>
         </div>
@@ -598,21 +662,6 @@
             <div class="card">
               <h2>Describe your video</h2>
               <p class="sub">One or two sentences work best. Mention the subject, the setting, and how the camera moves. <span id="modelLine"></span></p>
-
-              <div class="field-label"><span>Video mode</span></div>
-              <div class="mode-grid" id="modeGrid" role="group" aria-label="Video mode">
-                <button type="button" class="mode-card sel" data-mode="realistic">
-                  <strong>Realistic Human Video</strong>
-                  <span>Lifelike people and real-world scenes with natural-looking movement.</span>
-                  <small>Best for realistic and cinematic styles.</small>
-                </button>
-                <button type="button" class="mode-card" data-mode="cartoon">
-                  <strong>Cartoon / Animation</strong>
-                  <span>Cartoon characters, animated stories, funny animals and child-friendly scenes.</span>
-                  <small>Best for cartoon and anime styles.</small>
-                </button>
-              </div>
-              <p class="mode-note">Both modes include model-generated audio. If the prompt asks for spoken dialogue, the model may generate speech that follows the prompt, but the dialogue language is not guaranteed — Urdu dialogue is not officially documented for this model.</p>
 
               <div class="field-label"><span>Prompt language</span></div>
               <select id="promptLang">
@@ -638,10 +687,20 @@
                 <button type="button" class="tool-btn" data-example="Fresh bread being sliced on a wooden table in a sunlit bakery, steam rising, close-up, warm tones">Try: bakery</button>
               </div>
 
-              <div class="field-label"><span>Starting image (optional)</span></div>
-              <input type="file" class="file-input" id="sourceImage" accept="image/png,image/jpeg,image/webp" />
-              <p class="lang-hint" id="imageStatus">Add a PNG, JPEG or WebP image (max 5 MB) to animate it as the opening frame.</p>
-              <button type="button" class="tool-btn" id="removeImageBtn" style="display:none;">Remove image</button>
+              <div class="field-label"><span>Video mode</span></div>
+              <div class="mode-grid mode-compact" id="modeGrid" role="group" aria-label="Video mode">
+                <button type="button" class="mode-card sel" data-mode="realistic">
+                  <strong>Realistic Human Video</strong>
+                  <span>Lifelike people and real-world scenes with natural-looking movement.</span>
+                  <small>Best for realistic and cinematic styles.</small>
+                </button>
+                <button type="button" class="mode-card" data-mode="cartoon">
+                  <strong>Cartoon / Animation</strong>
+                  <span>Cartoon characters, animated stories, funny animals and child-friendly scenes.</span>
+                  <small>Best for cartoon and anime styles.</small>
+                </button>
+              </div>
+              <p class="mode-note">Both modes include model-generated audio. If the prompt asks for spoken dialogue, the model may generate speech that follows the prompt, but the dialogue language is not guaranteed — Urdu dialogue is not officially documented for this model.</p>
 
               <div class="field-label"><span>Character (optional)</span></div>
               <div style="display:flex;gap:10px;align-items:center;">
@@ -650,7 +709,12 @@
                   <option value="">No character</option>
                 </select>
               </div>
-              <p class="lang-hint">Pick one of your saved characters (My Characters card below) and the model uses its photo as the subject reference, so the character stays recognisable from video to video. A chosen character overrides the starting image above. Character consistency is the model's best effort — it is not a guarantee. The credit cost is the standard rate for the chosen quality and duration — characters cost nothing extra.</p>
+              <p class="lang-hint">Pick one of your saved characters (My Characters card below) and the model uses its photo as the subject reference, so the character stays recognisable from video to video. A chosen character overrides the starting image below. Character consistency is the model's best effort — it is not a guarantee. The credit cost is the standard rate for the chosen quality and duration — characters cost nothing extra.</p>
+
+              <div class="field-label"><span>Starting image (optional)</span></div>
+              <input type="file" class="file-input" id="sourceImage" accept="image/png,image/jpeg,image/webp" />
+              <p class="lang-hint" id="imageStatus">Add a PNG, JPEG or WebP image (max 5 MB) to animate it as the opening frame.</p>
+              <button type="button" class="tool-btn" id="removeImageBtn" style="display:none;">Remove image</button>
 
               <div class="field-label"><span>Visual style</span></div>
               <div class="style-grid" id="styleGrid"></div>
@@ -668,27 +732,17 @@
               </div>
               <p class="lang-hint" id="draftHint" style="display:none;">Draft = a cheap 480P preview of your idea. Sound and voice add-ons are not available on drafts — upgrade the draft from your History to full quality first, then add them there.</p>
 
-              <label class="check-row"><input type="checkbox" id="watermarkEnabled" /> <span>Add watermark text</span></label>
-              <input type="text" class="text-input" id="watermarkText" maxlength="30" placeholder="e.g. SMT Movies" disabled style="margin-top:9px;" />
-              <p class="lang-hint">Latin letters only, up to 30 characters. It appears at the bottom-right. Watermarking does not change the credit cost.</p>
-
-              <div class="cost-row">
-                <span>Cost of this generation</span>
-                <strong><span id="costNum">10</span> credits</strong>
-              </div>
-              <div class="form-error" id="formError" role="alert"></div>
-              <button type="button" class="btn primary generate-btn" id="generateBtn">
-                <svg viewBox="0 0 24 24" fill="currentColor" id="generateIcon"><path d="M8 5.5v13l11-6.5-11-6.5z"/></svg>
-                <span id="generateLabel">Generate video</span>
-              </button>
-              <p class="fineprint">Credits are charged by the server when it accepts your job. Failed generations are refunded automatically. Mode, a starting image and watermark text do not change the credit cost — the same duration and quality pricing applies. A sound option adds the credits shown in the Sound &amp; Effects card below.</p>
+              <p class="fineprint">Credits are charged by the server when it accepts your job. Failed generations are refunded automatically. Mode, a starting image and watermark text do not change the credit cost — the same duration and quality pricing applies. A sound option adds the credits shown in the Sound &amp; Effects card below. The total cost and the Generate button stay in the bar at the bottom of this screen.</p>
             </div>
 
-            <div class="card" id="voiceCard">
-              <h2>Voice &amp; Dialogue (optional)</h2>
-              <p class="sub">Write a script, hear the voice first — free — then turn a photo into a talking character, or re-voice a finished video. Voice quality is new and still being proven with real samples; listen to the preview before spending credits.</p>
-
+            <div class="card collapsible is-collapsed" id="voiceCard">
+              <button type="button" class="collapse-head" data-collapse-head aria-expanded="false" aria-controls="voiceCardBody">
+                <span class="collapse-title">Voice &amp; Dialogue<span class="opt-tag">optional</span></span>
+                <svg class="collapse-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+              </button>
               <div class="form-error" id="voiceNotice" style="display:none;" role="alert"></div>
+              <div class="collapse-body" id="voiceCardBody">
+              <p class="sub">Write a script, hear the voice first — free — then turn a photo into a talking character, or re-voice a finished video. Voice quality is new and still being proven with real samples; listen to the preview before spending credits.</p>
 
               <div id="voiceControls">
                 <div class="field-label"><span>Script</span><span class="count"><span id="voiceCharCount">0</span> / 6000</span></div>
@@ -759,13 +813,17 @@
                 <div class="form-error" id="voiceError" role="alert"></div>
                 <p class="fineprint">Costs are shown on the buttons before you confirm. If a voice job fails, its credits are refunded automatically. Finished voice jobs appear in your History.</p>
               </div>
+              </div>
             </div>
 
-            <div class="card" id="soundCard">
-              <h2>Sound &amp; Effects (optional)</h2>
-              <p class="sub">Add an AI soundtrack, sound effects or a music bed to the video you are generating — or create a sound on its own. The AI matches sounds to the picture; the timing is the model's estimate, not a frame-exact guarantee.</p>
-
+            <div class="card collapsible is-collapsed" id="soundCard">
+              <button type="button" class="collapse-head" data-collapse-head aria-expanded="false" aria-controls="soundCardBody">
+                <span class="collapse-title">Sound &amp; Effects<span class="opt-tag">optional</span></span>
+                <svg class="collapse-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+              </button>
               <div class="form-error" id="soundNotice" style="display:none;" role="alert"></div>
+              <div class="collapse-body" id="soundCardBody">
+              <p class="sub">Add an AI soundtrack, sound effects or a music bed to the video you are generating — or create a sound on its own. The AI matches sounds to the picture; the timing is the model's estimate, not a frame-exact guarantee.</p>
 
               <div id="soundControls">
                 <div class="field-label"><span>Sound for the video above</span></div>
@@ -797,6 +855,14 @@
                 <div class="form-error" id="soundError" role="alert"></div>
                 <p class="fineprint">Costs are shown before you confirm, and charged by the server only when it accepts the job. Failed sound jobs are refunded automatically.</p>
               </div>
+              </div>
+            </div>
+
+            <div class="card" id="watermarkCard">
+              <h2>Watermark (optional)</h2>
+              <label class="check-row" style="margin-top:6px;"><input type="checkbox" id="watermarkEnabled" /> <span>Add watermark text</span></label>
+              <input type="text" class="text-input" id="watermarkText" maxlength="30" placeholder="e.g. SMT Movies" disabled style="margin-top:9px;" />
+              <p class="lang-hint">Latin letters only, up to 30 characters. It appears at the bottom-right. Watermarking does not change the credit cost.</p>
             </div>
 
             <div class="card" id="charactersCard">
@@ -883,6 +949,20 @@
                 Report content
               </button>
             </div>
+          </div>
+        </div>
+
+        <div class="studio-actionbar" id="studioActionBar">
+          <div class="form-error" id="formError" role="alert"></div>
+          <div class="actionbar-row">
+            <div class="actionbar-cost">
+              <span class="actionbar-label">Total cost</span>
+              <strong><span id="costNum">10</span> credits</strong>
+            </div>
+            <button type="button" class="btn primary generate-btn actionbar-btn" id="generateBtn">
+              <svg viewBox="0 0 24 24" fill="currentColor" id="generateIcon"><path d="M8 5.5v13l11-6.5-11-6.5z"/></svg>
+              <span id="generateLabel">Generate video</span>
+            </button>
           </div>
         </div>
       </section>
@@ -3484,6 +3564,34 @@
         if (!token) renderHistoryState("signedout");
         loadConfig();
         if (token) { loadMe(); loadHistory(); }
+      })();
+    </script>
+    <script>
+      // Phase C3 — unified one-screen Studio: collapse toggles for the
+      // optional Voice / Sound cards, plus opening the matching card when
+      // a template chip points at it. This only ADDS behaviour — every
+      // preset and handler in the main script above is untouched.
+      (function () {
+        function setCollapsed(card, collapsed) {
+          if (!card) return;
+          card.classList.toggle("is-collapsed", collapsed);
+          var head = card.querySelector("[data-collapse-head]");
+          if (head) head.setAttribute("aria-expanded", collapsed ? "false" : "true");
+        }
+        function expandCard(id) {
+          var card = document.getElementById(id);
+          if (card) setCollapsed(card, false);
+        }
+        document.querySelectorAll("[data-collapse-head]").forEach(function (head) {
+          head.addEventListener("click", function () {
+            var card = head.closest(".collapsible");
+            if (card) setCollapsed(card, !card.classList.contains("is-collapsed"));
+          });
+        });
+        var talking = document.querySelector('#templateGrid [data-template="talking-photo"]');
+        if (talking) talking.addEventListener("click", function () { expandCard("voiceCard"); });
+        var music = document.querySelector('#templateGrid [data-template="music-video"]');
+        if (music) music.addEventListener("click", function () { expandCard("soundCard"); });
       })();
     </script>
   </body>
