@@ -226,6 +226,7 @@
       .seg button:hover{ color:var(--text); }
       .seg button.sel{ background:var(--panel-3); color:var(--text); box-shadow:inset 0 0 0 1px var(--line); }
       .seg button.sel small{ color:var(--muted); }
+      .seg button.locked{ opacity:.55; }
 
       .style-grid{ display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
       .style-card{
@@ -1078,8 +1079,10 @@
               <div class="seg" id="qualitySeg" role="group" aria-label="Quality">
                 <button type="button" class="sel" data-quality="full">Full quality<small>your plan's quality</small></button>
                 <button type="button" data-quality="draft">Draft · 480P<small><span id="draftCostHint">7 / 14</span> credits</small></button>
+                <button type="button" data-quality="seedance" id="seedanceQualityBtn" class="locked" aria-disabled="true">Seedance 2.5 · Premium<small>Top-ranked quality · 720p · Extra Pro</small></button>
               </div>
               <p class="lang-hint" id="draftHint" style="display:none;">Draft = a cheap 480P preview of your idea. Sound and voice add-ons are not available on drafts — upgrade the draft from your History to full quality first, then add them there.</p>
+              <p class="lang-hint" id="seedanceHint" style="display:none;">Seedance 2.5 premium engine — the price in the bar below is the full price, native audio included. Sound and voice add-ons can't be combined with it, and AI Auto never selects it — you choose it here.</p>
 
               <p class="fineprint">Credits are charged by the server when it accepts your job. Failed generations are refunded automatically. Mode, a starting image and watermark text do not change the credit cost — the same duration and quality pricing applies. Sound, voice and music options are included in this price — there are no separate audio fees. The total cost and the Generate button stay in the bar at the bottom of this screen.</p>
 
@@ -1824,6 +1827,15 @@
           return q;
         }
         function costFor(d) {
+          // Seedance 2.5 premium engine (Phase J): a per-duration premium
+          // price read from the server's config (60 credits / 5s,
+          // 120 credits / 10s) — the sticky bar shows the full price up
+          // front, exactly like every other route.
+          if (state.quality === "seedance") {
+            var sp = (cfg && cfg.seedance_engine && cfg.seedance_engine.price_credits) || { "5": 60, "10": 120 };
+            var sv = sp[String(d)];
+            return (sv === undefined || sv === null) ? 60 : sv;
+          }
           // Draft quality is a flat cheap rate (480P preview), read from
           // the server's config like everything else.
           if (state.quality === "draft") {
@@ -1843,8 +1855,9 @@
         function updateCost() {
           var total = costFor(state.duration);
           var sm = $("#soundMode");
-          // Drafts cannot take sound add-ons — the hint never adds them.
-          if (state.quality !== "draft" && sm && soundCfg && soundCfg.configured && sm.value && sm.value !== "none" && soundCfg.costs)
+          // Drafts and the Seedance premium engine cannot take sound
+          // add-ons — the hint never adds them for those routes.
+          if (state.quality === "full" && sm && soundCfg && soundCfg.configured && sm.value && sm.value !== "none" && soundCfg.costs)
             total += Number(soundCfg.costs[sm.value] || 0);
           $("#costNum").textContent = total;
           // The duration buttons show per-duration prices — refresh them
@@ -1855,15 +1868,59 @@
             if (small && durs[i] !== undefined) small.textContent = costFor(durs[i]) + " credits";
           });
         }
-        // Quality seg (Full / Draft 480P): drafts hide the sound add-on
-        // choices in effect — currentSoundSpec returns null for drafts —
-        // and say so in the hint line.
+        // Seedance premium gate (Phase J): the option renders locked for
+        // everyone but Extra Pro (the server's can_seedance entitlement —
+        // the server re-checks it before charging anything). Mirrors the
+        // lip-sync gate note pattern (fillVoiceGate).
+        function seedanceEntitled() {
+          return !!(me && me.plan && me.plan.features && me.plan.features.can_seedance);
+        }
+        function fillSeedanceGate() {
+          var btn = $("#seedanceQualityBtn");
+          if (!btn) return;
+          var can = seedanceEntitled();
+          btn.classList.toggle("locked", !can);
+          btn.setAttribute("aria-disabled", can ? "false" : "true");
+          var hint = $("#seedanceHint");
+          if (hint) {
+            hint.textContent = can
+              ? "Seedance 2.5 premium engine — your Extra Pro plan includes it. The price in the bar below is the full price, native audio included. Sound and voice add-ons can't be combined with it, and AI Auto never selects it — you choose it here."
+              : "Seedance 2.5 premium videos need the Extra Pro plan" +
+                (me && me.plan ? " — your current plan is " + me.plan.name + "." : ".") +
+                " The server checks your plan before charging anything.";
+          }
+          // A plan change (sign-out, downgrade) must never leave the
+          // premium engine selected for someone who can't use it.
+          if (!can && state.quality === "seedance") {
+            state.quality = "full";
+            $$("#qualitySeg button").forEach(function (x) {
+              x.classList.toggle("sel", x.getAttribute("data-quality") === "full");
+            });
+            if (hint) hint.style.display = "none";
+            updateCost();
+          }
+        }
+        // Quality seg (Full / Draft 480P / Seedance premium): drafts hide
+        // the sound add-on choices in effect — currentSoundSpec returns
+        // null for drafts and for the premium engine — and each route
+        // says so in its hint line.
         $$("#qualitySeg button").forEach(function (b) {
           b.addEventListener("click", function () {
-            state.quality = b.getAttribute("data-quality") || "full";
+            var q = b.getAttribute("data-quality") || "full";
+            if (q === "seedance" && !seedanceEntitled()) {
+              // Locked: explain the gate, keep the current selection.
+              fillSeedanceGate();
+              var lh = $("#seedanceHint");
+              if (lh) lh.style.display = "block";
+              toast("Seedance 2.5 is an Extra Pro premium engine.");
+              return;
+            }
+            state.quality = q;
             $$("#qualitySeg button").forEach(function (x) { x.classList.toggle("sel", x === b); });
             var hint = $("#draftHint");
             if (hint) hint.style.display = state.quality === "draft" ? "block" : "none";
+            var shint = $("#seedanceHint");
+            if (shint) shint.style.display = state.quality === "seedance" ? "block" : "none";
             updateCost();
           });
         });
@@ -2016,6 +2073,8 @@
           });
           var hint = $("#draftHint");
           if (hint) hint.style.display = "none";
+          var shint2 = $("#seedanceHint");
+          if (shint2) shint2.style.display = "none";
           renderControls(cfg || FALLBACK);
           promptEl.value = t.prompt;
           promptEl.dispatchEvent(new Event("input"));
@@ -2204,6 +2263,7 @@
               setCredits(me.credits);
               fillPlanUI();
               fillVoiceGate();
+              fillSeedanceGate();
               loadCharacters();
               fillAccountMeta();
               setSignedInUI();
@@ -2465,6 +2525,7 @@
           var genBody = { prompt: prompt, aspect_ratio: state.aspect, duration: state.duration, style: state.style,
                     mode: state.mode,
                     ...(state.quality === "draft" ? { quality: "draft" } : {}),
+                    ...(state.quality === "seedance" ? { engine: "seedance" } : {}),
                     language: ($("#promptLang") ? $("#promptLang").value : "en"),
                     ...(state.imagePath ? { image_path: state.imagePath } : {}),
                     ...($("#genCharacter").value ? { character_id: Number($("#genCharacter").value) } : {}),
@@ -2507,8 +2568,12 @@
           }
           // AI Auto (Phase D): plan first (free). No confirmation needed ->
           // generate in the same tap. Confirmation needed -> show the panel.
+          // The Seedance premium engine (Phase J) is a direct choice that
+          // AI Auto NEVER routes to, so a Seedance generation skips the
+          // plan step entirely and submits genBody as-is (the server
+          // rejects engine + confirmed-plan combinations regardless).
           var autoCfg = cfg && cfg.auto;
-          if (state.auto && (!autoCfg || autoCfg.enabled !== false)) {
+          if (state.auto && state.quality !== "seedance" && (!autoCfg || autoCfg.enabled !== false)) {
             var planBody = Object.assign({}, genBody);
             if (!state.aspectExplicit) delete planBody.aspect_ratio;
             var vpSel = $("#voiceProvider");
@@ -3193,6 +3258,8 @@
                          : "Speaking video clips: Pro and above",
                f.can_lipsync ? "Urdu lip-sync included"
                              : "Lip-sync included: Pro and above",
+               f.can_seedance ? "Seedance 2.5 premium engine included"
+                              : "Seedance 2.5 premium: Extra Pro",
                "Failed generations refunded automatically"].forEach(function (t) {
                 var li = document.createElement("li"); li.textContent = t; ul.appendChild(li);
               });
@@ -3969,6 +4036,7 @@
         }
         function currentSoundSpec() {
           if (state.quality === "draft") return null; // drafts take no sound add-ons
+          if (state.quality === "seedance") return null; // the premium engine makes its own audio
           if (!soundCfg || !soundCfg.configured) return null;
           var mode = $("#soundMode").value;
           if (!mode || mode === "none") return null;

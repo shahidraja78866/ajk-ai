@@ -134,7 +134,7 @@
     });
     api("/api/admin/plans").then(function (r) {
       if (!r.ok) return;
-      var html = "<tr><th>Plan</th><th>Rs / month</th><th>Rs / year</th><th>Credits / mo</th><th>Rs / week</th><th>Credits / wk</th><th>Quality label</th><th>Resolution</th><th>Model</th><th>Play product (monthly)</th><th>Play product (yearly)</th><th>Play product (weekly)</th><th>Veo</th><th>Lip-sync</th><th>Active</th><th></th></tr>";
+      var html = "<tr><th>Plan</th><th>Rs / month</th><th>Rs / year</th><th>Credits / mo</th><th>Rs / week</th><th>Credits / wk</th><th>Quality label</th><th>Resolution</th><th>Model</th><th>Play product (monthly)</th><th>Play product (yearly)</th><th>Play product (weekly)</th><th>Veo</th><th>Lip-sync</th><th>Seedance</th><th>Active</th><th></th></tr>";
       r.data.plans.forEach(function (p) {
         html += "<tr data-plan='" + esc(p.id) + "'>"
           + "<td><strong>" + esc(p.name) + "</strong><br><small>" + esc(p.id) + "</small></td>"
@@ -151,6 +151,7 @@
           + "<td><input type='text' data-f='play_product_weekly' value='" + esc(p.play_product_weekly || "") + "'></td>"
           + "<td><input type='checkbox' data-f='can_veo' " + (p.can_veo ? "checked" : "") + "></td>"
           + "<td><input type='checkbox' data-f='can_lipsync' " + (p.can_lipsync ? "checked" : "") + "></td>"
+          + "<td><input type='checkbox' data-f='can_seedance' " + (p.can_seedance ? "checked" : "") + "></td>"
           + "<td><input type='checkbox' data-f='is_active' " + (p.is_active ? "checked" : "") + "></td>"
           + "<td><button data-act='save-plan'>Save</button></td></tr>";
       });
