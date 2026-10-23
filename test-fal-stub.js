@@ -81,6 +81,7 @@ const QUEUE_PATHS = new Set(['/minimax/h3-max/lip-sync/image-to-video', '/fal-ai
                              '/minimax/h3/reference-to-video',
                              '/google/gemini-omni-flash/v1.1/text-to-video']);
 const OMNI_PATH = '/google/gemini-omni-flash/v1.1/text-to-video';
+const SEEDANCE_PATH = '/bytedance/seedance-2.5/text-to-video';
 
 http.createServer((req, res) => {
   const u = new URL(req.url, 'http://127.0.0.1');
@@ -142,6 +143,14 @@ http.createServer((req, res) => {
           String(body?.prompt || '').includes('FAILME')) {
         res.writeHead(500);
         return res.end('stub omni failure');
+      }
+      // Premium failure hook (Phase J): a Seedance 2.5 submit whose
+      // prompt contains "FAILME" fails, so the exactly-once refund
+      // path runs for the premium engine too.
+      if (u.pathname === SEEDANCE_PATH &&
+          String(body?.prompt || '').includes('FAILME')) {
+        res.writeHead(500);
+        return res.end('stub seedance failure');
       }
       // Extend failure hook (Phase C1): an image-to-video submit whose
       // prompt contains "FAILME" fails, so the extend refund path runs.

@@ -96,6 +96,19 @@
 # config app_version marker, and frontend greps for the Settings feedback
 # card, the History "Report issue" action, the version footer and the
 # credits-chip balance-retry fix.
+# The Phase J tests (Seedance 2.5 premium engine) use a twenty-third
+# instance (port 18058, own DB) with the fal bases pointed at a stub
+# (port 18059) extended with a Seedance FAILME hook: config block, the
+# can_seedance plan flag (Extra Pro only) + migration v17, exactly 10
+# generate calls (happy paths at 60/120 credits with the fal body
+# asserted field-for-field against the verified schema via both the
+# TEST_RECORD hook and the stub's recorded calls, the 403 entitlement
+# gate, the draft/character/image/aspect/sound/voice 400 gates — all
+# before charging — and the provider-failure exactly-once refund), plus
+# frontend greps (premium option + honest subtext ship, no 4K wording
+# anywhere near it). A twenty-fourth instance (port 18055, stub 18056)
+# proves the AI Auto Director never routes to the premium engine and a
+# forged seedance claim in an echoed plan falls back to server routing.
 # e.g.  ADMIN_EMAIL=admin@example.com FAL_MODEL_4K=test-4k-model TEST_RECORD_FAL_BODY=1 TRANSLATE_API_BASE=http://127.0.0.1:18099 npm start
 # Run against a FRESH database (fixed test emails are registered each run).
 TEST_FAL_MODEL_4K=${TEST_FAL_MODEL_4K:-fal-ai/kling-video/o3/4k/text-to-video}
@@ -2218,6 +2231,115 @@ check "credits chip fix: loadMe retries /api/me a few seconds apart" "yes" "$(ec
 check "credits chip fix: failure toast tells the user to tap the chip" "yes" "$(echo "$HOMEPAGE22" | grep -qF 'tap the chip to retry' && echo yes || echo no)"
 check "credits chip fix: chip tap re-runs loadMe, buy view still opens on success" "yes" "$(echo "$HOMEPAGE22" | grep -q 'loadMe().then(function (ok)' && echo yes || echo no)"
 kill $SRV22_PID 2>/dev/null
+
+echo "--- Phase J: Seedance 2.5 premium engine (stub instance) ---"
+SD_STUB_PORT=18059
+B23=http://127.0.0.1:18058
+rm -f /tmp/myvideoai-seedance-test.db; rm -rf /tmp/sdgen /tmp/sdvoice; mkdir -p /tmp/sdgen /tmp/sdvoice
+FAL_STUB_PORT=$SD_STUB_PORT node "$(dirname "$0")/test-fal-stub.js" > /tmp/fal-stub-seedance.log 2>&1 &
+SDSTUB_PID=$!
+for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:$SD_STUB_PORT/__calls && break || sleep 0.25; done
+SD_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-seedance-test.db PORT=18058 FAL_KEY=dummy_test_key "$SD_JWT_NAME=seedance-instance-dummy-value" \
+  ADMIN_EMAIL=sdadmin@example.com TEST_RECORD_FAL_BODY=1 \
+  FAL_API_BASE_URL=http://127.0.0.1:$SD_STUB_PORT FAL_QUEUE_BASE_URL=http://127.0.0.1:$SD_STUB_PORT \
+  FAL_POLL_INTERVAL_MS=100 \
+  GENERATED_DIR=/tmp/sdgen VOICE_DIR=/tmp/sdvoice \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-seedance-test.log 2>&1 &
+SRV23_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B23/api/health && break || sleep 0.25; done
+AR23=$(curl -s -X POST $B23/api/auth/register -H 'Content-Type: application/json' -d '{"email":"sdadmin@example.com","password":"password123"}')
+AT23=$(echo $AR23 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+XR23=$(curl -s -X POST $B23/api/auth/register -H 'Content-Type: application/json' -d '{"email":"sdxp@example.com","password":"password123"}')
+XT23=$(echo $XR23 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+XID23=$(curl -s $B23/api/me -H "Authorization: Bearer $XT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+curl -s -o /dev/null -X POST $B23/api/admin/users/$XID23/activate -H "Authorization: Bearer $AT23" -H 'Content-Type: application/json' -d '{"plan_id":"extrapro","period":"monthly"}'
+PR23=$(curl -s -X POST $B23/api/auth/register -H 'Content-Type: application/json' -d '{"email":"sdpro@example.com","password":"password123"}')
+PT23=$(echo $PR23 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+PID23=$(curl -s $B23/api/me -H "Authorization: Bearer $PT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+curl -s -o /dev/null -X POST $B23/api/admin/users/$PID23/activate -H "Authorization: Bearer $AT23" -H 'Content-Type: application/json' -d '{"plan_id":"pro","period":"monthly"}'
+poll23() { # jobId token -> echoes the final generation JSON
+  local st=""
+  for i in $(seq 1 40); do
+    st=$(curl -s $B23/api/generations/$1 -H "Authorization: Bearer $2")
+    [[ "$(echo "$st" | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])' 2>/dev/null)" == "completed" ]] && break || sleep 0.3
+  done
+  echo "$st"
+}
+check "config: seedance_engine block (seedance-2.5, 60/120, aspects, 720p)" "seedance-2.5/bytedance/seedance-2.5/text-to-video/60/120/16:9,9:16,1:1/720p" "$(curl -s $B23/api/config | python3 -c 'import sys,json;s=json.load(sys.stdin)["seedance_engine"];print(s["provider"]+"/"+s["model"]+"/"+str(s["price_credits"]["5"])+"/"+str(s["price_credits"]["10"])+"/"+",".join(s["aspects"])+"/"+s["resolution"])')"
+check "plans: can_seedance flag on Extra Pro only" "True/False/False" "$(curl -s $B23/api/plans | python3 -c 'import sys,json;d=json.load(sys.stdin);f={p["id"]:p["features"]["can_seedance"] for p in d["plans"]};print(str(f["extrapro"])+"/"+str(f["pro"])+"/"+str(f["normal"]))')"
+check "migration v17: can_seedance column applied, extrapro flagged" "ok" "$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-seedance-test.db');
+const cols = db.prepare(\"SELECT name FROM pragma_table_info('plans') WHERE name = 'can_seedance'\").all().length;
+const mig = db.prepare('SELECT COUNT(*) AS c FROM schema_migrations WHERE version = 17').get().c;
+const xp = db.prepare(\"SELECT can_seedance FROM plans WHERE id = 'extrapro'\").get().can_seedance;
+const pro = db.prepare(\"SELECT can_seedance FROM plans WHERE id = 'pro'\").get().can_seedance;
+console.log(cols === 1 && Number(mig) === 1 && xp === 1 && pro === 0 ? 'ok' : 'bad');
+")"
+HOMEPAGE23=$(curl -s $B23/)
+check "phase J frontend: premium option with honest subtext ships" "yes" "$(echo "$HOMEPAGE23" | grep -q 'data-quality="seedance"' && echo "$HOMEPAGE23" | grep -q 'Seedance 2.5 · Premium' && echo "$HOMEPAGE23" | grep -q 'Top-ranked quality · 720p · Extra Pro' && echo yes || echo no)"
+check "phase J frontend: no 4K wording anywhere near the Seedance option" "no" "$(echo "$HOMEPAGE23" | grep -i 'seedance' | grep -qi '4k' && echo yes || echo no)"
+check "phase J frontend: generate body wires the seedance engine + gate ships" "yes" "$(echo "$HOMEPAGE23" | grep -q 'engine: "seedance"' && echo "$HOMEPAGE23" | grep -q 'fillSeedanceGate' && echo yes || echo no)"
+# NOTE: exactly 10 generate calls on this instance (shared limiter).
+SDG1=$(curl -s -X POST $B23/api/generate -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d '{"prompt":"a cinematic drone shot over a misty mountain valley at dawn","engine":"seedance","aspect_ratio":"16:9","duration":5,"mode":"realistic","style":"cinematic"}')
+check "seedance gen (XP, 5s): premium 60 charged, model + 720P + engine recorded" "60/640/bytedance/seedance-2.5/text-to-video/720P/seedance" "$(echo $SDG1 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"])+"/"+g["model"]+"/"+g["resolution"]+"/"+g["engine"])')"
+SDJ1=$(echo $SDG1 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+SDP1=$(poll23 $SDJ1 $XT23)
+check "seedance gen (XP, 5s): completes on the stub with the seedance model recorded" "completed/bytedance/seedance-2.5/text-to-video/720P" "$(echo $SDP1 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["model"]+"/"+g["resolution"])')"
+FB23=$(curl -s $B23/api/_test/fal-body)
+check "seedance gen: recorded fal body is exactly the verified schema (5 fields, string duration, 720p, audio on)" "720p/5/str/True/aspect_ratio,duration,generate_audio,prompt,resolution" "$(echo $FB23 | python3 -c 'import sys,json;b=json.load(sys.stdin)["body"];print(b["resolution"]+"/"+b["duration"]+"/"+("str" if isinstance(b["duration"],str) else "int")+"/"+str(b["generate_audio"])+"/"+",".join(sorted(b.keys())))')"
+SDG2=$(curl -s -X POST $B23/api/generate -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d '{"prompt":"a neon-lit street market at night, rain reflections on wet pavement","engine":"seedance_premium","aspect_ratio":"9:16","duration":10,"mode":"realistic","style":"cinematic"}')
+check "seedance gen (XP, 10s, alias): premium 120 charged" "120/520" "$(echo $SDG2 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+SDCALLS=$(curl -s http://127.0.0.1:$SD_STUB_PORT/__calls)
+check "seedance gen: stub received the 10s call with a string duration" "10/str" "$(echo $SDCALLS | python3 -c 'import sys,json;cs=[c for c in json.load(sys.stdin)["calls"] if c["path"]=="/bytedance/seedance-2.5/text-to-video"];b=cs[-1]["body"];print(b["duration"]+"/"+("str" if isinstance(b["duration"],str) else "int"))')"
+check "seedance gen: Pro plan -> 403, no charge" "403/600" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B23/api/generate -H "Authorization: Bearer $PT23" -H 'Content-Type: application/json' -d '{"prompt":"a cinematic valley at dawn","engine":"seedance","aspect_ratio":"16:9","duration":5}')/$(curl -s $B23/api/me -H "Authorization: Bearer $PT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "seedance gen: aspect 4:3 -> 400 before charging" "400/520" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B23/api/generate -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d '{"prompt":"a cinematic valley at dawn","engine":"seedance","aspect_ratio":"4:3","duration":5}')/$(curl -s $B23/api/me -H "Authorization: Bearer $XT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "seedance gen: draft combo -> 400 before charging" "400/520" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B23/api/generate -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d '{"prompt":"a cinematic valley at dawn","engine":"seedance","aspect_ratio":"16:9","duration":5,"quality":"draft"}')/$(curl -s $B23/api/me -H "Authorization: Bearer $XT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+UP23=$(curl -s -X POST $B23/api/uploads/image -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d "{\"image_base64\":\"$PNG_B64_A\",\"content_type\":\"image/png\"}")
+IMG23=$(echo $UP23 | python3 -c 'import sys,json;print(json.load(sys.stdin)["image_path"])')
+CH23=$(curl -s -X POST $B23/api/characters -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d "{\"name\":\"Captain Sara\",\"image_path\":\"$IMG23\"}")
+CID23=$(echo $CH23 | python3 -c 'import sys,json;print(json.load(sys.stdin)["character"]["id"])')
+check "seedance gen: character combo -> 400 before charging" "400/520" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B23/api/generate -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d "{\"prompt\":\"the captain walks the deck at dawn\",\"engine\":\"seedance\",\"aspect_ratio\":\"16:9\",\"duration\":5,\"character_id\":$CID23}")/$(curl -s $B23/api/me -H "Authorization: Bearer $XT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "seedance gen: source image combo -> 400 before charging" "400/520" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B23/api/generate -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d "{\"prompt\":\"the harbour at dawn, gentle waves\",\"engine\":\"seedance\",\"aspect_ratio\":\"16:9\",\"duration\":5,\"image_path\":\"$IMG23\"}")/$(curl -s $B23/api/me -H "Authorization: Bearer $XT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "seedance gen: sound add-on combo -> 400 (rejected, not silently dropped), no charge" "400/520" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B23/api/generate -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d '{"prompt":"a cinematic valley at dawn","engine":"seedance","aspect_ratio":"16:9","duration":5,"sound":{"mode":"sync","prompt":"city ambience"}}')/$(curl -s $B23/api/me -H "Authorization: Bearer $XT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "seedance gen: voice add-on combo -> 400 before charging" "400/520" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B23/api/generate -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d '{"prompt":"a cinematic valley at dawn","engine":"seedance","aspect_ratio":"16:9","duration":5,"voice":{"kind":"voiceover"}}')/$(curl -s $B23/api/me -H "Authorization: Bearer $XT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "seedance gen: provider failure -> 502 with full exactly-once refund" "502/520" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B23/api/generate -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d '{"prompt":"FAILME a cinematic valley at dawn","engine":"seedance","aspect_ratio":"16:9","duration":5}')/$(curl -s $B23/api/me -H "Authorization: Bearer $XT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+SDHIST=$(curl -s $B23/api/history -H "Authorization: Bearer $XT23")
+check "seedance gen: failed job recorded once as failed at the premium price" "failed/60" "$(echo $SDHIST | python3 -c 'import sys,json;g=json.load(sys.stdin)["generations"][0];print(g["status"]+"/"+str(g["cost_credits"]))')"
+kill $SRV23_PID $SDSTUB_PID 2>/dev/null
+
+echo "--- Phase J: forged auto-plan seedance claim falls back (stub instance) ---"
+SD2_STUB_PORT=18056
+B24=http://127.0.0.1:18055
+rm -f /tmp/myvideoai-seedance2-test.db; rm -rf /tmp/sd2gen /tmp/sd2voice; mkdir -p /tmp/sd2gen /tmp/sd2voice
+FAL_STUB_PORT=$SD2_STUB_PORT node "$(dirname "$0")/test-fal-stub.js" > /tmp/fal-stub-seedance2.log 2>&1 &
+SD2STUB_PID=$!
+for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:$SD2_STUB_PORT/__calls && break || sleep 0.25; done
+SD2_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-seedance2-test.db PORT=18055 FAL_KEY=dummy_test_key "$SD2_JWT_NAME=seedance2-instance-dummy-value" \
+  ADMIN_EMAIL=sd2admin@example.com TEST_RECORD_FAL_BODY=1 \
+  FAL_API_BASE_URL=http://127.0.0.1:$SD2_STUB_PORT FAL_QUEUE_BASE_URL=http://127.0.0.1:$SD2_STUB_PORT \
+  FAL_POLL_INTERVAL_MS=100 \
+  GENERATED_DIR=/tmp/sd2gen VOICE_DIR=/tmp/sd2voice \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-seedance2-test.log 2>&1 &
+SRV24_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B24/api/health && break || sleep 0.25; done
+AR24=$(curl -s -X POST $B24/api/auth/register -H 'Content-Type: application/json' -d '{"email":"sd2admin@example.com","password":"password123"}')
+AT24=$(echo $AR24 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+XR24=$(curl -s -X POST $B24/api/auth/register -H 'Content-Type: application/json' -d '{"email":"sd2xp@example.com","password":"password123"}')
+XT24=$(echo $XR24 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+XID24=$(curl -s $B24/api/me -H "Authorization: Bearer $XT24" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+curl -s -o /dev/null -X POST $B24/api/admin/users/$XID24/activate -H "Authorization: Bearer $AT24" -H 'Content-Type: application/json' -d '{"plan_id":"extrapro","period":"monthly"}'
+FR24=$(curl -s -X POST $B24/api/auth/register -H 'Content-Type: application/json' -d '{"email":"sd2free@example.com","password":"password123"}')
+FT24=$(echo $FR24 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+SDPL=$(curl -s -X POST $B24/api/generate/plan -H "Authorization: Bearer $XT24" -H 'Content-Type: application/json' -d '{"prompt":"a man stands in his shop and says: \"Welcome in, everything is fresh today\"","mode":"realistic","style":"realistic","duration":5}')
+check "auto plan (XP): dialogue routes to omni_speaking — never to the premium seedance engine" "omni_speaking" "$(echo $SDPL | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan"]["engine"]["route"])')"
+FORGED=$(python3 -c 'import json;print(json.dumps({"prompt":"a calm ocean sunset over the harbour","mode":"realistic","style":"realistic","duration":5,"auto_confirmed":True,"auto_plan":{"apply":{"mode":"realistic","aspect_ratio":"16:9","sound":None,"voice":None,"speaking_engine":False,"mute":False},"engine":{"route":"seedance_premium","model":"bytedance/seedance-2.5/text-to-video","reason":"forged"},"base_cost":0,"total_cost":0}}))')
+GENF=$(curl -s -X POST $B24/api/generate -H "Authorization: Bearer $FT24" -H 'Content-Type: application/json' -d "$FORGED")
+check "forged seedance plan: charged the recomputed rate-card total 10, not the premium price" "10/90" "$(echo $GENF | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "forged seedance plan: claim ignored — server routing (H3) recorded" "minimax/h3/text-to-video/h3_text_to_video" "$(echo $GENF | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["model"]+"/"+g["auto_plan"]["engine"]["route"])')"
+kill $SRV24_PID $SD2STUB_PID 2>/dev/null
 
 echo "--- rate limit: burst until 429 ---"
 FOUND429="no"

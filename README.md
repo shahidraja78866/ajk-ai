@@ -913,6 +913,66 @@ exactly three new container ids (`showcaseRail`, `featureRow`,
 `creationsCard`). Test suite: 602 checks, including 7 Phase H
 presence/serving checks.
 
+## Premium engine — Seedance 2.5 (Phase J, migration v17)
+
+ByteDance's Seedance 2.5 — currently the top-ranked video model in
+independent comparisons — is integrated as an explicit, user-chosen
+**premium engine**, approved by the owner on 2026-10-23. It is never
+selected automatically: the AI Auto Director never routes to it, and
+a forged seedance claim in an echoed auto plan is discarded by
+canonicalization exactly like a forged Kling claim (that generation
+runs on the server's own route at the recomputed rate-card price).
+
+**Verified schema** (fal's own llms.txt for
+`bytedance/seedance-2.5/text-to-video`, 2026-10-23). The request body
+has exactly five fields — anything else is a bug: `prompt` (string,
+required), `resolution` (`"720p"` — see below), `duration` (a STRING
+enum, `"5"` / `"10"` — this schema's durations are strings, unlike
+the Omni integer), `aspect_ratio` (`"16:9"` | `"9:16"` | `"1:1"` on
+this route), and `generate_audio` (pinned `true`: synchronized
+native audio, billed the same either way). The schema's `draft`,
+`bitrate_mode`, `codec` and `end_user_id` fields are never sent.
+Output is `{ video: File, seed }`. One correction to the working
+assumption this phase started from: fal's live schema DOES list a
+1080p resolution option (~$1.164/s) alongside 480p (~$0.2205/s) and
+720p (~$0.4730/s) — the app still routes 720p only, per the pricing
+below. Token billing is $0.0214 per 1K tokens at 480p/720p.
+
+**The no-4K rule.** This engine is NEVER labelled or sold as 4K — not
+in the UI, not in plan text, not in this document. BytePlus's own API
+caps Seedance 2.5 output at 1080p; the widely shared "Seedance 2.5
+native 4K" claim merges two announcements (native 4K was added to
+Seedance 2.0). Our native-4K promise belongs only to the Kling O3
+route. The Studio option reads "Seedance 2.5 · Premium — Top-ranked
+quality · 720p · Extra Pro", and the test suite asserts no "4K"
+wording appears anywhere near it.
+
+**How it is sold.** **60 credits (5s) / 120 credits (10s)**, **Extra
+Pro only** (the `can_seedance` entitlement, migration v17; everyone
+else gets 403). Sustainability at the Rs 14/credit floor and
+Rs 277/$: worst case 10s @720p ≈ $4.73 ≈ Rs 1,310 vs floor revenue
+120 × Rs 14 = Rs 1,680 (~28% margin); 5s ≈ $2.37 ≈ Rs 656 vs
+Rs 840. Select it directly with `engine: "seedance"` (alias
+`"seedance_premium"`) on `POST /api/generate`, or with the Seedance
+option in the Studio's Quality control (locked, with the plan note,
+for everyone else). Because the engine generates its own synchronized
+audio, combining it with sound or voice add-ons is **rejected with
+400** (never silently dropped), as are drafts, saved characters,
+source images, aspects outside 16:9 / 9:16 / 1:1, and any confirmed
+AI Auto plan — all before charging. Provider failures use the same
+exactly-once refund as every other route. `GET /api/config` exposes
+`seedance_engine: { provider: "seedance-2.5", model,
+price_credits: { 5: 60, 10: 120 }, aspects: ["16:9", "9:16", "1:1"],
+resolution: "720p" }`, and plan payloads carry
+`features.can_seedance`. Dialogue languages are not stated by fal —
+Urdu speech on this engine is UNVERIFIED and never promised.
+
+**Status: built and simulation-tested — real quality verdict after
+the owner's fal top-up sample** (sample battery Batch F: one 5s 720p
+clip on benchmark prompt P1, ≈ $2.37, judged against the H3 output
+on the same prompt; if it does not clearly beat H3 on realism and
+motion, the engine gets disabled, not sold quietly).
+
 ## Test results (backend, 2026-10-20)
 Run locally with `bash test.sh` — **19/19 tests passed** with a dummy key (no paid calls):
 - ✅ health + config endpoint exposes no secrets

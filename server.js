@@ -313,6 +313,37 @@ const CONFIG = {
   speakingCost: 50,
   speakingAspects: ['16:9', '9:16'],
   speakingResolution: '720p',
+  // --- Premium engine (Phase J: Seedance 2.5) ------------------------------
+  // ByteDance's top-ranked video model on fal, sold as an explicit,
+  // user-chosen PREMIUM engine — the AI Auto Director NEVER routes to it
+  // (premium price), and an echoed auto-plan claiming this route is
+  // discarded by canonicalization like any other forged route. Schema
+  // verified against fal's own llms.txt for
+  // bytedance/seedance-2.5/text-to-video (2026-10-23): prompt (string,
+  // required), resolution (enum "480p" | "720p" | "1080p", default
+  // "720p"), duration (STRING enum "auto" | "4".."30", default "auto" —
+  // strings, unlike the Omni integer), aspect_ratio (enum "auto" |
+  // "21:9" | "16:9" | "4:3" | "1:1" | "3:4" | "9:16", default "auto"),
+  // generate_audio (boolean, default true — synchronized native audio,
+  // billed the same either way), plus draft / bitrate_mode / codec /
+  // end_user_id, which are never sent. NOTE: the live schema DOES list
+  // a 1080p resolution option (~$1.164/s) — the app still routes 720p
+  // only, per the owner's pricing decision below. Output is
+  // { video: File, seed }. HONESTY: this engine is NEVER 4K and is
+  // never labelled or sold as 4K anywhere — BytePlus's own API caps
+  // Seedance 2.5 at 1080p, and native 4K belongs to Seedance 2.0 and to
+  // our Kling O3 route. Prices (fal, token-billed $0.0214 per 1K
+  // tokens): ≈ $0.4730/s at 720p 16:9, ≈ $0.2205/s at 480p. Credit
+  // price (owner decision): 60 (5s) / 120 (10s). Sustainability at the
+  // Rs 14/credit floor and Rs 277/$: worst case 10s @720p ≈ $4.73 ≈
+  // Rs 1,310 vs floor revenue 120 × Rs 14 = Rs 1,680 (~28% margin);
+  // 5s ≈ $2.37 ≈ Rs 656 vs Rs 840. Gate: the can_seedance plan flag
+  // (Extra Pro only). Dialogue languages are NOT stated by fal — Urdu
+  // speech on this engine is UNVERIFIED and is never promised.
+  modelSeedance: (process.env.FAL_MODEL_SEEDANCE || 'bytedance/seedance-2.5/text-to-video').trim(),
+  seedanceCost: { 5: 60, 10: 120 },
+  seedanceAspects: ['16:9', '9:16', '1:1'],
+  seedanceResolution: '720p',
 };
 
 // ---------- Prompt languages ----------
@@ -378,22 +409,22 @@ const PLAN_DEFAULTS = [
   { id: 'weekly',   name: 'Weekly',    price_monthly: 0,    price_yearly: 0,
     credits_monthly: 0, price_weekly: 1800, credits_weekly: 80,
     quality: '768P', quality_label: '768P',      resolution: '768P', model: CONFIG.model,   sort_order: 0,
-    can_veo: 0, can_lipsync: 0,
+    can_veo: 0, can_lipsync: 0, can_seedance: 0,
     play_product_monthly: null, play_product_yearly: null, play_product_weekly: 'ajk_weekly' },
   { id: 'normal',   name: 'Normal',    price_monthly: 5600, price_yearly: 56000,
     credits_monthly: 400, price_weekly: null, credits_weekly: null,
     quality: '768P', quality_label: '768P',      resolution: '768P', model: CONFIG.model,   sort_order: 1,
-    can_veo: 0, can_lipsync: 0,
+    can_veo: 0, can_lipsync: 0, can_seedance: 0,
     play_product_monthly: 'ajk_normal_monthly',   play_product_yearly: 'ajk_normal_yearly',   play_product_weekly: null },
   { id: 'pro',      name: 'Pro',       price_monthly: 9500, price_yearly: 95000,
     credits_monthly: 500, price_weekly: null, credits_weekly: null,
     quality: '2K',   quality_label: '2K',        resolution: '2K',   model: CONFIG.model,   sort_order: 2,
-    can_veo: 1, can_lipsync: 1,
+    can_veo: 1, can_lipsync: 1, can_seedance: 0,
     play_product_monthly: 'ajk_pro_monthly',      play_product_yearly: 'ajk_pro_yearly',      play_product_weekly: null },
   { id: 'extrapro', name: 'Extra Pro', price_monthly: 14000, price_yearly: 140000,
     credits_monthly: 600, price_weekly: null, credits_weekly: null,
     quality: '4K',   quality_label: 'Native 4K', resolution: '4K',   model: CONFIG.model4k, sort_order: 3,
-    can_veo: 1, can_lipsync: 1,
+    can_veo: 1, can_lipsync: 1, can_seedance: 1,
     play_product_monthly: 'ajk_extrapro_monthly', play_product_yearly: 'ajk_extrapro_yearly', play_product_weekly: null },
 ];
 
@@ -724,6 +755,14 @@ const MIGRATIONS = [
       status TEXT NOT NULL DEFAULT 'open',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );` },
+  // v17 — premium engine entitlement (Phase J): plans gain can_seedance,
+  // the gate for the Seedance 2.5 premium engine (Extra Pro only). Same
+  // one-time, version-gated pattern as the v9 flags, so later admin
+  // edits are respected; PLAN_DEFAULTS re-syncs the flag structurally
+  // on every boot like can_veo/can_lipsync.
+  { version: 17, up: `
+    ALTER TABLE plans ADD COLUMN can_seedance INTEGER NOT NULL DEFAULT 0;
+    UPDATE plans SET can_seedance = 1 WHERE id = 'extrapro';` },
 ];
 {
   const applied = new Set(db.prepare('SELECT version FROM schema_migrations').all().map(r => r.version));
@@ -747,13 +786,13 @@ for (const p of PLAN_DEFAULTS) {
     db.prepare(`INSERT INTO plans (id, name, price_monthly, price_yearly, credits_monthly,
                 quality, quality_label, resolution, model, sort_order,
                 play_product_monthly, play_product_yearly,
-                price_weekly, credits_weekly, play_product_weekly, can_veo, can_lipsync)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+                price_weekly, credits_weekly, play_product_weekly, can_veo, can_lipsync, can_seedance)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(p.id, p.name, p.price_monthly, p.price_yearly, p.credits_monthly,
            p.quality, p.quality_label, p.resolution, p.model, p.sort_order,
            p.play_product_monthly, p.play_product_yearly,
            p.price_weekly, p.credits_weekly, p.play_product_weekly,
-           p.can_veo, p.can_lipsync);
+           p.can_veo, p.can_lipsync, p.can_seedance);
   } else {
     // Play product ids are backfilled only when unset (COALESCE) — an
     // admin's edits in the Admin Panel always win over these defaults.
@@ -761,12 +800,12 @@ for (const p of PLAN_DEFAULTS) {
     // like quality/model; prices and credit amounts never re-sync.
     db.prepare(`UPDATE plans SET name = ?, quality = ?, quality_label = ?,
                 resolution = ?, model = ?, sort_order = ?,
-                can_veo = ?, can_lipsync = ?,
+                can_veo = ?, can_lipsync = ?, can_seedance = ?,
                 play_product_monthly = COALESCE(play_product_monthly, ?),
                 play_product_yearly = COALESCE(play_product_yearly, ?),
                 play_product_weekly = COALESCE(play_product_weekly, ?) WHERE id = ?`)
       .run(p.name, p.quality, p.quality_label, p.resolution, p.model, p.sort_order,
-           p.can_veo, p.can_lipsync,
+           p.can_veo, p.can_lipsync, p.can_seedance,
            p.play_product_monthly, p.play_product_yearly, p.play_product_weekly, p.id);
   }
 }
@@ -945,8 +984,10 @@ function publicPlan(p) {
     // (the talking-character engine, Phase B). can_veo gates the one-step
     // speaking-video engine (Phase E, Gemini Omni — it replaced the
     // never-wired Veo route; the flag keeps its historical name).
-    // max_quality is the plan's routed quality ceiling.
+    // can_seedance gates the Seedance 2.5 premium engine (Phase J,
+    // Extra Pro only). max_quality is the plan's routed quality ceiling.
     features: { can_veo: !!p.can_veo, can_lipsync: !!p.can_lipsync,
+      can_seedance: !!p.can_seedance,
       max_quality: p.quality },
     // Google Play subscription product ids (set in Play Console; editable
     // in the Admin Panel). Used by the app's Digital Goods purchase flow.
@@ -1141,6 +1182,15 @@ app.get('/api/config', (req, res) => res.json({
   // audio, so no voice/sound add-ons combine with it.
   speaking_engine: { provider: 'gemini-omni', model: CONFIG.modelOmni,
     price_credits: CONFIG.speakingCost, aspects: CONFIG.speakingAspects },
+  // Premium engine (Phase J): Seedance 2.5 — a direct, user-chosen
+  // premium engine (AI Auto never routes to it), Extra Pro only (the
+  // can_seedance entitlement), 16:9 / 9:16 / 1:1, routed at 720p with
+  // native synchronized audio included. Priced per duration
+  // (60 credits / 5s, 120 credits / 10s). It is NOT a 4K engine and is
+  // never presented as one.
+  seedance_engine: { provider: 'seedance-2.5', model: CONFIG.modelSeedance,
+    price_credits: CONFIG.seedanceCost, aspects: CONFIG.seedanceAspects,
+    resolution: CONFIG.seedanceResolution },
   // Advertising preparation (AdMob groundwork): flags and placement names
   // only — the publisher id itself is never exposed here. `enabled` is
   // true ONLY when ADS_ENABLED=1 and a valid publisher id are both set;
@@ -2374,6 +2424,45 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
       speakingDialogue = autoPlanToStore.apply.speaking_dialogue;
   }
 
+  // --- Premium engine (Phase J: Seedance 2.5) ------------------------------
+  // Selected DIRECTLY via engine:'seedance' (alias 'seedance_premium') —
+  // never by the AI Auto Director, which never proposes this engine
+  // (premium price): canonicalizeAutoPlan rebuilds the plan's engine
+  // from the fresh analysis, which has no seedance route, so a forged
+  // seedance claim in an echoed plan is discarded exactly like a forged
+  // Kling claim. A confirmed auto plan therefore cannot combine with
+  // this engine (400 below). The engine generates its own synchronized
+  // native audio, so voice/sound add-ons are REJECTED with 400 (never
+  // silently dropped), as are drafts, characters and source images
+  // (text-to-video only) and aspects outside 16:9 / 9:16 / 1:1 — all
+  // BEFORE any charge. Entitlement: Extra Pro only (can_seedance).
+  // Routed at 720p — this engine is NEVER 4K (see the CONFIG note).
+  const wantsSeedance = ['seedance', 'seedance_premium']
+    .includes(String(req.body?.engine || '').toLowerCase());
+  let isSeedance = false;
+  if (wantsSeedance) {
+    if (autoPlanToStore)
+      return res.status(400).json({ error: 'The Seedance premium engine is a direct choice and never part of an AI Auto plan. Turn AI Auto off, or generate without the premium engine.' });
+    if (isDraft)
+      return res.status(400).json({ error: 'The Seedance premium engine makes full-quality videos only — it cannot be combined with a draft.' });
+    if (character)
+      return res.status(400).json({ error: 'The Seedance premium engine is text-to-video only — saved-character videos keep the reference route.' });
+    if (sourceImagePath)
+      return res.status(400).json({ error: 'The Seedance premium engine is text-to-video only — videos from a starting image keep the image-to-video route.' });
+    if (!CONFIG.seedanceAspects.includes(aspect_ratio))
+      return res.status(400).json({ error: `The Seedance premium engine only makes ${CONFIG.seedanceAspects.join(', ')} videos — pick one of those aspect ratios, or generate without the premium engine.` });
+    if (soundSpec)
+      return res.status(400).json({ error: 'The Seedance premium engine generates its own synchronized audio, so sound add-ons cannot be combined with it. Remove the sound add-on, or generate without the premium engine.' });
+    if (autoVoiceSpec || (req.body?.voice && typeof req.body.voice === 'object' && req.body.voice.kind))
+      return res.status(400).json({ error: 'The Seedance premium engine generates its own synchronized audio and speech, so voiceover/lip-sync add-ons cannot be combined with it.' });
+    refreshSubscriptionState(req.user.id);
+    const sdSub = currentSubscription(req.user.id);
+    const sdPlan = sdSub ? getPlan(sdSub.plan_id) : null;
+    if (!sdPlan || !sdPlan.can_seedance)
+      return res.status(403).json({ error: 'Seedance 2.5 premium videos are included with the Extra Pro plan.' });
+    isSeedance = true;
+  }
+
   // --- Plan routing -------------------------------------------------------
   // The user's current plan sets the maximum quality (resolution + model).
   // A lower resolution may be requested explicitly; a higher one is capped
@@ -2428,10 +2517,17 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
   // The structural gates above guarantee no character/image/draft/add-ons
   // reach this point, so the override is unconditional here.
   if (isSpeaking) { model = CONFIG.modelOmni; resolution = '720P'; }
+  // Premium override (Phase J): the Seedance 2.5 route at 720p. Its
+  // structural gates above likewise guarantee no character/image/draft/
+  // add-ons reach this point, so the override is unconditional here.
+  if (isSeedance) { model = CONFIG.modelSeedance; resolution = '720P'; }
   // Rate card (v9): the credit cost comes from the ROUTED quality's own
   // row — 768P 10/20, 2K 15/30, native 4K 40/80 for 5s/10s. Speaking jobs
-  // are the flat speaking price instead (50 credits, either duration).
-  const cost = isSpeaking ? CONFIG.speakingCost
+  // are the flat speaking price instead (50 credits, either duration);
+  // Seedance premium jobs pay the per-duration premium price
+  // (60 credits / 5s, 120 credits / 10s).
+  const cost = isSeedance ? (CONFIG.seedanceCost[Number(duration)] ?? CONFIG.seedanceCost[5])
+             : isSpeaking ? CONFIG.speakingCost
              : isDraft ? (CONFIG.draftCost[Number(duration)] ?? 7)
                        : generationCost(resolution, Number(duration));
   // The sound add-on is charged together with the video in the same
@@ -2523,9 +2619,19 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
         !effectivePrompt.includes(speakingDialogue.text))
       speakingPrompt = `${effectivePrompt} — the speaker says: "${speakingDialogue.text}" — style: ${style}`;
   }
+  // Premium body (Phase J): EXACTLY the Seedance 2.5 schema fields this
+  // route uses — prompt, resolution ("720p"), duration as a STRING enum
+  // ("5"/"10" — this schema's durations are strings, unlike the Omni
+  // integers), aspect_ratio, and generate_audio pinned true (native
+  // synchronized audio is part of the premium price). The schema's
+  // draft / bitrate_mode / codec / end_user_id fields are never sent.
   const falBody = isSpeaking
     ? { prompt: speakingPrompt, aspect_ratio,
         resolution: CONFIG.speakingResolution, duration: Number(duration) }
+    : isSeedance
+    ? { prompt: `${effectivePrompt} — style: ${style}`,
+        resolution: CONFIG.seedanceResolution, duration: String(duration),
+        aspect_ratio, generate_audio: true }
     : character
     ? { prompt: `Image 1 is the main character. ${effectivePrompt} — style: ${style}`,
         duration: Number(duration), aspect_ratio, resolution,
@@ -2572,6 +2678,10 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
                    speaking_engine: { provider: 'gemini-omni', model: CONFIG.modelOmni,
                                       price_credits: CONFIG.speakingCost },
                    note: 'Speaking engine: the dialogue and audio are generated by the model in one step. Speech quality — including Urdu — is unverified; judge it on this sample.' } : {}),
+               ...(isSeedance ? { engine: 'seedance',
+                   seedance_engine: { provider: 'seedance-2.5', model: CONFIG.modelSeedance,
+                                      price_credits: cost },
+                   note: 'Seedance 2.5 premium engine: 720p with native synchronized audio included. Real-world quality is unverified until the first paid sample is reviewed.' } : {}),
                ...(fallbackNote ? { note: fallbackNote } : {}) });
   } catch (e) {
     failAndRefund(jobId, `Provider submission failed (${e.message})`);
@@ -5365,7 +5475,8 @@ app.get('/api/admin/plans', auth, requireAdmin, (req, res) => {
 // to new payments, credits (monthly or weekly) to the next
 // activation/renewal grant, resolution/model to the next generation.
 // price_weekly/credits_weekly are nullable (null = the plan has no weekly
-// period); can_veo/can_lipsync are the Phase B entitlement flags.
+// period); can_veo/can_lipsync are the Phase B entitlement flags and
+// can_seedance is the Phase J premium-engine flag (Extra Pro by default).
 app.put('/api/admin/plans/:id', auth, requireAdmin, (req, res) => {
   const plan = getPlan(req.params.id);
   if (!plan) return res.status(404).json({ error: 'Plan not found.' });
@@ -5403,6 +5514,7 @@ app.put('/api/admin/plans/:id', auth, requireAdmin, (req, res) => {
       is_active: b.is_active !== undefined ? (b.is_active ? 1 : 0) : plan.is_active,
       can_veo: boolField('can_veo'),
       can_lipsync: boolField('can_lipsync'),
+      can_seedance: boolField('can_seedance'),
       // Google Play subscription product ids (must match Play Console).
       play_product_monthly: b.play_product_monthly !== undefined
         ? (String(b.play_product_monthly).trim().slice(0, 120) || null) : plan.play_product_monthly,
@@ -5416,13 +5528,13 @@ app.put('/api/admin/plans/:id', auth, requireAdmin, (req, res) => {
     db.prepare(`UPDATE plans SET price_monthly = ?, price_yearly = ?, credits_monthly = ?,
                 price_weekly = ?, credits_weekly = ?,
                 quality_label = ?, quality = ?, resolution = ?, model = ?, is_active = ?,
-                can_veo = ?, can_lipsync = ?,
+                can_veo = ?, can_lipsync = ?, can_seedance = ?,
                 play_product_monthly = ?, play_product_yearly = ?, play_product_weekly = ?,
                 updated_at = datetime('now') WHERE id = ?`)
       .run(updated.price_monthly, updated.price_yearly, updated.credits_monthly,
            updated.price_weekly, updated.credits_weekly,
            updated.quality_label, updated.quality, updated.resolution, updated.model,
-           updated.is_active, updated.can_veo, updated.can_lipsync,
+           updated.is_active, updated.can_veo, updated.can_lipsync, updated.can_seedance,
            updated.play_product_monthly, updated.play_product_yearly, updated.play_product_weekly, plan.id);
     res.json({ plan: getPlan(plan.id) });
   } catch (e) {
