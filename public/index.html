@@ -378,6 +378,19 @@
       .settings-grid{ display:grid; grid-template-columns:1fr 1fr; gap:20px; align-items:start; }
       .settings-grid .card + .card{ margin-top:0; }
       .settings-grid .stack{ display:grid; gap:20px; }
+      /* ---------- feedback (Phase I) ---------- */
+      #feedbackCard textarea, #feedbackCard select{
+        width:100%; background:var(--panel-2); border:1px solid var(--line); border-radius:11px;
+        color:var(--text); padding:11px 12px; font-size:14.5px;
+      }
+      #feedbackCard textarea{ min-height:96px; resize:vertical; line-height:1.55; }
+      #feedbackCard textarea:focus, #feedbackCard select:focus{ outline:2px solid var(--amber); outline-offset:1px; border-color:transparent; }
+      .fb-chip{
+        display:inline-flex; align-items:center; gap:8px; background:var(--panel-2);
+        border:1px solid var(--line); border-radius:999px; padding:5px 8px 5px 12px;
+        font-size:12.5px; color:var(--muted); margin-bottom:6px;
+      }
+      .fb-chip .linkish{ font-size:12.5px; }
       .url-row{ display:flex; gap:9px; flex-wrap:wrap; }
       .url-row input{
         flex:1; min-width:200px; background:var(--panel-2); border:1px solid var(--line); border-radius:10px;
@@ -1450,7 +1463,28 @@
                   <tr><td>GET /api/plans</td><td>Subscription plans and PKR prices</td></tr>
                   <tr><td>GET /api/payments</td><td>Your payment history</td></tr>
                   <tr><td>POST /api/report</td><td>Flag a generation for review</td></tr>
+                  <tr><td>POST /api/feedback</td><td>Send feedback to the team (Settings card below)</td></tr>
                 </table>
+              </div>
+            </div>
+
+            <div class="card" id="feedbackCard">
+              <h2>Feedback · رائے / مسئلہ</h2>
+              <p class="sub">Found a problem, a bad result, or something you wish the app did? Send it straight to the team — your app version and device info are attached automatically. آپ کی رائے اور مسائل یہاں سے بھیجیں۔</p>
+              <div id="feedbackAttach" style="display:none;">
+                <span class="fb-chip"><span>Attached: <span id="feedbackAttachLabel"></span></span><button type="button" class="linkish" id="feedbackDetachBtn">Remove</button></span>
+              </div>
+              <div class="field-label"><span>Category · قسم</span></div>
+              <select id="feedbackCategory">
+                <option value="bug">مسئلہ — Bug / problem</option>
+                <option value="quality">کوالٹی — Video or voice quality</option>
+                <option value="feature">نئی سہولت — Feature request</option>
+                <option value="other">دیگر — Other</option>
+              </select>
+              <div class="field-label"><span>Your message</span><span class="count" id="feedbackCount">0 / 1000</span></div>
+              <textarea id="feedbackMessage" rows="4" maxlength="1000" placeholder="What happened? What did you expect instead?"></textarea>
+              <div class="result-actions">
+                <button type="button" class="btn primary" id="feedbackSendBtn">Send feedback</button>
               </div>
             </div>
           </div>
@@ -1480,6 +1514,7 @@
             </div>
           </div>
         </div>
+        <p class="sub mono" id="appVersionLine" style="margin-top:18px;">AJK AI · Version –</p>
       </section>
 
       <!-- ================= PRIVACY ================= -->
@@ -2083,6 +2118,9 @@
             if (res.ok && res.data) {
               cfg = res.data;
               renderControls(cfg);
+              if (cfg.app_version !== undefined && cfg.app_version !== null) {
+                $("#appVersionLine").textContent = "AJK AI · Version " + cfg.app_version;
+              }
               var modelName = cfg.model || "text-to-video";
               $("#modelLine").textContent = "Model: " + modelName + ".";
               if (cfg.signup_credits !== undefined) {
@@ -2148,7 +2186,14 @@
           $("#currentPlanDetail").textContent = detail;
           updateCost();
         }
-        function loadMe() {
+        // Owner-visible bug fix (Phase I build): loadMe() used to give up
+        // silently on ANY non-401 failure (network error, 5xx, server
+        // waking/restarting), so the credits chip could stay stuck at
+        // "– credits" for the whole session. Now it retries a few seconds
+        // apart (401 handling is unchanged — still signs out), and on final
+        // failure tells the user the chip itself retries.
+        function loadMe() { return loadMeAttempt(0); }
+        function loadMeAttempt(n) {
           if (!token) return Promise.resolve(false);
           return api("/api/me").then(function (res) {
             if (res.ok && res.data) {
@@ -2165,7 +2210,13 @@
               updateAdSlots();
               return true;
             }
-            if (res.status === 401) { signOut(true); toast("Your session expired — please sign in again."); }
+            if (res.status === 401) { signOut(true); toast("Your session expired — please sign in again."); return false; }
+            if (n < 3) {
+              return new Promise(function (resolve) {
+                setTimeout(function () { resolve(loadMeAttempt(n + 1)); }, 3000);
+              });
+            }
+            toast("Balance couldn't load — tap the chip to retry");
             return false;
           });
         }
@@ -2994,6 +3045,9 @@
               var rp = makeBtn("Report");
               rp.addEventListener("click", function () { openReport(g.id, g.prompt); });
               actions.appendChild(rp);
+              var ri = makeBtn("Report issue");
+              ri.addEventListener("click", function () { attachFeedback(g.id, g.prompt); });
+              actions.appendChild(ri);
               item.appendChild(actions);
               if (soundPanel) item.appendChild(soundPanel);
               if (finishPanel) item.appendChild(finishPanel);
@@ -3412,7 +3466,12 @@
             loadMyPacks();
           });
         });
-        $("#creditsChip").addEventListener("click", function () { showView("buy"); });
+        // Credits chip: tapping re-runs loadMe() (the retry the failure
+        // toast points at). On a healthy session the chip still opens the
+        // Buy view, exactly as before.
+        $("#creditsChip").addEventListener("click", function () {
+          loadMe().then(function (ok) { if (ok) showView("buy"); });
+        });
         $("#buyFromPlansBtn").addEventListener("click", function () { showView("buy"); });
 
         /* ---------- reporting ---------- */
@@ -4222,6 +4281,52 @@
           lsSet(LS_BASE, apiBase);
           setConnStatus("Testing " + apiBase + "/api/config …");
           loadConfig();
+        });
+
+        /* ---------- feedback (Phase I: tester reports) ---------- */
+        // Reports are filed from the Settings card. The server stamps
+        // the app version + user agent itself; the client only sends the
+        // category, the message and — when attached via a History item's
+        // "Report issue" action — that generation's id.
+        var feedbackAttachedId = null;
+        function attachFeedback(genId, promptText) {
+          feedbackAttachedId = genId || null;
+          var box = $("#feedbackAttach");
+          if (feedbackAttachedId) {
+            $("#feedbackAttachLabel").textContent = "video #" + feedbackAttachedId +
+              (promptText ? " — \"" + (promptText.length > 50 ? promptText.slice(0, 50) + "…" : promptText) + "\"" : "");
+            box.style.display = "block";
+          } else {
+            box.style.display = "none";
+          }
+          if (genId) {
+            showView("settings");
+            var card = $("#feedbackCard");
+            if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
+            toast("Tell us what went wrong with this video — it is attached to your feedback.");
+          }
+        }
+        $("#feedbackDetachBtn").addEventListener("click", function () { attachFeedback(null); });
+        $("#feedbackMessage").addEventListener("input", function () {
+          $("#feedbackCount").textContent = $("#feedbackMessage").value.length + " / 1000";
+        });
+        $("#feedbackSendBtn").addEventListener("click", function () {
+          if (!token) { toast("Please sign in first — feedback is tied to your account so the team can follow up."); return; }
+          var msg = $("#feedbackMessage").value.trim();
+          if (msg.length < 5) { toast("Please write a little more (at least 5 characters) so the team can act on it."); return; }
+          var btn = $("#feedbackSendBtn");
+          btn.disabled = true; btn.textContent = "Sending…";
+          var body = { category: $("#feedbackCategory").value, message: msg };
+          if (feedbackAttachedId) body.generation_id = feedbackAttachedId;
+          api("/api/feedback", { method: "POST", body: body }).then(function (res) {
+            btn.disabled = false; btn.textContent = "Send feedback";
+            if (res.network) { toast("Backend not connected — your feedback could not be sent. Try again once the API is reachable."); return; }
+            if (!res.ok) { toast(errText(res, "Feedback could not be sent")); return; }
+            $("#feedbackMessage").value = "";
+            $("#feedbackCount").textContent = "0 / 1000";
+            attachFeedback(null);
+            toast("Feedback sent — thank you! The team will review it.");
+          });
         });
 
         /* ---------- init ---------- */

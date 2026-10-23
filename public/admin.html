@@ -30,6 +30,7 @@
   .hidden{ display:none; }
   td button{ margin:0 4px 4px 0; padding:5px 9px; font-size:12px; }
   td select, td input{ padding:5px 7px; font-size:12.5px; }
+  .badge{ display:inline-block; background:var(--panel2); border:1px solid var(--line); border-radius:999px; padding:1px 8px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -82,6 +83,19 @@
     <h2>Recent payments</h2>
     <p class="sub">Billing / transactions — every provider (manual test, Google Play, PayFast gateway), including refunded. Revenue above counts <strong>succeeded</strong> payments only, so refunded payments are excluded automatically.</p>
     <div class="card scroll"><table id="paymentsTable"></table></div>
+
+    <h2>Feedback — tester &amp; user reports</h2>
+    <p class="sub">Filed from inside the app (Settings → Feedback). App version and user agent were stamped by the server when the report was sent. Resolve when handled; reopen if it needs another look.</p>
+    <div class="row" style="margin-bottom:10px;">
+      <div style="flex:0 0 200px;"><label>Status filter</label>
+        <select id="feedbackFilter">
+          <option value="" selected>All</option>
+          <option value="open">Open</option>
+          <option value="resolved">Resolved</option>
+        </select></div>
+      <div style="flex:0;"><button id="feedbackRefresh">Refresh</button></div>
+    </div>
+    <div class="card scroll"><table id="feedbackTable"></table></div>
   </div>
 </div>
 
@@ -169,7 +183,30 @@
       });
       $("paymentsTable").innerHTML = html || "<tr><td>No payments yet.</td></tr>";
     });
+    renderFeedback();
   }
+  function renderFeedback() {
+    var f = $("feedbackFilter") ? $("feedbackFilter").value : "";
+    api("/api/admin/feedback" + (f ? "?status=" + encodeURIComponent(f) : "")).then(function (r) {
+      if (!r.ok) return;
+      var html = "<tr><th>ID</th><th>From</th><th>Category</th><th>Message</th><th>Context</th><th>Status</th><th>Actions</th></tr>";
+      (r.data.feedback || []).forEach(function (fb) {
+        var meta = "v" + esc(fb.app_version || "?") + " · " + esc(fb.created_at)
+          + (fb.generation_id ? "<br>generation #" + fb.generation_id : "")
+          + (fb.user_agent ? "<br><small>" + esc(fb.user_agent) + "</small>" : "");
+        html += "<tr data-feedback='" + fb.id + "'><td>" + fb.id + "</td><td>" + esc(fb.user_email) + "</td>"
+          + "<td><span class='badge'>" + esc(fb.category) + "</span></td>"
+          + "<td>" + esc(fb.message) + "</td>"
+          + "<td><small>" + meta + "</small></td>"
+          + "<td>" + esc(fb.status) + "</td>"
+          + "<td><button data-act='feedback-toggle' data-next='" + (fb.status === "open" ? "resolved" : "open") + "'>"
+          + (fb.status === "open" ? "Resolve" : "Reopen") + "</button></td></tr>";
+      });
+      $("feedbackTable").innerHTML = html || "<tr><td>No feedback yet.</td></tr>";
+    });
+  }
+  $("feedbackFilter").addEventListener("change", renderFeedback);
+  $("feedbackRefresh").addEventListener("click", renderFeedback);
   function renderPackPurchases() {
     var f = $("packPurchaseFilter") ? $("packPurchaseFilter").value : "pending";
     api("/api/admin/pack-purchases" + (f ? "?status=" + encodeURIComponent(f) : "")).then(function (r) {
@@ -244,6 +281,12 @@
         kbody[f] = inp.type === "checkbox" ? inp.checked : (inp.type === "number" ? Number(inp.value) : inp.value);
       });
       api("/api/admin/packs/" + pkid, { method: "PUT", body: kbody }).then(function (r) { done(r, "Pack saved"); });
+      return;
+    }
+    if (act === "feedback-toggle") {
+      var trf = btn.closest("tr"), fid = trf.getAttribute("data-feedback"), next = btn.getAttribute("data-next");
+      api("/api/admin/feedback/" + fid + "/status", { method: "POST", body: { status: next } })
+        .then(function (r) { done(r, "Feedback " + (next === "resolved" ? "resolved" : "reopened")); });
       return;
     }
     if (act === "approve-pack" || act === "reject-pack") {
