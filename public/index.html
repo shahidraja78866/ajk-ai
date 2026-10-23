@@ -1724,6 +1724,98 @@
         }
         $("#refreshHistoryBtn").addEventListener("click", function () { loadHistory(); toast("History refreshed."); });
 
+        /* ---------- Google Play Billing (Digital Goods API) + gateway checkout ---------- */
+        // The Digital Goods API exists ONLY inside the installed Play
+        // Store (TWA) app. On the plain web it is absent and the existing
+        // manual wallet flows stay exactly as they are. Every Play error
+        // path shows a clear message — a purchase is only ever reported
+        // after the SERVER verifies it with Google (never a fake success).
+        var playServicePromise = null;
+        if (typeof window.getDigitalGoodsService === "function") {
+          try {
+            playServicePromise = Promise.resolve(
+              window.getDigitalGoodsService("https://play.google.com/billing"))
+              .catch(function () { return null; });
+          } catch (e) { playServicePromise = null; }
+        }
+        function playBuy(productId, kind, btn) {
+          if (!token) { toast("Please sign in first — purchases are tied to your account."); return; }
+          if (!productId) { toast("This item is not available in Google Play yet."); return; }
+          var label = btn ? btn.textContent : "";
+          if (btn) { btn.disabled = true; btn.textContent = "Opening Google Play…"; }
+          function done(msg) {
+            if (btn) { btn.disabled = false; btn.textContent = label; }
+            if (msg) toast(msg);
+          }
+          playServicePromise.then(function (service) {
+            if (!service) { done("Google Play Billing is not available in this app right now."); return null; }
+            return service.getDetails([productId]).then(function (details) {
+              var item = details && details[0];
+              if (!item) { done("This item is not available in Google Play yet."); return null; }
+              var req = new PaymentRequest(
+                [{ supportedMethods: "https://play.google.com/billing", data: { sku: productId } }],
+                { total: { label: item.title || "AJK AI", amount: {
+                  currency: (item.price && item.price.currency) || "PKR",
+                  value: (item.price && item.price.value) || "0" } } });
+              return req.show().then(function (response) {
+                var d = (response && response.details) || {};
+                var purchaseToken = d.purchaseToken || d.token || "";
+                if (!purchaseToken) {
+                  return response.complete("fail").then(function () {
+                    done("Google Play did not return a purchase token — nothing was added.");
+                  });
+                }
+                return api("/api/billing/play/verify", { method: "POST",
+                  body: { kind: kind, product_id: productId, purchase_token: purchaseToken } })
+                  .then(function (res) {
+                    if (!res.ok) {
+                      return response.complete("fail").then(function () {
+                        done(errText(res, "The purchase could not be verified — no credits were added."));
+                      });
+                    }
+                    return response.complete("success").then(function () {
+                      done(kind === "pack"
+                        ? "Purchase verified — your credits have been added."
+                        : "Subscription verified — your plan is now active.");
+                      loadMe();
+                      if (kind === "pack") loadBuy(); else { renderPlans(); loadPayments(); }
+                    });
+                  });
+              });
+            });
+          }).catch(function () {
+            done("Google Play checkout was cancelled or failed. No credits were added.");
+          });
+        }
+        // PayFast gateway checkout (Easypaisa / JazzCash / cards / bank).
+        // The server creates a pending order and returns the hosted
+        // checkout form; credits land only when the gateway's signed
+        // webhook confirms the payment server-side (usually seconds).
+        function gatewayCheckout(packId, btn) {
+          if (!token) { toast("Please sign in first — purchases are tied to your account."); return; }
+          var label = btn.textContent;
+          btn.disabled = true; btn.textContent = "Opening secure checkout…";
+          api("/api/billing/gateway/checkout", { method: "POST", body: { pack_id: packId } })
+            .then(function (res) {
+              if (!res.ok || !res.data || !res.data.checkout_url) {
+                btn.disabled = false; btn.textContent = label;
+                toast(errText(res, "The instant checkout could not be started."));
+                return;
+              }
+              var form = document.createElement("form");
+              form.method = res.data.method || "POST";
+              form.action = res.data.checkout_url;
+              form.style.display = "none";
+              Object.keys(res.data.params || {}).forEach(function (k) {
+                var inp = document.createElement("input");
+                inp.type = "hidden"; inp.name = k; inp.value = res.data.params[k];
+                form.appendChild(inp);
+              });
+              document.body.appendChild(form);
+              form.submit();
+            });
+        }
+
         /* ---------- plans & payments ---------- */
         var plansCache = null;
         function renderPlans() {
@@ -1761,11 +1853,28 @@
               });
               card.appendChild(ul);
               var sp = document.createElement("div"); sp.className = "spacer"; card.appendChild(sp);
-              var btn = document.createElement("button");
-              btn.type = "button"; btn.className = "btn"; btn.disabled = true;
-              btn.textContent = "Play Store پر دستیاب ہو گا — Coming soon";
-              btn.title = "Subscriptions will be sold through Google Play Billing when the app launches on the Play Store.";
-              card.appendChild(btn);
+              if (playServicePromise) {
+                var bm = makeBtn("Subscribe monthly — Google Play", true);
+                bm.addEventListener("click", function () {
+                  playBuy(p.play_product_id && p.play_product_id.monthly, "subscription", bm);
+                });
+                card.appendChild(bm);
+                var by = makeBtn("Subscribe yearly — Google Play", false);
+                by.addEventListener("click", function () {
+                  playBuy(p.play_product_id && p.play_product_id.yearly, "subscription", by);
+                });
+                card.appendChild(by);
+                var pnote = document.createElement("p");
+                pnote.className = "fineprint";
+                pnote.textContent = "Billed by Google Play — your plan activates as soon as Google confirms the payment.";
+                card.appendChild(pnote);
+              } else {
+                var btn = document.createElement("button");
+                btn.type = "button"; btn.className = "btn"; btn.disabled = true;
+                btn.textContent = "Play Store پر دستیاب ہو گا — Coming soon";
+                btn.title = "Subscriptions will be sold through Google Play Billing when the app launches on the Play Store.";
+                card.appendChild(btn);
+              }
               grid.appendChild(card);
             });
           });
@@ -1914,6 +2023,20 @@
                 window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
               });
               card.appendChild(btn);
+              if (playServicePromise && p.play_product_id) {
+                var pb = makeBtn("Buy with Google Play", false);
+                pb.addEventListener("click", function () { playBuy(p.play_product_id, "pack", pb); });
+                card.appendChild(pb);
+              }
+              if (cfg && cfg.gateway_configured) {
+                var gb = makeBtn("Instant — pay with Easypaisa / JazzCash / Card", true);
+                gb.addEventListener("click", function () { gatewayCheckout(p.id, gb); });
+                card.appendChild(gb);
+                var gnote = document.createElement("p");
+                gnote.className = "fineprint";
+                gnote.textContent = "Credits are added automatically within seconds of a successful payment — no transaction ID to submit.";
+                card.appendChild(gnote);
+              }
               grid.appendChild(card);
               var opt = document.createElement("option");
               opt.value = String(p.id);

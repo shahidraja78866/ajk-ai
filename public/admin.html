@@ -80,6 +80,7 @@
     <div class="card scroll"><table id="usersTable"></table></div>
 
     <h2>Recent payments</h2>
+    <p class="sub">Billing / transactions — every provider (manual test, Google Play, PayFast gateway), including refunded. Revenue above counts <strong>succeeded</strong> payments only, so refunded payments are excluded automatically.</p>
     <div class="card scroll"><table id="paymentsTable"></table></div>
   </div>
 </div>
@@ -119,7 +120,7 @@
     });
     api("/api/admin/plans").then(function (r) {
       if (!r.ok) return;
-      var html = "<tr><th>Plan</th><th>Rs / month</th><th>Rs / year</th><th>Credits / mo</th><th>Quality label</th><th>Resolution</th><th>Model</th><th>Active</th><th></th></tr>";
+      var html = "<tr><th>Plan</th><th>Rs / month</th><th>Rs / year</th><th>Credits / mo</th><th>Quality label</th><th>Resolution</th><th>Model</th><th>Play product (monthly)</th><th>Play product (yearly)</th><th>Active</th><th></th></tr>";
       r.data.plans.forEach(function (p) {
         html += "<tr data-plan='" + esc(p.id) + "'>"
           + "<td><strong>" + esc(p.name) + "</strong><br><small>" + esc(p.id) + "</small></td>"
@@ -129,6 +130,8 @@
           + "<td><input type='text' data-f='quality_label' value='" + esc(p.quality_label) + "'></td>"
           + "<td><input type='text' data-f='resolution' value='" + esc(p.resolution) + "'></td>"
           + "<td><input type='text' data-f='model' value='" + esc(p.model) + "'></td>"
+          + "<td><input type='text' data-f='play_product_monthly' value='" + esc(p.play_product_monthly || "") + "'></td>"
+          + "<td><input type='text' data-f='play_product_yearly' value='" + esc(p.play_product_yearly || "") + "'></td>"
           + "<td><input type='checkbox' data-f='is_active' " + (p.is_active ? "checked" : "") + "></td>"
           + "<td><button data-act='save-plan'>Save</button></td></tr>";
       });
@@ -136,12 +139,13 @@
     });
     api("/api/admin/packs").then(function (r) {
       if (!r.ok) return;
-      var html = "<tr><th>Pack</th><th>Credits</th><th>Price (Rs)</th><th>Active</th><th></th></tr>";
+      var html = "<tr><th>Pack</th><th>Credits</th><th>Price (Rs)</th><th>Play product ID</th><th>Active</th><th></th></tr>";
       r.data.packs.forEach(function (p) {
         html += "<tr data-pack='" + p.id + "'>"
           + "<td><strong>" + p.credits + " credits</strong><br><small>id " + p.id + "</small></td>"
           + "<td><input type='number' data-f='credits' value='" + p.credits + "'></td>"
           + "<td><input type='number' data-f='price_pkr' value='" + p.price_pkr + "'></td>"
+          + "<td><input type='text' data-f='play_product_id' value='" + esc(p.play_product_id || "") + "'></td>"
           + "<td><input type='checkbox' data-f='is_active' " + (p.is_active ? "checked" : "") + "></td>"
           + "<td><button data-act='save-pack'>Save</button></td></tr>";
       });
@@ -151,10 +155,11 @@
     api("/api/plans").then(function (r) { window.__plans = r.ok ? r.data.plans : []; renderUsers(); });
     api("/api/admin/payments").then(function (r) {
       if (!r.ok) return;
-      var html = "<tr><th>ID</th><th>User</th><th>Plan</th><th>Amount</th><th>Provider</th><th>Status</th><th>Period</th><th>When</th></tr>";
+      var html = "<tr><th>ID</th><th>User</th><th>Plan</th><th>Amount</th><th>Provider</th><th>Status</th><th>Credits granted</th><th>Period</th><th>When</th></tr>";
       (r.data.payments || []).forEach(function (p) {
-        html += "<tr><td>" + p.id + "</td><td>" + esc(p.user_email) + "</td><td>" + esc(p.plan_id || "–") + "</td>"
+        html += "<tr><td>" + p.id + "</td><td>" + esc(p.user_email) + "</td><td>" + esc(p.plan_id || (p.pack_id ? "pack #" + p.pack_id : "–")) + "</td>"
           + "<td>Rs " + p.amount + "</td><td>" + esc(p.provider) + "</td><td>" + esc(p.status) + "</td>"
+          + "<td>" + (p.credits_granted || 0) + "</td>"
           + "<td>" + esc(p.period || "–") + "</td><td>" + esc(p.created_at) + "</td></tr>";
       });
       $("paymentsTable").innerHTML = html || "<tr><td>No payments yet.</td></tr>";
@@ -191,7 +196,8 @@
       usersCache.forEach(function (u) {
         var s = u.subscription;
         html += "<tr data-user='" + u.id + "'><td>" + u.id + "</td><td>" + esc(u.email) + "</td>"
-          + "<td>" + u.credits + " (" + (u.free_credits || 0) + " + " + (u.plan_credits || 0) + ")</td>"
+          + "<td>" + u.credits + " (" + (u.free_credits || 0) + " + " + (u.plan_credits || 0) + ")"
+          + (u.credit_deficit ? "<br><small style='color:var(--red);'>credit deficit: " + u.credit_deficit + " (unrecovered refund clawback)</small>" : "") + "</td>"
           + "<td>" + (s ? esc(s.plan_name) : "Free") + "</td>"
           + "<td>" + (s ? esc(s.status) : "none") + "</td>"
           + "<td>" + (s && s.current_period_end ? esc(s.current_period_end) : "–") + "</td>"
