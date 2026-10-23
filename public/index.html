@@ -698,7 +698,7 @@
       <section class="view" id="view-plans">
         <div class="page-head">
           <h1>Plans &amp; pricing</h1>
-          <p>Subscription plans for AJK AI, priced in Pakistani Rupees. Plan credits are granted every month while your subscription is active; free sign-up credits never expire.</p>
+          <p>Subscription plans for AJK AI, priced in Pakistani Rupees. Plan credits are granted every billing cycle while your subscription is active (weekly for the Weekly plan, monthly otherwise); free sign-up credits never expire.</p>
         </div>
         <div class="balance-line" id="planLine">
           Current plan: <strong id="currentPlanName">Free</strong>
@@ -1003,7 +1003,12 @@
           styles: ["realistic", "cinematic", "cartoon", "anime"],
           aspect_ratios: ["16:9", "9:16", "1:1"],
           durations: [5, 10],
-          cost_by_duration: { "5": 10, "10": 20 }
+          cost_by_duration: { "5": 10, "10": 20 },
+          cost_by_quality: {
+            "768P": { "5": 10, "10": 20 },
+            "2K": { "5": 15, "10": 30 },
+            "4K": { "5": 40, "10": 80 }
+          }
         };
         var cfg = null;            // last /api/config response
         var me = null;             // last /api/me response
@@ -1131,13 +1136,25 @@
         function setConnStatus(html) { $("#connStatus").innerHTML = html; }
 
         /* ---------- controls (populated from /api/config) ---------- */
+        function routedQuality() {
+          return (me && me.plan && me.plan.quality) ? me.plan.quality : "768P";
+        }
+        function effectiveQuality() {
+          var q = routedQuality();
+          // Native 4K only renders 16:9, 9:16 and 1:1 — at any other
+          // aspect the server falls back to 2K and charges the 2K rate.
+          if (q === "4K" && ["16:9", "9:16", "1:1"].indexOf(state.aspect) === -1) return "2K";
+          return q;
+        }
         function costFor(d) {
-          var map = (cfg && cfg.cost_by_duration) || FALLBACK.cost_by_duration;
-          var v = map[String(d)];
-          v = (v === undefined || v === null) ? 10 : v;
-          // Extra Pro (Native 4K) generations cost double credits server-side.
-          if (me && me.plan && me.plan.resolution === "4K") v = v * 2;
-          return v;
+          // The server charges by the routed quality's own rate card
+          // (768P 10/20, 2K 15/30, native 4K 40/80 for 5s/10s) — read the
+          // row for the signed-in user's quality so the hint is exact.
+          var table = (cfg && cfg.cost_by_quality) || FALLBACK.cost_by_quality;
+          var row = table[effectiveQuality()] || table["768P"] ||
+            (cfg && cfg.cost_by_duration) || FALLBACK.cost_by_duration;
+          var v = row[String(d)];
+          return (v === undefined || v === null) ? 10 : v;
         }
         function updateCost() { $("#costNum").textContent = costFor(state.duration); }
 
@@ -1206,6 +1223,7 @@
               state.aspect = a;
               $$("#aspectSeg button").forEach(function (x) { x.classList.toggle("sel", x === b); });
               applyFrameAspect();
+              updateCost(); // 4K falls back to the 2K rate at unsupported aspects
             });
             aseg.appendChild(b);
           });
@@ -1978,21 +1996,40 @@
               card.appendChild(h);
               var price = document.createElement("div");
               price.className = "price";
-              price.innerHTML = "Rs " + Number(p.price_monthly).toLocaleString() + " <small>/ month</small>";
+              var weekly = p.price_weekly !== null && p.price_weekly !== undefined;
+              price.innerHTML = weekly
+                ? "Rs " + Number(p.price_weekly).toLocaleString() + " <small>/ week</small>"
+                : "Rs " + Number(p.price_monthly).toLocaleString() + " <small>/ month</small>";
               card.appendChild(price);
               var yr = document.createElement("div");
               yr.style.color = "var(--muted)"; yr.style.fontSize = "13px";
-              yr.textContent = "Rs " + Number(p.price_yearly).toLocaleString() + " / year";
+              yr.textContent = weekly
+                ? "Billed weekly — no monthly or yearly option"
+                : "Rs " + Number(p.price_yearly).toLocaleString() + " / year";
               card.appendChild(yr);
               var ul = document.createElement("ul");
-              [p.credits_monthly + " video credits every month",
+              var f = p.features || {};
+              [weekly
+                  ? p.credits_weekly + " video credits every week"
+                  : p.credits_monthly + " video credits every month",
                p.quality_label + " video quality",
+               f.can_veo ? "Veo talking clips included"
+                         : "Veo talking clips: Pro and above",
+               f.can_lipsync ? "Urdu lip-sync add-on available"
+                             : "Lip-sync add-on: Pro and above",
                "Failed generations refunded automatically"].forEach(function (t) {
                 var li = document.createElement("li"); li.textContent = t; ul.appendChild(li);
               });
               card.appendChild(ul);
               var sp = document.createElement("div"); sp.className = "spacer"; card.appendChild(sp);
               if (playServicePromise) {
+                if (weekly) {
+                  var bw = makeBtn("Subscribe weekly — Google Play", true);
+                  bw.addEventListener("click", function () {
+                    playBuy(p.play_product_id && p.play_product_id.weekly, "subscription", bw);
+                  });
+                  card.appendChild(bw);
+                } else {
                 var bm = makeBtn("Subscribe monthly — Google Play", true);
                 bm.addEventListener("click", function () {
                   playBuy(p.play_product_id && p.play_product_id.monthly, "subscription", bm);
@@ -2003,6 +2040,7 @@
                   playBuy(p.play_product_id && p.play_product_id.yearly, "subscription", by);
                 });
                 card.appendChild(by);
+                }
                 var pnote = document.createElement("p");
                 pnote.className = "fineprint";
                 pnote.textContent = "Billed by Google Play — your plan activates as soon as Google confirms the payment.";

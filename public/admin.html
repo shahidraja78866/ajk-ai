@@ -120,18 +120,23 @@
     });
     api("/api/admin/plans").then(function (r) {
       if (!r.ok) return;
-      var html = "<tr><th>Plan</th><th>Rs / month</th><th>Rs / year</th><th>Credits / mo</th><th>Quality label</th><th>Resolution</th><th>Model</th><th>Play product (monthly)</th><th>Play product (yearly)</th><th>Active</th><th></th></tr>";
+      var html = "<tr><th>Plan</th><th>Rs / month</th><th>Rs / year</th><th>Credits / mo</th><th>Rs / week</th><th>Credits / wk</th><th>Quality label</th><th>Resolution</th><th>Model</th><th>Play product (monthly)</th><th>Play product (yearly)</th><th>Play product (weekly)</th><th>Veo</th><th>Lip-sync</th><th>Active</th><th></th></tr>";
       r.data.plans.forEach(function (p) {
         html += "<tr data-plan='" + esc(p.id) + "'>"
           + "<td><strong>" + esc(p.name) + "</strong><br><small>" + esc(p.id) + "</small></td>"
           + "<td><input type='number' data-f='price_monthly' value='" + p.price_monthly + "'></td>"
           + "<td><input type='number' data-f='price_yearly' value='" + p.price_yearly + "'></td>"
           + "<td><input type='number' data-f='credits_monthly' value='" + p.credits_monthly + "'></td>"
+          + "<td><input type='number' data-f='price_weekly' value='" + (p.price_weekly == null ? "" : p.price_weekly) + "' placeholder='—'></td>"
+          + "<td><input type='number' data-f='credits_weekly' value='" + (p.credits_weekly == null ? "" : p.credits_weekly) + "' placeholder='—'></td>"
           + "<td><input type='text' data-f='quality_label' value='" + esc(p.quality_label) + "'></td>"
           + "<td><input type='text' data-f='resolution' value='" + esc(p.resolution) + "'></td>"
           + "<td><input type='text' data-f='model' value='" + esc(p.model) + "'></td>"
           + "<td><input type='text' data-f='play_product_monthly' value='" + esc(p.play_product_monthly || "") + "'></td>"
           + "<td><input type='text' data-f='play_product_yearly' value='" + esc(p.play_product_yearly || "") + "'></td>"
+          + "<td><input type='text' data-f='play_product_weekly' value='" + esc(p.play_product_weekly || "") + "'></td>"
+          + "<td><input type='checkbox' data-f='can_veo' " + (p.can_veo ? "checked" : "") + "></td>"
+          + "<td><input type='checkbox' data-f='can_lipsync' " + (p.can_lipsync ? "checked" : "") + "></td>"
           + "<td><input type='checkbox' data-f='is_active' " + (p.is_active ? "checked" : "") + "></td>"
           + "<td><button data-act='save-plan'>Save</button></td></tr>";
       });
@@ -203,7 +208,7 @@
           + "<td>" + (s && s.current_period_end ? esc(s.current_period_end) : "–") + "</td>"
           + "<td>" + (u.is_admin ? "yes" : "") + "</td>"
           + "<td><select data-f='plan'>" + planOpts + "</select> "
-          + "<select data-f='period'><option value='monthly'>Monthly</option><option value='yearly'>Yearly</option></select><br>"
+          + "<select data-f='period'><option value='monthly'>Monthly</option><option value='yearly'>Yearly</option><option value='weekly'>Weekly</option></select><br>"
           + "<button data-act='pay'>Manual payment + activate (TEST)</button>"
           + "<button data-act='activate'>Activate (comp)</button>"
           + "<button data-act='renew'>Grant renewal credits</button>"
@@ -224,7 +229,10 @@
       var trp = btn.closest("tr"), pid = trp.getAttribute("data-plan"), body = {};
       trp.querySelectorAll("input[data-f]").forEach(function (inp) {
         var f = inp.getAttribute("data-f");
-        body[f] = inp.type === "checkbox" ? inp.checked : (inp.type === "number" ? Number(inp.value) : inp.value);
+        // An emptied weekly field means "this plan has no weekly period"
+        // — send null so the server stores NULL, not 0.
+        body[f] = inp.type === "checkbox" ? inp.checked
+          : (inp.type === "number" ? (inp.value === "" && (f === "price_weekly" || f === "credits_weekly") ? null : Number(inp.value)) : inp.value);
       });
       api("/api/admin/plans/" + pid, { method: "PUT", body: body }).then(function (r) { done(r, "Plan " + pid + " saved"); });
       return;
