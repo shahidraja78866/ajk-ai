@@ -643,6 +643,15 @@
               <p class="lang-hint" id="imageStatus">Add a PNG, JPEG or WebP image (max 5 MB) to animate it as the opening frame.</p>
               <button type="button" class="tool-btn" id="removeImageBtn" style="display:none;">Remove image</button>
 
+              <div class="field-label"><span>Character (optional)</span></div>
+              <div style="display:flex;gap:10px;align-items:center;">
+                <img id="genCharThumb" alt="" style="display:none;width:44px;height:44px;object-fit:cover;border-radius:8px;" />
+                <select id="genCharacter" style="flex:1;">
+                  <option value="">No character</option>
+                </select>
+              </div>
+              <p class="lang-hint">Pick one of your saved characters (My Characters card below) and the model uses its photo as the subject reference, so the character stays recognisable from video to video. A chosen character overrides the starting image above. Character consistency is the model's best effort — it is not a guarantee. The credit cost is the standard rate for the chosen quality and duration — characters cost nothing extra.</p>
+
               <div class="field-label"><span>Visual style</span></div>
               <div class="style-grid" id="styleGrid"></div>
 
@@ -731,6 +740,11 @@
                 <p class="lang-hint" id="voicePreviewStatus"></p>
 
                 <div class="field-label" style="margin-top:18px;"><span>Talking character (lip-sync)</span></div>
+                <div class="field-label"><span>Saved character (optional)</span></div>
+                <select id="lipsyncCharacter">
+                  <option value="">No character — use the image or video below</option>
+                </select>
+                <p class="lang-hint">Picking a saved character fills its photo and its bound voice automatically — the voice choices above then come from the character.</p>
                 <label class="check-row"><input type="radio" name="lipsyncSource" value="image" checked /> <span>Animate the starting image above (upload one first)</span></label>
                 <label class="check-row"><input type="radio" name="lipsyncSource" value="video" /> <span>Lip-sync a finished video (picked below)</span></label>
                 <button type="button" class="btn primary generate-btn" id="lipsyncBtn" style="margin-top:10px;">Create talking character</button>
@@ -783,6 +797,49 @@
                 <div class="form-error" id="soundError" role="alert"></div>
                 <p class="fineprint">Costs are shown before you confirm, and charged by the server only when it accepts the job. Failed sound jobs are refunded automatically.</p>
               </div>
+            </div>
+
+            <div class="card" id="charactersCard">
+              <h2>My Characters</h2>
+              <p class="sub">Save a character once — a photo plus, if you like, a bound voice — then reuse it in the video form and in lip-sync, so the same character keeps appearing in your videos. The model does its best to keep the character consistent; consistency is a best effort, not a guarantee. You can save up to <span id="charMaxHint">10</span> characters.</p>
+
+              <div class="field-label"><span>Character name</span></div>
+              <input type="text" class="text-input" id="charName" maxlength="60" placeholder="e.g. Captain Sara" />
+
+              <div class="field-label"><span>Character photo</span></div>
+              <input type="file" class="file-input" id="charImage" accept="image/png,image/jpeg,image/webp" />
+              <p class="lang-hint" id="charImageStatus">Choose a clear PNG, JPEG or WebP photo of the character (max 5 MB). A front-facing photo works best.</p>
+
+              <div class="field-label"><span>Bound voice (optional)</span></div>
+              <select id="charVoiceProvider">
+                <option value="">No bound voice</option>
+              </select>
+              <div class="field-label"><span>Voice language</span></div>
+              <select id="charVoiceLang">
+                <option value="ur" selected>Urdu</option>
+                <option value="hi">Hindi</option>
+                <option value="en">English</option>
+              </select>
+              <div class="field-label"><span>Voice</span></div>
+              <select id="charVoice"></select>
+              <div class="field-label"><span>Voice style</span></div>
+              <select id="charVoiceStyle">
+                <option value="narration">Narration</option>
+                <option value="conversation" selected>Conversation</option>
+                <option value="news">News reader</option>
+                <option value="energetic">Energetic</option>
+                <option value="emotional">Emotional</option>
+              </select>
+              <p class="lang-hint">The bound voice is used automatically when this character speaks in a lip-sync video (you can still override it for a single job in the Voice card).</p>
+
+              <button type="button" class="btn primary generate-btn" id="charCreateBtn">Save character</button>
+              <div class="form-error" id="charError" role="alert"></div>
+
+              <div class="field-label" style="margin-top:18px;"><span>Saved characters</span></div>
+              <div id="charList">
+                <p class="lang-hint" id="charListEmpty">Sign in to see and save your characters.</p>
+              </div>
+              <p class="fineprint">Deleting a character never deletes the videos you already made with it — they stay in your History.</p>
             </div>
           </div>
 
@@ -1582,6 +1639,7 @@
               fillAccountMeta();
               fillVoiceUI();
               fillSoundUI();
+              fillCharacterVoiceUI();
               if (cfg && cfg.draft && cfg.draft.cost_by_duration) {
                 var dh = $("#draftCostHint");
                 if (dh) dh.textContent = (cfg.draft.cost_by_duration["5"] || 7) + " / " + (cfg.draft.cost_by_duration["10"] || 14);
@@ -1645,6 +1703,7 @@
               setCredits(me.credits);
               fillPlanUI();
               fillVoiceGate();
+              loadCharacters();
               fillAccountMeta();
               setSignedInUI();
               return true;
@@ -1708,6 +1767,8 @@
           token = ""; me = null; credits = null;
           lsDel(LS_TOKEN);
           stopPolling();
+          characters = [];
+          renderCharacters();
           setSignedInUI();
           fillPlanUI();
           renderHistoryState("signedout");
@@ -1897,6 +1958,7 @@
                     ...(state.quality === "draft" ? { quality: "draft" } : {}),
                     language: ($("#promptLang") ? $("#promptLang").value : "en"),
                     ...(state.imagePath ? { image_path: state.imagePath } : {}),
+                    ...($("#genCharacter").value ? { character_id: Number($("#genCharacter").value) } : {}),
                     ...(sndSpec ? { sound: sndSpec } : {}),
                     ...($("#watermarkEnabled").checked && $("#watermarkText").value.trim()
                       ? { watermark_text: $("#watermarkText").value.trim() } : {}) }
@@ -2087,7 +2149,9 @@
                   (g.sound_status === "applied" ? "applied"
                     : g.sound_status === "failed_refunded" ? "failed, add-on refunded"
                     : (g.sound_status || "pending")));
-              if (g.source_image_path) extras.push("image-to-video");
+              if (g.character_name) extras.push("character: " + g.character_name);
+              else if (g.character_id) extras.push("character #" + g.character_id + " (deleted)");
+              if (g.source_image_path && !g.character_id) extras.push("image-to-video");
               if (g.watermark_text) extras.push("watermark: " + (g.watermark_status || "pending"));
               modeLine.appendChild(document.createTextNode(extras.join(" · ")));
               main.appendChild(modeLine);
@@ -2810,8 +2874,14 @@
           if (!voiceRequireSignIn()) return;
           var body = voiceSettingsBody();
           if (!body.script.trim()) { voiceShowError("Write the script the character should say first."); return; }
+          var lipCharId = $("#lipsyncCharacter") ? $("#lipsyncCharacter").value : "";
           var source = ($('input[name="lipsyncSource"]:checked') || {}).value || "image";
-          if (source === "image") {
+          if (lipCharId) {
+            // A saved character supplies the photo AND its bound voice —
+            // only the script fields travel with the request.
+            body = { script: body.script, script_mode: body.script_mode,
+                     character_id: Number(lipCharId) };
+          } else if (source === "image") {
             if (!state.imagePath) {
               voiceShowError("Upload a starting image in the form above first — the talking character is animated from it.");
               return;
@@ -2847,6 +2917,233 @@
             if (res.data.credits_left !== undefined) setCredits(res.data.credits_left);
             voiceDone(res.data.generation, "Voiceover added", "The video now carries the synthesized voice instead of its original audio.");
           });
+        });
+
+        /* ---------- characters (Phase C2) ---------- */
+        var characters = [];
+        var charImagePath = null; // uploaded photo waiting to be saved as a character
+        function charShowError(msg) {
+          var e = $("#charError");
+          if (!e) return;
+          e.textContent = msg || "";
+          e.classList.toggle("show", !!msg);
+        }
+        function charById(id) {
+          return characters.filter(function (c) { return String(c.id) === String(id); })[0] || null;
+        }
+        function boundVoiceLabel(c) {
+          if (!c || !c.voice) return "No bound voice";
+          var entry = (voiceCfg && voiceCfg.voices || []).filter(function (p) { return p.provider === c.voice.provider; })[0];
+          var v = entry ? (entry.voices || []).filter(function (x) { return x.id === c.voice.voice_id; })[0] : null;
+          var langName = { ur: "Urdu", hi: "Hindi", en: "English" }[c.voice.language] || c.voice.language;
+          return "Voice: " + (v ? (v.label + " (" + v.gender + ")") : c.voice.voice_id) +
+                 " · " + langName + " · " + c.voice.style;
+        }
+        function updateGenCharThumb() {
+          var sel = $("#genCharacter");
+          var img = $("#genCharThumb");
+          if (!sel || !img) return;
+          var c = sel.value ? charById(sel.value) : null;
+          if (c && c.image_url) { img.src = resolveUrl(c.image_url); img.style.display = "block"; }
+          else { img.removeAttribute("src"); img.style.display = "none"; }
+        }
+        function renderCharacters() {
+          var list = $("#charList");
+          if (!list) return;
+          list.innerHTML = "";
+          if (!token) {
+            list.innerHTML = '<p class="lang-hint">Sign in to see and save your characters.</p>';
+          } else if (!characters.length) {
+            list.innerHTML = '<p class="lang-hint">No characters saved yet — create your first one above.</p>';
+          } else {
+            characters.forEach(function (c) {
+              var row = document.createElement("div");
+              row.style.cssText = "display:flex;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--line, #2a2f3a);";
+              var img = document.createElement("img");
+              img.alt = "";
+              img.style.cssText = "width:44px;height:44px;object-fit:cover;border-radius:8px;";
+              if (c.image_url) img.src = resolveUrl(c.image_url);
+              var mid = document.createElement("div");
+              mid.style.flex = "1";
+              var nm = document.createElement("div");
+              nm.textContent = c.name;
+              nm.style.fontWeight = "600";
+              var vl = document.createElement("div");
+              vl.className = "lang-hint";
+              vl.textContent = boundVoiceLabel(c);
+              mid.appendChild(nm);
+              mid.appendChild(vl);
+              var del = document.createElement("button");
+              del.type = "button";
+              del.className = "btn small";
+              del.textContent = "Delete";
+              del.addEventListener("click", function () {
+                if (!window.confirm("Delete the character “" + c.name + "”? Videos you already made with it stay in your History.")) return;
+                api("/api/characters/" + encodeURIComponent(c.id), { method: "DELETE" }).then(function (res) {
+                  if (!res.ok) { charShowError(errText(res, "The character could not be deleted")); return; }
+                  toast("Character deleted — its videos stay in your History.");
+                  loadCharacters();
+                });
+              });
+              row.appendChild(img);
+              row.appendChild(mid);
+              row.appendChild(del);
+              list.appendChild(row);
+            });
+          }
+          // (Re)fill the two pickers, keeping the current selections.
+          var genSel = $("#genCharacter");
+          if (genSel) {
+            var prevGen = genSel.value;
+            genSel.innerHTML = '<option value="">No character</option>';
+            characters.forEach(function (c) {
+              var o = document.createElement("option");
+              o.value = c.id;
+              o.textContent = c.name;
+              genSel.appendChild(o);
+            });
+            if (prevGen && charById(prevGen)) genSel.value = prevGen;
+            updateGenCharThumb();
+          }
+          var lipSel = $("#lipsyncCharacter");
+          if (lipSel) {
+            var prevLip = lipSel.value;
+            lipSel.innerHTML = '<option value="">No character — use the image or video below</option>';
+            characters.forEach(function (c) {
+              var o = document.createElement("option");
+              o.value = c.id;
+              o.textContent = c.name;
+              lipSel.appendChild(o);
+            });
+            if (prevLip && charById(prevLip)) lipSel.value = prevLip;
+          }
+        }
+        function loadCharacters() {
+          if (!token) { characters = []; renderCharacters(); return; }
+          api("/api/characters").then(function (res) {
+            if (!res.ok || !res.data) return;
+            characters = res.data.characters || [];
+            renderCharacters();
+          });
+        }
+        function fillCharVoiceOptions() {
+          var provSel = $("#charVoiceProvider");
+          var voiceSel = $("#charVoice");
+          if (!provSel || !voiceSel) return;
+          var prov = provSel.value;
+          var lang = $("#charVoiceLang").value;
+          voiceSel.innerHTML = "";
+          var entry = (voiceCfg && voiceCfg.voices || []).filter(function (p) { return p.provider === prov; })[0];
+          ((entry && entry.voices) || []).filter(function (v) {
+            return !v.languages || v.languages.indexOf(lang) !== -1;
+          }).forEach(function (v) {
+            var o = document.createElement("option");
+            o.value = v.id;
+            o.textContent = v.label + " (" + v.gender + ")";
+            voiceSel.appendChild(o);
+          });
+          var has = !!prov && voiceSel.options.length > 0;
+          voiceSel.disabled = !has;
+          $("#charVoiceLang").disabled = !prov;
+          $("#charVoiceStyle").disabled = !prov;
+        }
+        function fillCharacterVoiceUI() {
+          if (!voiceCfg) return;
+          var provSel = $("#charVoiceProvider");
+          if (!provSel) return;
+          var prev = provSel.value;
+          provSel.innerHTML = '<option value="">No bound voice</option>';
+          (voiceCfg.voices || []).forEach(function (p) {
+            var o = document.createElement("option");
+            o.value = p.provider;
+            o.textContent = p.label;
+            provSel.appendChild(o);
+          });
+          if (prev) provSel.value = prev;
+          if (cfg && cfg.characters && cfg.characters.max_per_user)
+            $("#charMaxHint").textContent = cfg.characters.max_per_user;
+          fillCharVoiceOptions();
+        }
+        $("#charImage").addEventListener("change", function () {
+          var file = this.files && this.files[0];
+          if (!file) return;
+          if (!token) {
+            $("#charImageStatus").textContent = "Sign in first, then choose the photo again so it can be uploaded to your account.";
+            this.value = "";
+            return;
+          }
+          if (file.size > 5 * 1024 * 1024) {
+            $("#charImageStatus").textContent = "That image is over 5 MB — please choose a smaller one.";
+            this.value = "";
+            return;
+          }
+          $("#charImageStatus").textContent = "Uploading " + file.name + "…";
+          readFileAsDataUrl(file).then(function (dataUrl) {
+            return api("/api/uploads/image", {
+              method: "POST",
+              body: { image_base64: dataUrl, content_type: file.type || "" }
+            });
+          }).then(function (res) {
+            if (!res.ok || !res.data || !res.data.image_path) {
+              $("#charImageStatus").textContent = errText(res, "The image upload failed");
+              return;
+            }
+            charImagePath = res.data.image_path;
+            $("#charImageStatus").textContent = "Photo ready: " + file.name + " — give the character a name and save it.";
+          }).catch(function () {
+            $("#charImageStatus").textContent = "The image could not be read or uploaded.";
+          });
+        });
+        $("#charVoiceProvider").addEventListener("change", fillCharVoiceOptions);
+        $("#charVoiceLang").addEventListener("change", fillCharVoiceOptions);
+        $("#charCreateBtn").addEventListener("click", function () {
+          charShowError("");
+          if (!token) { charShowError("Please sign in first — characters are saved to your account."); openAuth("login"); return; }
+          var name = $("#charName").value.trim();
+          if (!name) { charShowError("Give the character a name first."); return; }
+          if (!charImagePath) { charShowError("Choose the character's photo first — it is uploaded when you pick the file."); return; }
+          var body = { name: name, image_path: charImagePath };
+          var prov = $("#charVoiceProvider").value;
+          if (prov) {
+            body.voice_provider = prov;
+            body.voice_language = $("#charVoiceLang").value;
+            body.voice_style = $("#charVoiceStyle").value;
+            var v = $("#charVoice").value;
+            if (v) body.voice_id = v;
+          }
+          var btn = this;
+          btn.disabled = true;
+          api("/api/characters", { method: "POST", body: body }).then(function (res) {
+            btn.disabled = false;
+            if (!res.ok || !res.data) { charShowError(errText(res, "The character could not be saved")); return; }
+            $("#charName").value = "";
+            charImagePath = null;
+            $("#charImage").value = "";
+            $("#charImageStatus").textContent = "Choose a clear PNG, JPEG or WebP photo of the character (max 5 MB). A front-facing photo works best.";
+            toast("Character saved — pick it in the video form or in lip-sync.");
+            loadCharacters();
+          });
+        });
+        $("#genCharacter").addEventListener("change", updateGenCharThumb);
+        $("#lipsyncCharacter").addEventListener("change", function () {
+          var c = this.value ? charById(this.value) : null;
+          if (!c) return;
+          // The character supplies the photo, so the image source applies.
+          var radio = $('input[name="lipsyncSource"][value="image"]');
+          if (radio) radio.checked = true;
+          // Visually fill the bound voice too (the server uses the
+          // character's binding for the job).
+          if (c.voice && voiceCfg) {
+            var provSel = $("#voiceProvider");
+            if (provSel && (voiceCfg.voices || []).some(function (p) { return p.provider === c.voice.provider; })) {
+              provSel.value = c.voice.provider;
+              $("#voiceLang").value = c.voice.language || "ur";
+              fillVoiceOptions();
+              var vSel = $("#voiceVoice");
+              if (vSel && c.voice.voice_id) vSel.value = c.voice.voice_id;
+              if (c.voice.style) $("#voiceStyle").value = c.voice.style;
+            }
+          }
         });
 
         /* ---------- sound & effects (Phase B2) ---------- */
