@@ -475,6 +475,11 @@
       }
       .toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
 
+      .sound-apply-panel{ border-top:1px dashed var(--line); padding-top:10px; margin-top:10px; width:100%; }
+      .sound-apply-panel select, .sound-apply-panel .text-input{ width:100%; margin-bottom:8px; }
+      .sound-apply-panel input[type="range"]{ width:100%; }
+      .job-actions audio{ width:100%; max-width:340px; }
+
       @media (min-width:641px){
         .modal-backdrop{ align-items:center; padding:20px; }
         .modal{ border-radius:18px; }
@@ -623,7 +628,7 @@
                 <svg viewBox="0 0 24 24" fill="currentColor" id="generateIcon"><path d="M8 5.5v13l11-6.5-11-6.5z"/></svg>
                 <span id="generateLabel">Generate video</span>
               </button>
-              <p class="fineprint">Credits are charged by the server when it accepts your job. Failed generations are refunded automatically. Mode, a starting image and watermark text do not change the credit cost — the same duration and quality pricing applies.</p>
+              <p class="fineprint">Credits are charged by the server when it accepts your job. Failed generations are refunded automatically. Mode, a starting image and watermark text do not change the credit cost — the same duration and quality pricing applies. A sound option adds the credits shown in the Sound &amp; Effects card below.</p>
             </div>
 
             <div class="card" id="voiceCard">
@@ -695,6 +700,44 @@
 
                 <div class="form-error" id="voiceError" role="alert"></div>
                 <p class="fineprint">Costs are shown on the buttons before you confirm. If a voice job fails, its credits are refunded automatically. Finished voice jobs appear in your History.</p>
+              </div>
+            </div>
+
+            <div class="card" id="soundCard">
+              <h2>Sound &amp; Effects (optional)</h2>
+              <p class="sub">Add an AI soundtrack, sound effects or a music bed to the video you are generating — or create a sound on its own. The AI matches sounds to the picture; the timing is the model's estimate, not a frame-exact guarantee.</p>
+
+              <div class="form-error" id="soundNotice" style="display:none;" role="alert"></div>
+
+              <div id="soundControls">
+                <div class="field-label"><span>Sound for the video above</span></div>
+                <select id="soundMode">
+                  <option value="none" selected>None — video only</option>
+                  <option value="sync">Auto sync sound</option>
+                  <option value="sfx">Sound effects</option>
+                  <option value="music">Background music</option>
+                </select>
+                <p class="lang-hint">Auto sync sound <strong>replaces</strong> the video's original audio with an AI soundtrack generated from the finished video. Sound effects and background music are mixed <strong>under</strong> the original audio at the volume below. If the sound step fails, your video is still delivered and the sound credits are refunded automatically.</p>
+
+                <div class="field-label"><span>Describe the sounds (optional)</span><span class="count"><span id="soundCharCount">0</span> / 500</span></div>
+                <textarea id="soundPrompt" maxlength="500" placeholder="Rain on a tin roof, distant thunder, a train passing… Write in Urdu, Hindi, English or any language offered in the prompt box — it is translated automatically. Leave empty to use your video prompt."></textarea>
+
+                <div class="field-label"><span>Sound volume</span><span class="count"><span id="soundVolumeLabel">100</span>%</span></div>
+                <input type="range" id="soundVolume" min="10" max="100" step="5" value="100" style="width:100%;" />
+
+                <div class="field-label" style="margin-top:18px;"><span>Just a sound (no video)</span></div>
+                <select id="soundOnlyKind">
+                  <option value="sfx" selected>Sound effect</option>
+                  <option value="music">Music bed</option>
+                </select>
+                <div class="field-label"><span>Length</span></div>
+                <select id="soundOnlyDuration"></select>
+                <p class="lang-hint">Uses the description above. The finished sound plays here and is saved in your History with a player and a download.</p>
+                <button type="button" class="btn primary generate-btn" id="soundOnlyBtn">Generate sound only</button>
+                <audio id="soundOnlyAudio" controls style="display:none;width:100%;margin-top:10px;"></audio>
+
+                <div class="form-error" id="soundError" role="alert"></div>
+                <p class="fineprint">Costs are shown before you confirm, and charged by the server only when it accepts the job. Failed sound jobs are refunded automatically.</p>
               </div>
             </div>
           </div>
@@ -1228,7 +1271,13 @@
           var v = row[String(d)];
           return (v === undefined || v === null) ? 10 : v;
         }
-        function updateCost() { $("#costNum").textContent = costFor(state.duration); }
+        function updateCost() {
+          var total = costFor(state.duration);
+          var sm = $("#soundMode");
+          if (sm && soundCfg && soundCfg.configured && sm.value && sm.value !== "none" && soundCfg.costs)
+            total += Number(soundCfg.costs[sm.value] || 0);
+          $("#costNum").textContent = total;
+        }
 
         function renderControls(source) {
           var allStyles = (source.styles && source.styles.length) ? source.styles : FALLBACK.styles;
@@ -1407,6 +1456,7 @@
               setConnStatus('<span class="ok">Connected</span> — ' + apiBase + " · model " + modelName);
               fillAccountMeta();
               fillVoiceUI();
+              fillSoundUI();
               return true;
             }
             setBanner("bad", "Backend not connected",
@@ -1709,6 +1759,7 @@
           setGenerating(true);
 
           var idemKey = uuid(); // fresh per click — the server dedupes retries with it
+          var sndSpec = currentSoundSpec();
           api("/api/generate", {
             method: "POST",
             headers: { "Idempotency-Key": idemKey },
@@ -1716,6 +1767,7 @@
                     mode: state.mode,
                     language: ($("#promptLang") ? $("#promptLang").value : "en"),
                     ...(state.imagePath ? { image_path: state.imagePath } : {}),
+                    ...(sndSpec ? { sound: sndSpec } : {}),
                     ...($("#watermarkEnabled").checked && $("#watermarkText").value.trim()
                       ? { watermark_text: $("#watermarkText").value.trim() } : {}) }
           }).then(function (res) {
@@ -1772,8 +1824,13 @@
               g.prompt = g.prompt || (state.lastStudioJob && state.lastStudioJob.prompt) || "";
               state.lastStudioJob = g;
               showPlayer(resolveUrl(g.video_url));
+              var readyText = "Rendered by the server and saved to your history.";
+              if (g.sound_status === "applied" && g.sound_mode)
+                readyText += " Sound (" + (SOUND_MODE_LABELS[g.sound_mode] || g.sound_mode) + ") was applied.";
+              if (g.sound_status === "failed_refunded")
+                readyText += " The sound step could not be completed, so its credits were refunded — the video itself is complete.";
               var actions = showResult("ok", "Your video is ready",
-                "Rendered by the server and saved to your history.", "Job " + g.id + " · " + (g.style || state.style) + " · " + (g.aspect_ratio || state.aspect) + " · " + (g.duration || state.duration) + "s");
+                readyText, "Job " + g.id + " · " + (g.style || state.style) + " · " + (g.aspect_ratio || state.aspect) + " · " + (g.duration || state.duration) + "s");
               actions.innerHTML = "";
               addVideoActions(actions, g);
               loadHistory();
@@ -1884,6 +1941,15 @@
               var extras = [];
               if (g.kind === "lipsync") extras.push("Talking / Lip-Sync");
               if (g.kind === "voiceover") extras.push("Voiceover");
+              if (g.kind === "sound" && g.source_generation_id)
+                extras.push("Sound added: " + (SOUND_MODE_LABELS[g.sound_mode] || g.sound_mode || ""));
+              if (g.kind === "sound" && !g.source_generation_id)
+                extras.push("Sound only (audio)");
+              if (g.kind !== "sound" && g.sound_mode)
+                extras.push("sound: " + (SOUND_MODE_LABELS[g.sound_mode] || g.sound_mode) + " — " +
+                  (g.sound_status === "applied" ? "applied"
+                    : g.sound_status === "failed_refunded" ? "failed, add-on refunded"
+                    : (g.sound_status || "pending")));
               if (g.source_image_path) extras.push("image-to-video");
               if (g.watermark_text) extras.push("watermark: " + (g.watermark_status || "pending"));
               modeLine.appendChild(document.createTextNode(extras.join(" · ")));
@@ -1915,7 +1981,23 @@
 
               var actions = document.createElement("div");
               actions.className = "job-actions";
-              if (String(g.status).toLowerCase() === "completed" && g.video_url) {
+              var soundPanel = null;
+              if (String(g.status).toLowerCase() === "completed" && g.video_url && isAudioOnlyGen(g)) {
+                var au = document.createElement("audio");
+                au.controls = true;
+                au.preload = "metadata";
+                au.src = resolveUrl(g.video_url);
+                actions.appendChild(au);
+                var dlA = document.createElement("a");
+                dlA.className = "btn small";
+                dlA.href = resolveUrl(g.video_url);
+                dlA.setAttribute("download", "");
+                dlA.target = "_blank";
+                dlA.rel = "noopener";
+                dlA.textContent = "Download";
+                actions.appendChild(dlA);
+              }
+              if (String(g.status).toLowerCase() === "completed" && g.video_url && !isAudioOnlyGen(g)) {
                 var pick = document.createElement("label");
                 pick.className = "join-pick";
                 var cb = document.createElement("input");
@@ -1947,11 +2029,20 @@
                 var sh = makeBtn("Share");
                 sh.addEventListener("click", function () { shareVideo(resolveUrl(g.video_url), sh); });
                 actions.appendChild(sh);
+                soundPanel = buildSoundApplyPanel(g);
+                var asb = makeBtn("Add sound");
+                (function (panel) {
+                  asb.addEventListener("click", function () {
+                    panel.style.display = panel.style.display === "none" ? "block" : "none";
+                  });
+                })(soundPanel);
+                actions.appendChild(asb);
               }
               var rp = makeBtn("Report");
               rp.addEventListener("click", function () { openReport(g.id, g.prompt); });
               actions.appendChild(rp);
               item.appendChild(actions);
+              if (soundPanel) item.appendChild(soundPanel);
               list.appendChild(item);
             });
           });
@@ -2500,7 +2591,7 @@
           var prev = sel.value;
           sel.innerHTML = "";
           var done = (gens || []).filter(function (g) {
-            return String(g.status).toLowerCase() === "completed" && g.video_url;
+            return String(g.status).toLowerCase() === "completed" && g.video_url && !isAudioOnlyGen(g);
           });
           if (!done.length) {
             var o = document.createElement("option");
@@ -2608,6 +2699,193 @@
             if (!res.ok || !res.data) { voiceShowError(errText(res, "The voiceover job failed")); return; }
             if (res.data.credits_left !== undefined) setCredits(res.data.credits_left);
             voiceDone(res.data.generation, "Voiceover added", "The video now carries the synthesized voice instead of its original audio.");
+          });
+        });
+
+        /* ---------- sound & effects (Phase B2) ---------- */
+        var soundCfg = null;
+        var SOUND_MODE_LABELS = { sync: "Auto sync sound", premium_sync: "Premium sync sound",
+                                  sfx: "Sound effects", music: "Background music" };
+        var SOUND_DEFAULT_VOL = { sync: 100, premium_sync: 100, sfx: 60, music: 30 };
+        // An audio-only sound job stores its audio file in video_url and
+        // has no source video — the app renders it with an audio player.
+        function isAudioOnlyGen(g) {
+          return !!g && g.kind === "sound" && !g.source_generation_id;
+        }
+        function soundShowError(msg) {
+          var e = $("#soundError");
+          if (!e) return;
+          e.textContent = msg || "";
+          e.classList.toggle("show", !!msg);
+        }
+        function currentSoundSpec() {
+          if (!soundCfg || !soundCfg.configured) return null;
+          var mode = $("#soundMode").value;
+          if (!mode || mode === "none") return null;
+          var spec = { mode: mode, volume: Number($("#soundVolume").value || 100) };
+          var p = $("#soundPrompt").value.trim();
+          if (p) spec.prompt = p;
+          return spec;
+        }
+        function fillSoundOnlyDurations() {
+          var kind = $("#soundOnlyKind").value;
+          var sel = $("#soundOnlyDuration");
+          sel.innerHTML = "";
+          (kind === "music" ? [10, 30, 60] : [5, 10, 15, 22]).forEach(function (d) {
+            var o = document.createElement("option");
+            o.value = d;
+            o.textContent = d + " seconds";
+            sel.appendChild(o);
+          });
+          sel.value = kind === "music" ? "30" : "10";
+        }
+        function fillSoundUI() {
+          soundCfg = (cfg && cfg.sound) ? cfg.sound : null;
+          var notice = $("#soundNotice");
+          var controls = $("#soundControls");
+          if (!notice || !controls) return;
+          if (!soundCfg || !soundCfg.configured) {
+            notice.style.display = "block";
+            notice.textContent = "Sound features are not configured on this server yet — the sound engines are unavailable, so sound options are disabled and nothing can be charged for them.";
+            controls.style.display = "none";
+            return;
+          }
+          notice.style.display = "none";
+          controls.style.display = "block";
+          var costs = soundCfg.costs || {};
+          Array.prototype.forEach.call($("#soundMode").options, function (o) {
+            if (o.value !== "none" && costs[o.value] !== undefined)
+              o.textContent = (SOUND_MODE_LABELS[o.value] || o.value) + " — +" + costs[o.value] + " credits";
+          });
+          if (costs.sfx !== undefined)
+            $("#soundOnlyBtn").textContent = "Generate sound only — " + costs.sfx + " credits";
+          fillSoundOnlyDurations();
+          updateCost();
+        }
+        // The per-video "Add sound" panel in History: mode (incl. premium
+        // sync), an optional description, a volume slider, and the cost
+        // on the button before anything is confirmed.
+        function buildSoundApplyPanel(g) {
+          var costs = (soundCfg && soundCfg.costs) || { sync: 10, premium_sync: 25, sfx: 5, music: 5 };
+          var panel = document.createElement("div");
+          panel.className = "sound-apply-panel";
+          panel.style.display = "none";
+          var modeSel = document.createElement("select");
+          [["sync", "Auto sync sound — replaces the audio"],
+           ["premium_sync", "Premium sync sound — keeps the dialogue"],
+           ["sfx", "Sound effects — mixed under the original"],
+           ["music", "Background music — mixed under the original"]].forEach(function (pair) {
+            var o = document.createElement("option");
+            o.value = pair[0];
+            o.textContent = pair[1] + " · " + (costs[pair[0]] !== undefined ? costs[pair[0]] : "") + " credits";
+            modeSel.appendChild(o);
+          });
+          panel.appendChild(modeSel);
+          var promptIn = document.createElement("input");
+          promptIn.type = "text";
+          promptIn.className = "text-input";
+          promptIn.maxLength = 500;
+          promptIn.placeholder = "Describe the sounds (optional) — any language from the prompt box works";
+          panel.appendChild(promptIn);
+          var volLabel = document.createElement("p");
+          volLabel.className = "lang-hint";
+          var vol = document.createElement("input");
+          vol.type = "range";
+          vol.min = "10"; vol.max = "100"; vol.step = "5"; vol.value = "100";
+          function syncVolLabel() { volLabel.textContent = "Sound volume: " + vol.value + "%"; }
+          vol.addEventListener("input", syncVolLabel);
+          syncVolLabel();
+          panel.appendChild(volLabel);
+          panel.appendChild(vol);
+          var hint = document.createElement("p");
+          hint.className = "lang-hint";
+          hint.textContent = "Sync modes replace the video's audio track with an AI soundtrack matched to the picture (timing is the model's estimate). Premium sync keeps the existing dialogue. Effects and music are mixed under the original audio.";
+          var plan = (typeof me !== "undefined" && me && me.plan) ? me.plan : null;
+          var canPremium = !!(plan && (plan.id === "pro" || plan.id === "extrapro"));
+          if (!canPremium)
+            hint.textContent += " Premium sync needs the Pro or Extra Pro plan" +
+              (plan ? " — your current plan is " + plan.name + "." : ".") +
+              " The server checks your plan before charging anything.";
+          panel.appendChild(hint);
+          var applyBtn = makeBtn("Apply sound — " + costs.sync + " credits", true);
+          panel.appendChild(applyBtn);
+          var err = document.createElement("div");
+          err.className = "form-error";
+          panel.appendChild(err);
+          function syncApplyBtn() {
+            applyBtn.textContent = "Apply sound — " + (costs[modeSel.value] !== undefined ? costs[modeSel.value] : "") + " credits";
+            var d = (soundCfg && soundCfg.default_volume && soundCfg.default_volume[modeSel.value]) ||
+                    SOUND_DEFAULT_VOL[modeSel.value];
+            if (d !== undefined) { vol.value = d; syncVolLabel(); }
+          }
+          modeSel.addEventListener("change", syncApplyBtn);
+          syncApplyBtn();
+          applyBtn.addEventListener("click", function () {
+            err.textContent = "";
+            err.classList.remove("show");
+            if (!token) { openAuth("login"); return; }
+            var body = { generation_id: g.id, mode: modeSel.value, volume: Number(vol.value),
+                         language: ($("#promptLang") ? $("#promptLang").value : "en") };
+            var p = promptIn.value.trim();
+            if (p) body.prompt = p;
+            applyBtn.disabled = true;
+            api("/api/sound/apply", { method: "POST", body: body }).then(function (res) {
+              applyBtn.disabled = false;
+              if (!res.ok || !res.data) {
+                err.textContent = errText(res, "Applying the sound failed");
+                err.classList.add("show");
+                return;
+              }
+              if (res.data.credits_left !== undefined) setCredits(res.data.credits_left);
+              toast("Sound applied — the new version is in your History.");
+              loadMe();
+              loadHistory();
+            });
+          });
+          return panel;
+        }
+        $("#soundMode").addEventListener("change", function () {
+          var d = (soundCfg && soundCfg.default_volume && soundCfg.default_volume[this.value]) ||
+                  SOUND_DEFAULT_VOL[this.value];
+          if (d !== undefined) {
+            $("#soundVolume").value = d;
+            $("#soundVolumeLabel").textContent = d;
+          }
+          updateCost();
+        });
+        $("#soundVolume").addEventListener("input", function () {
+          $("#soundVolumeLabel").textContent = this.value;
+        });
+        $("#soundPrompt").addEventListener("input", function () {
+          $("#soundCharCount").textContent = this.value.length;
+        });
+        $("#soundOnlyKind").addEventListener("change", fillSoundOnlyDurations);
+        $("#soundOnlyBtn").addEventListener("click", function () {
+          soundShowError("");
+          if (!token) {
+            soundShowError("Please sign in first — sound jobs are tied to your account and credits.");
+            openAuth("login");
+            return;
+          }
+          var p = $("#soundPrompt").value.trim();
+          if (!p) { soundShowError("Describe the sound in the box above first."); return; }
+          var btn = this;
+          btn.disabled = true;
+          api("/api/sound/generate", { method: "POST", body: {
+            kind: $("#soundOnlyKind").value, prompt: p,
+            duration_seconds: Number($("#soundOnlyDuration").value || 10),
+            language: ($("#promptLang") ? $("#promptLang").value : "en")
+          } }).then(function (res) {
+            btn.disabled = false;
+            if (!res.ok || !res.data) { soundShowError(errText(res, "The sound job failed")); return; }
+            if (res.data.credits_left !== undefined) setCredits(res.data.credits_left);
+            var a = $("#soundOnlyAudio");
+            a.src = resolveUrl(res.data.audio_url);
+            a.style.display = "block";
+            a.play().catch(function () {});
+            loadMe();
+            loadHistory();
+            toast("Sound ready — it is also saved in your History.");
           });
         });
 
