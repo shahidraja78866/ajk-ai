@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS reports (
 -- languages ur/ks/ar/fa/hi; NULL for en/zh). `prompt` keeps the original.
 
 CREATE TABLE IF NOT EXISTS plans (
-  id              TEXT PRIMARY KEY,               -- normal | pro | extrapro
+  id              TEXT PRIMARY KEY,               -- weekly | normal | pro | extrapro
   name            TEXT NOT NULL,
   price_monthly   INTEGER NOT NULL,               -- PKR
   price_yearly    INTEGER NOT NULL,               -- PKR
@@ -143,3 +143,17 @@ CREATE TABLE IF NOT EXISTS pack_purchases (
 -- One-time UPDATE of the 'normal' plan row only: price_monthly 1999,
 -- price_yearly 19990, credits_monthly 150 (owner decision 2026-10-23).
 -- Pro / Extra Pro unchanged; fresh DBs seed the same values.
+--
+-- === Final pricing + Weekly plan (migration v9) ===
+-- plans gains: price_weekly / credits_weekly (NULL on monthly plans; the
+--   Weekly plan is weekly-only — its monthly/yearly columns stay 0 and
+--   the API reports them as null), play_product_weekly (Google Play
+--   weekly base-plan product id, default 'ajk_weekly' — Play supports
+--   weekly base plans), can_veo / can_lipsync (entitlement flags for the
+--   Phase B Veo / lip-sync engines; flags only, no generation behavior).
+-- One-time UPDATEs set the owner's FINAL prices (2026-10-23): normal
+--   5600/mo + 400 credits; pro 9500/mo + 500 credits + both flags;
+--   extrapro 14000/mo + 600 credits + both flags; and the weekly plan row
+--   is inserted (Rs 1,800/week, 80 credits/week, 768P). Subscriptions gain
+--   nothing new: their period column now also accepts 'weekly' (period
+--   end = start + 7 days; grant = credits_weekly, once per period).

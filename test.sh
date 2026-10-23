@@ -27,6 +27,10 @@
 # + dummy PayFast merchant values (the real token-mint call is skipped,
 # but IPN signature verification runs for real, signed by
 # test-gateway-stub.js). No real Google or PayFast calls anywhere.
+# The pricing-v9 tests are self-contained too: a sixth instance (port
+# 18092, own DB) started by this script covers the Weekly plan lifecycle,
+# the per-quality rate card charges and the 400-credit daily cap, so the
+# main server's generation budget is not touched.
 # e.g.  ADMIN_EMAIL=admin@example.com FAL_MODEL_4K=test-4k-model TEST_RECORD_FAL_BODY=1 TRANSLATE_API_BASE=http://127.0.0.1:18099 npm start
 # Run against a FRESH database (fixed test emails are registered each run).
 TEST_FAL_MODEL_4K=${TEST_FAL_MODEL_4K:-fal-ai/kling-video/o3/4k/text-to-video}
@@ -106,10 +110,14 @@ check "gateway webhook unconfigured -> 503" "503" "$(curl -s -o /dev/null -w '%{
 
 echo "--- monetization: plans API (public) ---"
 PLANS=$(curl -s $B/api/plans); echo "$PLANS" | head -c 400; echo
-check "plans list has 3 plans" "3" "$(echo $PLANS | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["plans"]))')"
-check "normal plan price Rs 1999" "1999" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="normal"][0]["price_monthly"])')"
-check "normal plan yearly Rs 19990" "19990" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="normal"][0]["price_yearly"])')"
-check "normal plan 150 credits/mo" "150" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="normal"][0]["credits_monthly"])')"
+check "plans list has 4 plans" "4" "$(echo $PLANS | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["plans"]))')"
+check "normal plan price Rs 5600" "5600" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="normal"][0]["price_monthly"])')"
+check "normal plan yearly Rs 56000" "56000" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="normal"][0]["price_yearly"])')"
+check "normal plan 400 credits/mo" "400" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="normal"][0]["credits_monthly"])')"
+check "weekly plan: Rs 1800/week, 80 credits/wk" "1800/80" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["plans"] if x["id"]=="weekly"][0];print(str(p["price_weekly"])+"/"+str(p["credits_weekly"]))')"
+check "weekly plan has no monthly price (null)" "None" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="weekly"][0]["price_monthly"])')"
+check "normal plan: Veo flag off" "False" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="normal"][0]["features"]["can_veo"])')"
+check "pro plan: Veo + lip-sync flags on" "True/True" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["plans"] if x["id"]=="pro"][0];print(str(p["features"]["can_veo"])+"/"+str(p["features"]["can_lipsync"]))')"
 check "extrapro label is Native 4K" "Native 4K" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="extrapro"][0]["quality_label"])')"
 
 echo "--- monetization: admin auth ---"
@@ -129,13 +137,13 @@ MP=$(curl -s -X POST $B/api/admin/users/$PID/manual-payment -H "Authorization: B
 echo "$MP"
 check "manual payment ok" "True" "$(echo $MP | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
 PME=$(curl -s $B/api/me -H "Authorization: Bearer $PTOKEN")
-check "activation: total credits 100 free + 150 plan = 250" "250" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
-check "activation: plan bucket = 150" "150" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
+check "activation: total credits 100 free + 400 plan = 500" "500" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "activation: plan bucket = 400" "400" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
 check "activation: free bucket untouched = 100" "100" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
 check "activation: current plan is normal" "normal" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan"]["id"])')"
 PAY=$(curl -s $B/api/payments -H "Authorization: Bearer $PTOKEN")
 check "user payment history has 1 payment" "1" "$(echo $PAY | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["payments"]))')"
-check "payment amount Rs 1999" "1999" "$(echo $PAY | python3 -c 'import sys,json;print(json.load(sys.stdin)["payments"][0]["amount"])')"
+check "payment amount Rs 5600" "5600" "$(echo $PAY | python3 -c 'import sys,json;print(json.load(sys.stdin)["payments"][0]["amount"])')"
 check "payment provider is manual_test" "manual_test" "$(echo $PAY | python3 -c 'import sys,json;print(json.load(sys.stdin)["payments"][0]["provider"])')"
 
 echo "--- monetization: payment isolation + no self-activation ---"
@@ -153,23 +161,23 @@ PHIST=$(curl -s $B/api/history -H "Authorization: Bearer $PTOKEN")
 check "normal job routed at 768P" "768P" "$(echo $PHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["resolution"])')"
 check "normal job model is H3" "minimax/h3/text-to-video" "$(echo $PHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["model"])')"
 check "normal 10s job cost 20 credits" "20" "$(echo $PHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
-check "credits refunded to 250 after failed normal job" "250" "$(echo $PHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "credits refunded to 500 after failed normal job" "500" "$(echo $PHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
-echo "--- monetization: extrapro native-4K routing + double credit cost ---"
+echo "--- monetization: extrapro native-4K routing + 4K rate card ---"
 MP2=$(curl -s -X POST $B/api/admin/users/$PID/manual-payment -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{"plan_id":"extrapro","period":"monthly"}')
 check "extrapro activation ok" "True" "$(echo $MP2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
 PME2=$(curl -s $B/api/me -H "Authorization: Bearer $PTOKEN")
-check "extrapro: total credits 100 free + 120 plan = 220" "220" "$(echo $PME2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "extrapro: total credits 100 free + 600 plan = 700" "700" "$(echo $PME2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "extrapro: plan switched" "extrapro" "$(echo $PME2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan"]["id"])')"
 curl -s -o /dev/null -X POST $B/api/generate -H "Authorization: Bearer $PTOKEN" -H 'Idempotency-Key: plan-4k-1' -H 'Content-Type: application/json' -d '{"prompt":"a mountain sunrise above the clouds","aspect_ratio":"16:9","duration":5}'
 PHIST2=$(curl -s $B/api/history -H "Authorization: Bearer $PTOKEN")
 check "4K job routed at 4K" "4K" "$(echo $PHIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["resolution"])')"
 check "4K job uses FAL_MODEL_4K model" "$TEST_FAL_MODEL_4K" "$(echo $PHIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["model"])')"
-check "4K 5s job cost doubled = 20 credits" "20" "$(echo $PHIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
-check "credits refunded to 220 after failed 4K job" "220" "$(echo $PHIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "4K 5s job cost (rate card) = 40 credits" "40" "$(echo $PHIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
+check "credits refunded to 700 after failed 4K job" "700" "$(echo $PHIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 JOB4K=$(echo $PHIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["id"])')
 curl -s $B/api/generations/$JOB4K -H "Authorization: Bearer $PTOKEN" > /dev/null
-check "no double refund after polling failed 4K job" "220" "$(curl -s $B/api/me -H "Authorization: Bearer $PTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "no double refund after polling failed 4K job" "700" "$(curl -s $B/api/me -H "Authorization: Bearer $PTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 curl -s -o /dev/null -X POST $B/api/generate -H "Authorization: Bearer $PTOKEN" -H 'Idempotency-Key: plan-4k-low' -H 'Content-Type: application/json' -d '{"prompt":"a quiet forest stream in soft light","aspect_ratio":"16:9","duration":5,"resolution":"768P"}'
 PHIST3=$(curl -s $B/api/history -H "Authorization: Bearer $PTOKEN")
 check "extrapro lower-quality pick routed at 768P" "768P" "$(echo $PHIST3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["resolution"])')"
@@ -185,23 +193,23 @@ check "4K fal body pins generate_audio false" "False" "$(echo $FB | python3 -c '
 check "4K fal body keeps aspect_ratio" "16:9" "$(echo $FB | python3 -c 'import sys,json;print(json.load(sys.stdin)["body"]["aspect_ratio"])')"
 check "4K fal body keeps safety checker on" "True" "$(echo $FB | python3 -c 'import sys,json;print(json.load(sys.stdin)["body"]["enable_safety_checker"])')"
 
-echo "--- monetization: 4K aspect-ratio fallback (21:9 -> H3 at 2K, normal rate) ---"
+echo "--- monetization: 4K aspect-ratio fallback (21:9 -> H3 at 2K, 2K rate) ---"
 R2119=$(curl -s -X POST $B/api/generate -H "Authorization: Bearer $PTOKEN" -H 'Idempotency-Key: plan-4k-2119' -H 'Content-Type: application/json' -d '{"prompt":"wide desert panorama at dusk","aspect_ratio":"21:9","duration":5}')
 PHIST4=$(curl -s $B/api/history -H "Authorization: Bearer $PTOKEN")
 check "21:9 fallback routed at 2K" "2K" "$(echo $PHIST4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["resolution"])')"
 check "21:9 fallback uses H3 model" "minimax/h3/text-to-video" "$(echo $PHIST4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["model"])')"
-check "21:9 fallback cost normal = 10 credits" "10" "$(echo $PHIST4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
+check "21:9 fallback cost (2K rate) = 15 credits" "15" "$(echo $PHIST4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
 # (The fallback `note` only appears on a successful provider response, which is
 #  unreachable with a dummy key; routing/cost/refund are fully asserted above.)
 FB2=$(curl -s $B/api/_test/fal-body)
 check "fallback fal body keeps resolution param" "2K" "$(echo $FB2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["body"].get("resolution","absent"))')"
 check "fallback fal body duration is integer" "5-int" "$(echo $FB2 | python3 -c 'import sys,json;b=json.load(sys.stdin)["body"];print(str(b["duration"])+("-int" if isinstance(b["duration"],int) else "-NOTINT"))')"
-check "credits refunded to 220 after failed fallback job" "220" "$(echo $PHIST4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "credits refunded to 700 after failed fallback job" "700" "$(echo $PHIST4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 echo "--- monetization: renewal grant + cancel ---"
 RG=$(curl -s -X POST $B/api/admin/users/$PID/grant-renewal -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{}')
 check "renewal grant ok" "True" "$(echo $RG | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
-check "renewal resets plan bucket to 120" "120" "$(curl -s $B/api/me -H "Authorization: Bearer $PTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
+check "renewal resets plan bucket to 600" "600" "$(curl -s $B/api/me -H "Authorization: Bearer $PTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
 CX=$(curl -s -X POST $B/api/admin/users/$PID/cancel-subscription -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{}')
 check "cancel sets status canceled" "canceled" "$(echo $CX | python3 -c 'import sys,json;print(json.load(sys.stdin)["subscription"]["status"])')"
 
@@ -209,15 +217,15 @@ echo "--- monetization: admin price edit takes effect ---"
 PE=$(curl -s -X PUT $B/api/admin/plans/pro -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{"price_monthly":3200}')
 check "price edit returns Rs 3200" "3200" "$(echo $PE | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan"]["price_monthly"])')"
 check "public plans API shows edited price" "3200" "$(curl -s $B/api/plans | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="pro"][0]["price_monthly"])')"
-curl -s -X PUT $B/api/admin/plans/pro -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{"price_monthly":3000}' > /dev/null
-check "price restored to Rs 3000" "3000" "$(curl -s $B/api/plans | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="pro"][0]["price_monthly"])')"
+curl -s -X PUT $B/api/admin/plans/pro -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{"price_monthly":9500}' > /dev/null
+check "price restored to Rs 9500" "9500" "$(curl -s $B/api/plans | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="pro"][0]["price_monthly"])')"
 
 echo "--- monetization: revenue summary math ---"
 REV=$(curl -s $B/api/admin/revenue -H "Authorization: Bearer $ATOKEN"); echo "$REV"
-check "revenue total = 1999 + 5000" "6999" "$(echo $REV | python3 -c 'import sys,json;print(json.load(sys.stdin)["total_succeeded"])')"
+check "revenue total = 5600 + 14000" "19600" "$(echo $REV | python3 -c 'import sys,json;print(json.load(sys.stdin)["total_succeeded"])')"
 check "revenue payment count = 2" "2" "$(echo $REV | python3 -c 'import sys,json;print(json.load(sys.stdin)["total_succeeded_count"])')"
-check "extrapro revenue = 5000" "5000" "$(echo $REV | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["by_plan"] if p["plan_id"]=="extrapro"][0]["total"])')"
-check "current-month revenue = 6999" "6999" "$(echo $REV | python3 -c 'import sys,json;print(json.load(sys.stdin)["monthly"][0]["total"])')"
+check "extrapro revenue = 14000" "14000" "$(echo $REV | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["by_plan"] if p["plan_id"]=="extrapro"][0]["total"])')"
+check "current-month revenue = 19600" "19600" "$(echo $REV | python3 -c 'import sys,json;print(json.load(sys.stdin)["monthly"][0]["total"])')"
 
 echo "--- credit packs: catalogue, purchase flow, admin approval (exactly once) ---"
 PK=$(curl -s $B/api/packs); echo "$PK" | head -c 300; echo
@@ -362,7 +370,7 @@ CFG3=$(curl -s $B3/api/config)
 check "config cost 5s = 10 credits (rescaled)" "10" "$(echo $CFG3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_by_duration"]["5"])')"
 check "config cost 10s = 20 credits (rescaled)" "20" "$(echo $CFG3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_by_duration"]["10"])')"
 check "config signup credits = 100 (rescaled)" "100" "$(echo $CFG3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["signup_credits"])')"
-check "config daily cap = 200 (rescaled)" "200" "$(echo $CFG3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["max_daily_credits"])')"
+check "config daily cap = 400" "400" "$(echo $CFG3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["max_daily_credits"])')"
 check "config payment_methods includes set easypaisa" "0300-1111111" "$(echo $CFG3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["payment_methods"].get("easypaisa"))')"
 check "config payment_methods omits unset jazzcash" "absent" "$(echo $CFG3 | python3 -c 'import sys,json;print("present" if "jazzcash" in json.load(sys.stdin)["payment_methods"] else "absent")')"
 JR=$(curl -s -X POST $B3/api/auth/register -H 'Content-Type: application/json' -d '{"email":"joiner@example.com","password":"password123"}')
@@ -455,9 +463,9 @@ V3=$(curl -s -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $BTOK
 check "play sub verify ok" "True" "$(echo $V3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
 BME=$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN"); echo "$BME"
 check "play sub: current plan is normal" "normal" "$(echo $BME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan"]["id"])')"
-check "play sub: plan bucket granted 150" "150" "$(echo $BME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
+check "play sub: plan bucket granted 400" "400" "$(echo $BME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
 check "play sub: subscription status active" "active" "$(echo $BME | python3 -c 'import sys,json;print(json.load(sys.stdin)["subscription"]["status"])')"
-check "play sub: total = 200 free + 150 plan = 350" "350" "$(echo $BME | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "play sub: total = 200 free + 400 plan = 600" "600" "$(echo $BME | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 echo "--- play billing: (e) voided purchase sync claws credits back ---"
 V4=$(curl -s -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"credits_100","purchase_token":"voided-token"}')
@@ -476,7 +484,7 @@ CO1B=$(echo "$CO1" | sed '$d')
 BASKET1=$(echo $CO1B | python3 -c 'import sys,json;print(json.load(sys.stdin)["basket_id"])')
 check "gateway checkout URL is the PayFast PostTransaction endpoint" "yes" "$(echo $CO1B | python3 -c 'import sys,json;u=json.load(sys.stdin)["checkout_url"];print("yes" if u.endswith("/Ecommerce/api/Transaction/PostTransaction") else "no")')"
 check "gateway checkout params carry the merchant signature" "yes" "$(echo $CO1B | python3 -c 'import sys,json;s=json.load(sys.stdin)["params"].get("SIGNATURE","");print("yes" if len(s)==32 else "no")')"
-check "gateway checkout granted nothing (total still 350)" "350" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "gateway checkout granted nothing (total still 600)" "600" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 echo "--- gateway: (b) correctly-signed success webhook grants exactly once ---"
 WB1=$(node "$(dirname "$0")/test-gateway-stub.js" testmerchant "AJK AI" 1499 "$BASKET1" 00 TXN-GW-1)
@@ -510,6 +518,20 @@ WHR=$(curl -s -X POST $B4/api/billing/gateway/webhook -H 'Content-Type: applicat
 check "reversal webhook claws back 50" "50" "$(echo $WHR | python3 -c 'import sys,json;print(json.load(sys.stdin)["clawed_back"])')"
 check "reversal: free bucket back to 300" "300" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
 check "reversed gateway payment marked refunded" "refunded" "$(curl -s $B4/api/payments -H "Authorization: Bearer $BTOKEN" | python3 -c "import sys,json;print([p for p in json.load(sys.stdin)['payments'] if p['provider_txn_id']=='$BASKET3'][0]['status'])")"
+
+echo "--- play billing: weekly subscription via the weekly Play product ---"
+# The Weekly plan maps to its own Play product (Play supports weekly base
+# plans). The purchase resolves through the plan's play_product_weekly id
+# to a weekly activation granting the weekly credits. (The mock verifier
+# reports a 30-day Google expiry, which — as with real purchases — pins
+# the period end; the calendar +7-day weekly period is asserted on the
+# v9 instance below, where no provider expiry is involved.)
+V5=$(curl -s -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $OTOKEN4" -H 'Content-Type: application/json' -d '{"kind":"subscription","product_id":"ajk_weekly","purchase_token":"valid-sub-weekly"}')
+check "play weekly verify ok" "True" "$(echo $V5 | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
+OME=$(curl -s $B4/api/me -H "Authorization: Bearer $OTOKEN4")
+check "play weekly: current plan is weekly" "weekly" "$(echo $OME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan"]["id"])')"
+check "play weekly: plan bucket granted 80" "80" "$(echo $OME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
+check "play weekly: subscription period is weekly" "weekly" "$(echo $OME | python3 -c 'import sys,json;print(json.load(sys.stdin)["subscription"]["period"])')"
 kill $SRV4_PID 2>/dev/null
 
 echo "--- video modes, image-to-video, watermarks (own instance) ---"
@@ -647,14 +669,153 @@ const p = db.prepare(\"SELECT price_monthly, price_yearly, credits_monthly FROM 
 const mig = db.prepare('SELECT version FROM schema_migrations WHERE version = 8').get();
 console.log(mig ? [p.price_monthly, p.price_yearly, p.credits_monthly].join('/') : 'missing');
 ")"
-check "v8 leaves Pro untouched (3000/120)" "3000/120" "$(node --input-type=module -e "
+check "Pro keeps its v9 values after v8 re-apply (9500/500)" "9500/500" "$(node --input-type=module -e "
 import { DatabaseSync } from 'node:sqlite';
 const db = new DatabaseSync('/tmp/myvideoai-modes-test.db');
 const p = db.prepare(\"SELECT price_monthly, credits_monthly FROM plans WHERE id = 'pro'\").get();
 console.log([p.price_monthly, p.credits_monthly].join('/'));
 ")"
+
+echo "--- migration v9: final pricing + Weekly plan apply to a pre-v9 DB ---"
+kill $SRV5_PID 2>/dev/null; sleep 0.5
+node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-modes-test.db');
+db.exec('DELETE FROM schema_migrations WHERE version = 9');
+db.exec('DELETE FROM plans WHERE id = \'weekly\'');
+for (const col of ['price_weekly', 'credits_weekly', 'play_product_weekly', 'can_veo', 'can_lipsync'])
+  db.exec('ALTER TABLE plans DROP COLUMN ' + col);
+db.exec(\"UPDATE plans SET price_monthly = 1999, price_yearly = 19990, credits_monthly = 150 WHERE id = 'normal'\");
+db.exec(\"UPDATE plans SET price_monthly = 3000, price_yearly = 30000, credits_monthly = 120 WHERE id = 'pro'\");
+db.exec(\"UPDATE plans SET price_monthly = 5000, price_yearly = 50000, credits_monthly = 120 WHERE id = 'extrapro'\");
+console.log('plans rolled back to pre-v9 shape and prices');
+"
+env DB_PATH=/tmp/myvideoai-modes-test.db PORT=18094 FAL_KEY=dummy_test_key "$MODES_JWT_NAME=modes-instance-dummy-value" TEST_RECORD_FAL_BODY=1 GENERATED_DIR=/tmp/modegen node "$(dirname "$0")/server.js" > /tmp/myvideoai-modes-test4.log 2>&1 &
+SRV5_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B5/api/health && break || sleep 0.25; done
+check "v9 re-applied: normal 5600/56000/400" "5600/56000/400" "$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-modes-test.db');
+const p = db.prepare(\"SELECT price_monthly, price_yearly, credits_monthly FROM plans WHERE id = 'normal'\").get();
+const mig = db.prepare('SELECT version FROM schema_migrations WHERE version = 9').get();
+console.log(mig ? [p.price_monthly, p.price_yearly, p.credits_monthly].join('/') : 'missing');
+")"
+check "v9 re-applied: pro 9500/500 + Veo flag" "9500/500/1" "$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-modes-test.db');
+const p = db.prepare(\"SELECT price_monthly, credits_monthly, can_veo FROM plans WHERE id = 'pro'\").get();
+console.log([p.price_monthly, p.credits_monthly, p.can_veo].join('/'));
+")"
+check "v9 re-applied: weekly plan inserted (1800/80, ajk_weekly)" "1800/80/ajk_weekly" "$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-modes-test.db');
+const p = db.prepare(\"SELECT price_weekly, credits_weekly, play_product_weekly FROM plans WHERE id = 'weekly'\").get();
+console.log(p ? [p.price_weekly, p.credits_weekly, p.play_product_weekly].join('/') : 'missing');
+")"
+# Admin edits made AFTER the migration must survive a reboot (v9 is
+# version-gated and runs exactly once; boot seed never overwrites prices).
+node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-modes-test.db');
+db.exec('UPDATE plans SET price_monthly = 6100 WHERE id = \'normal\'');
+console.log('simulated admin price edit: normal -> 6100');
+"
+kill $SRV5_PID 2>/dev/null; sleep 0.5
+env DB_PATH=/tmp/myvideoai-modes-test.db PORT=18094 FAL_KEY=dummy_test_key "$MODES_JWT_NAME=modes-instance-dummy-value" TEST_RECORD_FAL_BODY=1 GENERATED_DIR=/tmp/modegen node "$(dirname "$0")/server.js" > /tmp/myvideoai-modes-test5.log 2>&1 &
+SRV5_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B5/api/health && break || sleep 0.25; done
+check "admin price edit survives reboot (6100, not clobbered)" "6100" "$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-modes-test.db');
+console.log(db.prepare(\"SELECT price_monthly FROM plans WHERE id = 'normal'\").get().price_monthly);
+")"
 kill $SRV5_PID $WM_PID 2>/dev/null
 rm -rf "$(dirname "$0")/data/uploads/$MID" "$(dirname "$0")/data/uploads/$OID5" 2>/dev/null
+
+echo "--- pricing v9: weekly plan, per-quality rate card, daily cap 400 (own instance) ---"
+# Self-contained SIXTH instance (own throwaway DB). Kept off the main
+# server because its per-IP generation budget is nearly exhausted by the
+# earlier sections. Covers: /api/config exposing the full rate card,
+# /api/plans weekly + feature flags, weekly activation (80 credits,
+# 7-day period, Rs 1,800 payment), period-fit rejections, the 2K/4K rows
+# of the rate card in real generation charges, and the daily cap at 400.
+B6=http://127.0.0.1:18092
+rm -f /tmp/myvideoai-v9-test.db
+V9_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-v9-test.db PORT=18092 FAL_KEY=dummy_test_key "$V9_JWT_NAME=v9-instance-dummy-value" ADMIN_EMAIL=v9admin@example.com TEST_RECORD_FAL_BODY=1 node "$(dirname "$0")/server.js" > /tmp/myvideoai-v9-test.log 2>&1 &
+SRV6_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B6/api/health && break || sleep 0.25; done
+CFG6=$(curl -s $B6/api/config)
+check "config daily cap defaults to 400" "400" "$(echo $CFG6 | python3 -c 'import sys,json;print(json.load(sys.stdin)["max_daily_credits"])')"
+check "config rate card 768P: 5s=10, 10s=20" "10/20" "$(echo $CFG6 | python3 -c 'import sys,json;q=json.load(sys.stdin)["cost_by_quality"]["768P"];print(str(q["5"])+"/"+str(q["10"]))')"
+check "config rate card 2K: 5s=15, 10s=30" "15/30" "$(echo $CFG6 | python3 -c 'import sys,json;q=json.load(sys.stdin)["cost_by_quality"]["2K"];print(str(q["5"])+"/"+str(q["10"]))')"
+check "config rate card 4K: 5s=40, 10s=80" "40/80" "$(echo $CFG6 | python3 -c 'import sys,json;q=json.load(sys.stdin)["cost_by_quality"]["4K"];print(str(q["5"])+"/"+str(q["10"]))')"
+PL6=$(curl -s $B6/api/plans)
+check "plans: 4 plans listed" "4" "$(echo $PL6 | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["plans"]))')"
+check "plans: weekly 1800/wk + 80 credits, monthly fields null" "1800/80/None/None" "$(echo $PL6 | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["plans"] if x["id"]=="weekly"][0];print("/".join([str(p["price_weekly"]),str(p["credits_weekly"]),str(p["price_monthly"]),str(p["credits_monthly"])]))')"
+check "plans: weekly play product is ajk_weekly" "ajk_weekly" "$(echo $PL6 | python3 -c 'import sys,json;d=json.load(sys.stdin);print([x for x in d["plans"] if x["id"]=="weekly"][0]["play_product_id"]["weekly"])')"
+check "plans: weekly features (no Veo/lip-sync, max 768P)" "False/False/768P" "$(echo $PL6 | python3 -c 'import sys,json;d=json.load(sys.stdin);f=[x for x in d["plans"] if x["id"]=="weekly"][0]["features"];print(str(f["can_veo"])+"/"+str(f["can_lipsync"])+"/"+f["max_quality"])')"
+check "plans: normal has no weekly price (null)" "None" "$(echo $PL6 | python3 -c 'import sys,json;d=json.load(sys.stdin);print([x for x in d["plans"] if x["id"]=="normal"][0]["price_weekly"])')"
+check "plans: pro features (Veo + lip-sync, max 2K)" "True/True/2K" "$(echo $PL6 | python3 -c 'import sys,json;d=json.load(sys.stdin);f=[x for x in d["plans"] if x["id"]=="pro"][0]["features"];print(str(f["can_veo"])+"/"+str(f["can_lipsync"])+"/"+f["max_quality"])')"
+check "plans: extrapro 14000/mo + 600 credits, max 4K" "14000/600/4K" "$(echo $PL6 | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["plans"] if x["id"]=="extrapro"][0];print(str(p["price_monthly"])+"/"+str(p["credits_monthly"])+"/"+p["features"]["max_quality"])')"
+AR6=$(curl -s -X POST $B6/api/auth/register -H 'Content-Type: application/json' -d '{"email":"v9admin@example.com","password":"password123"}')
+AT6=$(echo $AR6 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+WR6=$(curl -s -X POST $B6/api/auth/register -H 'Content-Type: application/json' -d '{"email":"v9user@example.com","password":"password123"}')
+UT6=$(echo $WR6 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+UID6=$(curl -s $B6/api/me -H "Authorization: Bearer $UT6" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+
+echo "--- pricing v9: weekly activation (80 credits, 7-day period) ---"
+WMP=$(curl -s -X POST $B6/api/admin/users/$UID6/manual-payment -H "Authorization: Bearer $AT6" -H 'Content-Type: application/json' -d '{"plan_id":"weekly","period":"weekly"}')
+check "weekly manual payment ok" "True" "$(echo $WMP | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
+check "weekly payment amount Rs 1800" "1800" "$(curl -s $B6/api/payments -H "Authorization: Bearer $UT6" | python3 -c 'import sys,json;print(json.load(sys.stdin)["payments"][0]["amount"])')"
+WME=$(curl -s $B6/api/me -H "Authorization: Bearer $UT6")
+check "weekly: plan bucket granted 80" "80" "$(echo $WME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
+check "weekly: total = 100 free + 80 plan = 180" "180" "$(echo $WME | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "weekly: subscription period is weekly" "weekly" "$(echo $WME | python3 -c 'import sys,json;print(json.load(sys.stdin)["subscription"]["period"])')"
+check "weekly: period spans exactly 7 days" "7" "$(echo $WME | python3 -c 'import sys,json,datetime as dt;s=json.load(sys.stdin)["subscription"];a=dt.datetime.fromisoformat(s["current_period_start"]);b=dt.datetime.fromisoformat(s["current_period_end"]);print((b-a).days)')"
+
+echo "--- pricing v9: period/plan fit is enforced ---"
+check "weekly plan bought monthly -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B6/api/admin/users/$UID6/manual-payment -H "Authorization: Bearer $AT6" -H 'Content-Type: application/json' -d '{"plan_id":"weekly","period":"monthly"}')"
+check "weekly plan bought yearly -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B6/api/admin/users/$UID6/manual-payment -H "Authorization: Bearer $AT6" -H 'Content-Type: application/json' -d '{"plan_id":"weekly","period":"yearly"}')"
+check "monthly plan bought weekly -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B6/api/admin/users/$UID6/manual-payment -H "Authorization: Bearer $AT6" -H 'Content-Type: application/json' -d '{"plan_id":"normal","period":"weekly"}')"
+check "rejected period purchases changed nothing (total still 180)" "180" "$(curl -s $B6/api/me -H "Authorization: Bearer $UT6" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+
+echo "--- pricing v9: rate card charges by routed quality (2K / 4K) ---"
+PR6=$(curl -s -X POST $B6/api/auth/register -H 'Content-Type: application/json' -d '{"email":"v9pro@example.com","password":"password123"}')
+PT6=$(echo $PR6 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+PID6=$(curl -s $B6/api/me -H "Authorization: Bearer $PT6" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+curl -s -o /dev/null -X POST $B6/api/admin/users/$PID6/activate -H "Authorization: Bearer $AT6" -H 'Content-Type: application/json' -d '{"plan_id":"pro","period":"monthly"}'
+curl -s -o /dev/null -X POST $B6/api/generate -H "Authorization: Bearer $PT6" -H 'Idempotency-Key: v9-pro-5s' -H 'Content-Type: application/json' -d '{"prompt":"a city skyline at golden hour","aspect_ratio":"16:9","duration":5}'
+PH6=$(curl -s $B6/api/history -H "Authorization: Bearer $PT6")
+check "pro 5s job routed at 2K" "2K" "$(echo $PH6 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["resolution"])')"
+check "pro 5s job cost 15 credits (2K rate)" "15" "$(echo $PH6 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
+curl -s -o /dev/null -X POST $B6/api/generate -H "Authorization: Bearer $PT6" -H 'Idempotency-Key: v9-pro-10s' -H 'Content-Type: application/json' -d '{"prompt":"a city skyline at golden hour, longer take","aspect_ratio":"16:9","duration":10}'
+check "pro 10s job cost 30 credits (2K rate)" "30" "$(curl -s $B6/api/history -H "Authorization: Bearer $PT6" | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
+XR6=$(curl -s -X POST $B6/api/auth/register -H 'Content-Type: application/json' -d '{"email":"v9xpro@example.com","password":"password123"}')
+XT6=$(echo $XR6 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+XID6=$(curl -s $B6/api/me -H "Authorization: Bearer $XT6" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+curl -s -o /dev/null -X POST $B6/api/admin/users/$XID6/activate -H "Authorization: Bearer $AT6" -H 'Content-Type: application/json' -d '{"plan_id":"extrapro","period":"monthly"}'
+curl -s -o /dev/null -X POST $B6/api/generate -H "Authorization: Bearer $XT6" -H 'Idempotency-Key: v9-x-5s' -H 'Content-Type: application/json' -d '{"prompt":"an eagle soaring over snow peaks","aspect_ratio":"16:9","duration":5}'
+XH6=$(curl -s $B6/api/history -H "Authorization: Bearer $XT6")
+check "extrapro 5s job routed at 4K" "4K" "$(echo $XH6 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["resolution"])')"
+check "extrapro 5s job cost 40 credits (4K rate)" "40" "$(echo $XH6 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
+curl -s -o /dev/null -X POST $B6/api/generate -H "Authorization: Bearer $XT6" -H 'Idempotency-Key: v9-x-10s' -H 'Content-Type: application/json' -d '{"prompt":"an eagle soaring over snow peaks, longer take","aspect_ratio":"16:9","duration":10}'
+check "extrapro 10s job cost 80 credits (4K rate)" "80" "$(curl -s $B6/api/history -H "Authorization: Bearer $XT6" | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
+
+echo "--- pricing v9: daily cap enforced at 400 ---"
+DR6=$(curl -s -X POST $B6/api/auth/register -H 'Content-Type: application/json' -d '{"email":"v9daily@example.com","password":"password123"}')
+DT6=$(echo $DR6 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+DID6=$(curl -s $B6/api/me -H "Authorization: Bearer $DT6" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-v9-test.db');
+db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?)').run($DID6, 'daily-cap seed', '16:9', 10, 'realistic', 'completed', 395);
+console.log('seeded 395 credits of completed spend for today');
+"
+DCAP=$(curl -s -w '\n%{http_code}' -X POST $B6/api/generate -H "Authorization: Bearer $DT6" -H 'Content-Type: application/json' -d '{"prompt":"one more small clip please","aspect_ratio":"16:9","duration":5}')
+check "395 spent + 10 more exceeds the 400 daily cap -> 429" "429" "$(echo "$DCAP" | tail -1)"
+check "daily-cap error names the limit" "Daily spending limit reached. Try again tomorrow." "$(echo "$DCAP" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+kill $SRV6_PID 2>/dev/null
 
 echo "--- rate limit: burst until 429 ---"
 FOUND429="no"

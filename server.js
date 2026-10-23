@@ -50,6 +50,20 @@ if (!FAL_KEY || !JWT_SECRET) {
 }
 
 // ---------- Public configuration (safe to expose via /api/config) ----------
+// Generation rate card (owner pricing v9, 2026-10-23): credits are charged
+// by the ROUTED quality of the job and its duration — there is no separate
+// "4K costs double" rule anymore; each quality has its own row. Charged on
+// submit, automatically refunded if the provider fails the job.
+const COST_BY_QUALITY = {
+  '768P': { 5: 10, 10: 20 },
+  '2K':   { 5: 15, 10: 30 },
+  '4K':   { 5: 40, 10: 80 },
+};
+function generationCost(resolution, duration) {
+  const table = COST_BY_QUALITY[resolution] || COST_BY_QUALITY['768P'];
+  return table[Number(duration)] ?? COST_BY_QUALITY['768P'][Number(duration)] ?? 1;
+}
+
 const CONFIG = {
   model: process.env.FAL_MODEL || 'minimax/h3/text-to-video',
   // Model used for native-4K generations (Extra Pro plan). Verified against
@@ -68,14 +82,12 @@ const CONFIG = {
   aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'],
   durations: [5, 10],                       // seconds offered in the UI
   styles: ['realistic', 'cinematic', 'cartoon', 'anime'],
-  // Credits charged per generation, by duration (owner's rescaled system:
-  // bigger numbers, same shape — 10s costs twice a 5s). Charged on submit,
-  // automatically refunded if the provider fails the job.
-  costByDuration: { 5: 10, 10: 20 },
-  // Native-4K generations cost double credits (Extra Pro plan quality).
-  costMultiplier4k: 2,
+  // The full per-quality rate card (see COST_BY_QUALITY above).
+  // costByDuration stays as the 768P row for backward compatibility.
+  costByQuality: COST_BY_QUALITY,
+  costByDuration: COST_BY_QUALITY['768P'],
   signupCredits: Number(process.env.SIGNUP_CREDITS || 100),
-  maxDailyCredits: Number(process.env.MAX_DAILY_CREDITS || 200),
+  maxDailyCredits: Number(process.env.MAX_DAILY_CREDITS || 400),
   // Bootstrap admin: the account with this email gets the admin flag
   // (at registration, at login, and for existing accounts at boot).
   adminEmail: (process.env.ADMIN_EMAIL || '').trim().toLowerCase(),
@@ -181,20 +193,36 @@ const RESOLUTIONS = ['480P', '768P', '2K', '4K'];
 // never charged or recorded as 4K.
 const FOUR_K_ASPECTS = ['16:9', '9:16', '1:1'];
 
-// Subscription plan catalogue. Prices/credits are seeded into the `plans`
-// table on first boot and are afterwards editable in the admin panel — boot
-// only re-syncs the structural fields (name, quality, resolution, model) and
-// never overwrites prices or credit amounts an admin has changed.
+// Subscription plan catalogue (owner pricing v9, 2026-10-23). Prices/credits
+// are seeded into the `plans` table on first boot and are afterwards editable
+// in the admin panel — boot only re-syncs the structural fields (name,
+// quality, resolution, model, feature flags) and never overwrites prices or
+// credit amounts an admin has changed. The Weekly plan is weekly-ONLY: its
+// price/credits live in price_weekly/credits_weekly and it has no monthly or
+// yearly cycle (the monthly/yearly columns stay 0 and the API reports them
+// as null). Feature flags (can_veo / can_lipsync) are entitlements only in
+// this wave — the Veo and lip-sync generation engines are Phase B.
 const PLAN_DEFAULTS = [
-  { id: 'normal',   name: 'Normal',    price_monthly: 1999, price_yearly: 19990,
-    credits_monthly: 150, quality: '768P', quality_label: '768P',      resolution: '768P', model: CONFIG.model,   sort_order: 1,
-    play_product_monthly: 'ajk_normal_monthly',   play_product_yearly: 'ajk_normal_yearly' },
-  { id: 'pro',      name: 'Pro',       price_monthly: 3000, price_yearly: 30000,
-    credits_monthly: 120, quality: '2K',   quality_label: '2K',        resolution: '2K',   model: CONFIG.model,   sort_order: 2,
-    play_product_monthly: 'ajk_pro_monthly',      play_product_yearly: 'ajk_pro_yearly' },
-  { id: 'extrapro', name: 'Extra Pro', price_monthly: 5000, price_yearly: 50000,
-    credits_monthly: 120, quality: '4K',   quality_label: 'Native 4K', resolution: '4K',   model: CONFIG.model4k, sort_order: 3,
-    play_product_monthly: 'ajk_extrapro_monthly', play_product_yearly: 'ajk_extrapro_yearly' },
+  { id: 'weekly',   name: 'Weekly',    price_monthly: 0,    price_yearly: 0,
+    credits_monthly: 0, price_weekly: 1800, credits_weekly: 80,
+    quality: '768P', quality_label: '768P',      resolution: '768P', model: CONFIG.model,   sort_order: 0,
+    can_veo: 0, can_lipsync: 0,
+    play_product_monthly: null, play_product_yearly: null, play_product_weekly: 'ajk_weekly' },
+  { id: 'normal',   name: 'Normal',    price_monthly: 5600, price_yearly: 56000,
+    credits_monthly: 400, price_weekly: null, credits_weekly: null,
+    quality: '768P', quality_label: '768P',      resolution: '768P', model: CONFIG.model,   sort_order: 1,
+    can_veo: 0, can_lipsync: 0,
+    play_product_monthly: 'ajk_normal_monthly',   play_product_yearly: 'ajk_normal_yearly',   play_product_weekly: null },
+  { id: 'pro',      name: 'Pro',       price_monthly: 9500, price_yearly: 95000,
+    credits_monthly: 500, price_weekly: null, credits_weekly: null,
+    quality: '2K',   quality_label: '2K',        resolution: '2K',   model: CONFIG.model,   sort_order: 2,
+    can_veo: 1, can_lipsync: 1,
+    play_product_monthly: 'ajk_pro_monthly',      play_product_yearly: 'ajk_pro_yearly',      play_product_weekly: null },
+  { id: 'extrapro', name: 'Extra Pro', price_monthly: 14000, price_yearly: 140000,
+    credits_monthly: 600, price_weekly: null, credits_weekly: null,
+    quality: '4K',   quality_label: 'Native 4K', resolution: '4K',   model: CONFIG.model4k, sort_order: 3,
+    can_veo: 1, can_lipsync: 1,
+    play_product_monthly: 'ajk_extrapro_monthly', play_product_yearly: 'ajk_extrapro_yearly', play_product_weekly: null },
 ];
 
 // One-time credit packs (top-ups bought outside subscriptions). Seeded into
@@ -385,6 +413,35 @@ const MIGRATIONS = [
   { version: 8, up: `
     UPDATE plans SET price_monthly = 1999, price_yearly = 19990,
       credits_monthly = 150 WHERE id = 'normal';` },
+  // v9 — owner FINAL pricing (2026-10-23, supersedes all earlier prices)
+  // plus the Weekly plan and the per-quality rate-card groundwork:
+  //   weekly   Rs 1,800/week,  80 credits/week,  768P (new plan)
+  //   normal   Rs 5,600/mo,   400 credits/mo,    768P
+  //   pro      Rs 9,500/mo,   500 credits/mo,    2K   + Veo/lip-sync flags
+  //   extrapro Rs 14,000/mo,  600 credits/mo,    native 4K + all flags
+  // Plans gain price_weekly/credits_weekly (NULL on monthly plans),
+  // play_product_weekly and the entitlement flags can_veo/can_lipsync
+  // (flags only in this wave — the engines are Phase B). One-time and
+  // version-gated like v5/v8, so later admin edits are respected. The
+  // weekly INSERT uses INSERT OR IGNORE: on a fresh DB the row is seeded
+  // by PLAN_DEFAULTS instead and this is a no-op.
+  { version: 9, up: `
+    ALTER TABLE plans ADD COLUMN price_weekly INTEGER;
+    ALTER TABLE plans ADD COLUMN credits_weekly INTEGER;
+    ALTER TABLE plans ADD COLUMN play_product_weekly TEXT;
+    ALTER TABLE plans ADD COLUMN can_veo INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE plans ADD COLUMN can_lipsync INTEGER NOT NULL DEFAULT 0;
+    UPDATE plans SET price_monthly = 5600, price_yearly = 56000,
+      credits_monthly = 400 WHERE id = 'normal';
+    UPDATE plans SET price_monthly = 9500, price_yearly = 95000,
+      credits_monthly = 500, can_veo = 1, can_lipsync = 1 WHERE id = 'pro';
+    UPDATE plans SET price_monthly = 14000, price_yearly = 140000,
+      credits_monthly = 600, can_veo = 1, can_lipsync = 1 WHERE id = 'extrapro';
+    INSERT OR IGNORE INTO plans (id, name, price_monthly, price_yearly, currency,
+        credits_monthly, quality, quality_label, resolution, model, is_active,
+        sort_order, price_weekly, credits_weekly, play_product_weekly)
+      VALUES ('weekly', 'Weekly', 0, 0, 'PKR', 0, '768P', '768P', '768P',
+        '${CONFIG.model}', 1, 0, 1800, 80, 'ajk_weekly');` },
 ];
 {
   const applied = new Set(db.prepare('SELECT version FROM schema_migrations').all().map(r => r.version));
@@ -407,20 +464,28 @@ for (const p of PLAN_DEFAULTS) {
   if (!existing) {
     db.prepare(`INSERT INTO plans (id, name, price_monthly, price_yearly, credits_monthly,
                 quality, quality_label, resolution, model, sort_order,
-                play_product_monthly, play_product_yearly)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+                play_product_monthly, play_product_yearly,
+                price_weekly, credits_weekly, play_product_weekly, can_veo, can_lipsync)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(p.id, p.name, p.price_monthly, p.price_yearly, p.credits_monthly,
            p.quality, p.quality_label, p.resolution, p.model, p.sort_order,
-           p.play_product_monthly, p.play_product_yearly);
+           p.play_product_monthly, p.play_product_yearly,
+           p.price_weekly, p.credits_weekly, p.play_product_weekly,
+           p.can_veo, p.can_lipsync);
   } else {
     // Play product ids are backfilled only when unset (COALESCE) — an
     // admin's edits in the Admin Panel always win over these defaults.
+    // Feature flags are structural (they define the tier) and re-sync
+    // like quality/model; prices and credit amounts never re-sync.
     db.prepare(`UPDATE plans SET name = ?, quality = ?, quality_label = ?,
                 resolution = ?, model = ?, sort_order = ?,
+                can_veo = ?, can_lipsync = ?,
                 play_product_monthly = COALESCE(play_product_monthly, ?),
-                play_product_yearly = COALESCE(play_product_yearly, ?) WHERE id = ?`)
+                play_product_yearly = COALESCE(play_product_yearly, ?),
+                play_product_weekly = COALESCE(play_product_weekly, ?) WHERE id = ?`)
       .run(p.name, p.quality, p.quality_label, p.resolution, p.model, p.sort_order,
-           p.play_product_monthly, p.play_product_yearly, p.id);
+           p.can_veo, p.can_lipsync,
+           p.play_product_monthly, p.play_product_yearly, p.play_product_weekly, p.id);
   }
 }
 // Seed the credit-pack catalogue on first boot only (when the table is
@@ -449,7 +514,25 @@ function getPlan(planId) {
 }
 function sqlTs(d) { return d.toISOString().slice(0, 19).replace('T', ' '); } // UTC, SQLite format
 function addMonths(d, n) { const x = new Date(d); x.setUTCMonth(x.getUTCMonth() + n); return x; }
+function addDays(d, n) { const x = new Date(d); x.setUTCDate(x.getUTCDate() + n); return x; }
 function isFuture(ts) { return !!ts && new Date(ts.replace(' ', 'T') + 'Z') > new Date(); }
+// A plan is "weekly-only" when it carries a weekly price (only the Weekly
+// plan does). Weekly-only plans have no monthly/yearly cycle and monthly
+// plans have no weekly cycle — the two never mix.
+function isWeeklyPlan(plan) {
+  return !!plan && plan.price_weekly !== null && plan.price_weekly !== undefined;
+}
+// The credits a plan grants for one billing period of the given kind.
+function planGrantFor(plan, period) {
+  if (!plan) return 0;
+  return period === 'weekly' ? (plan.credits_weekly ?? 0) : plan.credits_monthly;
+}
+// The price a plan charges for one billing period of the given kind.
+function planPriceFor(plan, period) {
+  if (!plan) return 0;
+  if (period === 'weekly') return plan.price_weekly ?? 0;
+  return period === 'yearly' ? plan.price_yearly : plan.price_monthly;
+}
 
 // --- Credit buckets -------------------------------------------------------
 // users.credits is always kept equal to free_credits + plan_credits.
@@ -482,7 +565,7 @@ function planGrantCap(userId) {
   const sub = latestSubscription(userId);
   if (!sub || !['active', 'grace', 'canceled'].includes(sub.status)) return 0;
   const plan = getPlan(sub.plan_id);
-  return plan ? plan.credits_monthly : 0;
+  return plan ? planGrantFor(plan, sub.period) : 0;
 }
 
 // --- Subscription lifecycle ----------------------------------------------
@@ -521,13 +604,18 @@ function refreshSubscriptionState(userId) {
 // The ONLY ways in are a succeeded payment record or an admin action —
 // both funnel through here, so plan credits can never appear without a
 // subscription row behind them. `periodEnd` (Google Play purchases) pins
-// the period end to the provider's expiry instead of a calendar month.
+// the period end to the provider's expiry instead of a calendar period.
+// Periods: monthly (+1 month), yearly (+12 months), weekly (+7 days,
+// the Weekly plan's credits_weekly granted once per weekly period).
 function activateSubscription(userId, plan, { period = 'monthly', paymentId = null, periodEnd = null } = {}) {
   return tx(() => {
     db.prepare(`UPDATE subscriptions SET status = 'expired', updated_at = datetime('now')
                 WHERE user_id = ? AND status IN ('active', 'grace', 'canceled')`).run(userId);
     const now = new Date();
-    const end = periodEnd ? new Date(periodEnd) : addMonths(now, period === 'yearly' ? 12 : 1);
+    const end = periodEnd ? new Date(periodEnd)
+      : period === 'yearly' ? addMonths(now, 12)
+      : period === 'weekly' ? addDays(now, 7)
+      : addMonths(now, 1);
     const info = db.prepare(
       `INSERT INTO subscriptions (user_id, plan_id, status, period, started_at,
          current_period_start, current_period_end, last_grant_at, payment_id)
@@ -535,11 +623,13 @@ function activateSubscription(userId, plan, { period = 'monthly', paymentId = nu
       .run(userId, plan.id, period, sqlTs(now), sqlTs(now), sqlTs(end), sqlTs(now), paymentId);
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
     const b = creditBuckets(user);
-    setBuckets(userId, b.free, plan.credits_monthly); // reset — no rollover
+    setBuckets(userId, b.free, planGrantFor(plan, period)); // reset — no rollover
     return Number(info.lastInsertRowid);
   });
 }
-// Monthly renewal grant: plan credits reset to the plan's monthly amount.
+// Renewal grant: plan credits reset to the plan's grant for the
+// subscription's own period (monthly amount, or the weekly amount for a
+// weekly subscription).
 function grantMonthlyCredits(userId) {
   return tx(() => {
     const sub = latestSubscription(userId);
@@ -549,19 +639,38 @@ function grantMonthlyCredits(userId) {
     if (!plan) throw Object.assign(new Error('PLAN_NOT_FOUND'), { status: 400 });
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
     const b = creditBuckets(user);
-    setBuckets(userId, b.free, plan.credits_monthly);
+    setBuckets(userId, b.free, planGrantFor(plan, sub.period));
     db.prepare(`UPDATE subscriptions SET last_grant_at = ?, updated_at = datetime('now') WHERE id = ?`)
       .run(sqlTs(new Date()), sub.id);
     return sub.id;
   });
 }
 function publicPlan(p) {
-  return { id: p.id, name: p.name, price_monthly: p.price_monthly, price_yearly: p.price_yearly,
-    currency: p.currency, credits_monthly: p.credits_monthly, quality: p.quality,
+  const weekly = isWeeklyPlan(p);
+  return { id: p.id, name: p.name,
+    // The Weekly plan is weekly-only: its monthly/yearly fields report
+    // null (it cannot be bought monthly or yearly), and monthly plans
+    // report null weekly fields.
+    price_monthly: weekly ? null : p.price_monthly,
+    price_yearly: weekly ? null : p.price_yearly,
+    price_weekly: weekly ? p.price_weekly : null,
+    currency: p.currency,
+    credits_monthly: weekly ? null : p.credits_monthly,
+    credits_weekly: weekly ? p.credits_weekly : null,
+    quality: p.quality,
     quality_label: p.quality_label, resolution: p.resolution,
+    // Entitlement descriptor (Phase B engines — Veo talking clips and the
+    // lip-sync add-on — are gated on these flags; generation itself is
+    // not wired yet). max_quality is the plan's routed quality ceiling.
+    features: { can_veo: !!p.can_veo, can_lipsync: !!p.can_lipsync,
+      max_quality: p.quality },
     // Google Play subscription product ids (set in Play Console; editable
     // in the Admin Panel). Used by the app's Digital Goods purchase flow.
-    play_product_id: { monthly: p.play_product_monthly || null, yearly: p.play_product_yearly || null } };
+    // Play supports weekly base plans, so the Weekly plan maps to its own
+    // weekly product id.
+    play_product_id: { monthly: p.play_product_monthly || null,
+      yearly: p.play_product_yearly || null,
+      weekly: p.play_product_weekly || null } };
 }
 function publicPack(p) {
   return { id: p.id, credits: p.credits, price_pkr: p.price_pkr, currency: 'PKR',
@@ -628,6 +737,7 @@ app.get('/api/config', (req, res) => res.json({
   modes: MODE_LIST,
   prompt_languages: PROMPT_LANGUAGES,
   cost_by_duration: CONFIG.costByDuration,
+  cost_by_quality: CONFIG.costByQuality,
   signup_credits: CONFIG.signupCredits,
   max_daily_credits: CONFIG.maxDailyCredits,
   // Manual payment destinations for credit packs — only the methods the
@@ -876,9 +986,9 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
   let model = resolution === '4K' ? (plan && plan.resolution === '4K' ? plan.model : CONFIG.model4k)
                                      : CONFIG.model;
   // The native-4K endpoint only renders 16:9, 9:16 and 1:1. A 4K-quality
-  // request at any other ratio falls back to the H3 model at 2K with the
-  // standard (non-doubled) credit rate — it is not native 4K, so it must
-  // not be charged or recorded as 4K.
+  // request at any other ratio falls back to the H3 model at 2K and is
+  // charged at the 2K rate — it is not native 4K, so it must not be
+  // charged or recorded as 4K.
   let fallbackNote = null;
   if (resolution === '4K' && !FOUR_K_ASPECTS.includes(aspect_ratio)) {
     resolution = '2K';
@@ -889,13 +999,12 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
   // Image-to-video overrides the model route: the verified H3
   // image-to-video endpoint animates the uploaded image as the opening
   // frame (its canvas follows the image, so no aspect_ratio is sent).
-  // Credit rules are unchanged — the same duration/4K cost formula below
+  // Credit rules are unchanged — the same per-quality rate card below
   // applies whether or not a source image is attached.
   if (sourceImagePath) model = CONFIG.modelI2V;
-  // Native-4K generations cost double credits; everything else is the
-  // standard per-duration rate.
-  const cost = (CONFIG.costByDuration[Number(duration)] ?? 1) *
-               (resolution === '4K' ? CONFIG.costMultiplier4k : 1);
+  // Rate card (v9): the credit cost comes from the ROUTED quality's own
+  // row — 768P 10/20, 2K 15/30, native 4K 40/80 for 5s/10s.
+  const cost = generationCost(resolution, Number(duration));
 
   // Duplicate-request protection: same idempotency key returns the existing
   // job — no second charge, no second fal.ai submission.
@@ -1481,6 +1590,7 @@ function findPlayProduct(kind, productId) {
     for (const row of db.prepare('SELECT * FROM plans WHERE is_active = 1').all()) {
       if (row.play_product_monthly === productId) return { plan: row, period: 'monthly' };
       if (row.play_product_yearly === productId) return { plan: row, period: 'yearly' };
+      if (row.play_product_weekly === productId) return { plan: row, period: 'weekly' };
     }
   }
   return null;
@@ -1525,7 +1635,7 @@ app.post('/api/billing/play/verify', auth, async (req, res) => {
   }
 
   const amount = found.pack ? found.pack.price_pkr
-    : (found.period === 'yearly' ? found.plan.price_yearly : found.plan.price_monthly);
+    : planPriceFor(found.plan, found.period);
   const planId = found.plan ? found.plan.id : null;
   const packId = found.pack ? found.pack.id : null;
 
@@ -1551,7 +1661,7 @@ app.post('/api/billing/play/verify', auth, async (req, res) => {
          provider_txn_id, status, period, credits_granted, note)
        VALUES (?, ?, ?, ?, 'PKR', 'google_play', ?, 'succeeded', ?, ?, 'Verified with Google Play')`)
       .run(req.user.id, planId, packId, amount, purchaseToken, found.period || null,
-           found.pack ? found.pack.credits : found.plan.credits_monthly).lastInsertRowid);
+           found.pack ? found.pack.credits : planGrantFor(found.plan, found.period)).lastInsertRowid);
   } catch (e) {
     if (String(e.message).includes('UNIQUE')) {
       const row = db.prepare(`SELECT * FROM payments WHERE provider = 'google_play' AND provider_txn_id = ?`)
@@ -1826,8 +1936,10 @@ app.get('/api/admin/plans', auth, requireAdmin, (req, res) => {
 });
 
 // Edit what a plan costs and grants. Takes effect immediately: prices apply
-// to new payments, credits_monthly to the next activation/renewal grant,
-// resolution/model to the next generation.
+// to new payments, credits (monthly or weekly) to the next
+// activation/renewal grant, resolution/model to the next generation.
+// price_weekly/credits_weekly are nullable (null = the plan has no weekly
+// period); can_veo/can_lipsync are the Phase B entitlement flags.
 app.put('/api/admin/plans/:id', auth, requireAdmin, (req, res) => {
   const plan = getPlan(req.params.id);
   if (!plan) return res.status(404).json({ error: 'Plan not found.' });
@@ -1838,31 +1950,54 @@ app.put('/api/admin/plans/:id', auth, requireAdmin, (req, res) => {
     if (!Number.isInteger(v) || v < 0) throw Object.assign(new Error(`BAD_${name}`), { status: 400 });
     return v;
   };
+  // Nullable integer: an explicit null clears the field (e.g. removing a
+  // weekly period); a number must be a non-negative integer.
+  const optIntField = (name) => {
+    if (b[name] === undefined) return plan[name];
+    if (b[name] === null) return null;
+    const v = Number(b[name]);
+    if (!Number.isInteger(v) || v < 0) throw Object.assign(new Error(`BAD_${name}`), { status: 400 });
+    return v;
+  };
+  const boolField = (name) => {
+    if (b[name] === undefined) return plan[name];
+    return b[name] ? 1 : 0;
+  };
   try {
     const updated = {
       price_monthly: intField('price_monthly'),
       price_yearly: intField('price_yearly'),
       credits_monthly: intField('credits_monthly'),
+      price_weekly: optIntField('price_weekly'),
+      credits_weekly: optIntField('credits_weekly'),
       quality_label: b.quality_label !== undefined ? String(b.quality_label).slice(0, 40) : plan.quality_label,
       quality: b.quality !== undefined ? String(b.quality).slice(0, 20) : plan.quality,
       resolution: b.resolution !== undefined ? String(b.resolution).toUpperCase() : plan.resolution,
       model: b.model !== undefined ? String(b.model).slice(0, 120) : plan.model,
       is_active: b.is_active !== undefined ? (b.is_active ? 1 : 0) : plan.is_active,
+      can_veo: boolField('can_veo'),
+      can_lipsync: boolField('can_lipsync'),
       // Google Play subscription product ids (must match Play Console).
       play_product_monthly: b.play_product_monthly !== undefined
         ? (String(b.play_product_monthly).trim().slice(0, 120) || null) : plan.play_product_monthly,
       play_product_yearly: b.play_product_yearly !== undefined
         ? (String(b.play_product_yearly).trim().slice(0, 120) || null) : plan.play_product_yearly,
+      play_product_weekly: b.play_product_weekly !== undefined
+        ? (String(b.play_product_weekly).trim().slice(0, 120) || null) : plan.play_product_weekly,
     };
     if (!RESOLUTIONS.includes(updated.resolution))
       return res.status(400).json({ error: `resolution must be one of: ${RESOLUTIONS.join(', ')}` });
     db.prepare(`UPDATE plans SET price_monthly = ?, price_yearly = ?, credits_monthly = ?,
+                price_weekly = ?, credits_weekly = ?,
                 quality_label = ?, quality = ?, resolution = ?, model = ?, is_active = ?,
-                play_product_monthly = ?, play_product_yearly = ?,
+                can_veo = ?, can_lipsync = ?,
+                play_product_monthly = ?, play_product_yearly = ?, play_product_weekly = ?,
                 updated_at = datetime('now') WHERE id = ?`)
       .run(updated.price_monthly, updated.price_yearly, updated.credits_monthly,
+           updated.price_weekly, updated.credits_weekly,
            updated.quality_label, updated.quality, updated.resolution, updated.model,
-           updated.is_active, updated.play_product_monthly, updated.play_product_yearly, plan.id);
+           updated.is_active, updated.can_veo, updated.can_lipsync,
+           updated.play_product_monthly, updated.play_product_yearly, updated.play_product_weekly, plan.id);
     res.json({ plan: getPlan(plan.id) });
   } catch (e) {
     if (e.status === 400) return res.status(400).json({ error: 'Prices and credits must be non-negative whole numbers.' });
@@ -1875,7 +2010,13 @@ function adminTargetUser(req, res) {
   if (!u) { res.status(404).json({ error: 'User not found.' }); return null; }
   return u;
 }
-function validPeriod(b) { return b.period === 'yearly' ? 'yearly' : b.period === 'monthly' ? 'monthly' : null; }
+function validPeriod(b) { return ['weekly', 'monthly', 'yearly'].includes(b.period) ? b.period : null; }
+// A period must exist on the plan: the Weekly plan is weekly-only (buying
+// it monthly/yearly is a 400), and monthly plans have no weekly cycle.
+function periodFitsPlan(plan, period) {
+  if (!plan || !period) return false;
+  return period === 'weekly' ? isWeeklyPlan(plan) : !isWeeklyPlan(plan);
+}
 
 // TEST/MANUAL payment path — admin only. Records a succeeded payment with
 // provider "manual_test" and activates the subscription from it. This is a
@@ -1888,8 +2029,12 @@ app.post('/api/admin/users/:id/manual-payment', auth, requireAdmin, (req, res) =
   const plan = getPlan(String(b.plan_id || ''));
   if (!plan || !plan.is_active) return res.status(400).json({ error: 'Unknown or inactive plan.' });
   const period = validPeriod(b);
-  if (!period) return res.status(400).json({ error: 'period must be "monthly" or "yearly".' });
-  const amount = period === 'yearly' ? plan.price_yearly : plan.price_monthly;
+  if (!period) return res.status(400).json({ error: 'period must be "weekly", "monthly" or "yearly".' });
+  if (!periodFitsPlan(plan, period))
+    return res.status(400).json({ error: isWeeklyPlan(plan)
+      ? 'The Weekly plan is billed weekly only — it has no monthly or yearly price.'
+      : 'This plan has no weekly billing period.' });
+  const amount = planPriceFor(plan, period);
   const txn = b.provider_txn_id ? String(b.provider_txn_id).slice(0, 120)
     : `manual_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   try {
@@ -1914,7 +2059,11 @@ app.post('/api/admin/users/:id/activate', auth, requireAdmin, (req, res) => {
   const plan = getPlan(String(b.plan_id || ''));
   if (!plan || !plan.is_active) return res.status(400).json({ error: 'Unknown or inactive plan.' });
   const period = validPeriod(b);
-  if (!period) return res.status(400).json({ error: 'period must be "monthly" or "yearly".' });
+  if (!period) return res.status(400).json({ error: 'period must be "weekly", "monthly" or "yearly".' });
+  if (!periodFitsPlan(plan, period))
+    return res.status(400).json({ error: isWeeklyPlan(plan)
+      ? 'The Weekly plan is billed weekly only — it has no monthly or yearly price.'
+      : 'This plan has no weekly billing period.' });
   const subId = activateSubscription(u.id, plan, { period, paymentId: null });
   const me = db.prepare('SELECT credits, free_credits, plan_credits FROM users WHERE id = ?').get(u.id);
   res.json({ ok: true, subscription_id: subId, user_credits: me });

@@ -72,7 +72,7 @@ Verified against fal.ai's official API docs on 2026-10-22
 
 **Aspect-ratio fallback:** the 4K endpoint only renders 16:9, 9:16 and 1:1.
 An Extra Pro generation requested at any other ratio falls back to the H3
-model at 2K with the **standard credit rate** (not doubled) — it is neither
+model at 2K and is charged the **2K rate** — it is neither
 charged nor recorded as 4K, and the response carries a `note` explaining this.
 
 ## Prompt languages (7)
@@ -231,6 +231,16 @@ marks `failed`), migration v7 re-applying on a v6-shaped database, and
 migration v8 repricing the Normal plan on a pre-v8 database (Pro
 untouched). Latest full run: **235/235 checks passed**.
 
+**Update (2026-10-23, owner FINAL pricing + Weekly plan — migration v9):**
+the suite now also covers migration v9 repricing a pre-v9 database (and
+an admin price edit surviving a reboot), the Weekly plan end to end
+(activation grants 80 credits for a 7-day period; buying it monthly or
+yearly is a 400; a weekly Google Play purchase activates it), the full
+per-quality rate card in `/api/config` and in real generation charges
+(Pro 2K = 15/30, Extra Pro native 4K = 40/80), plan feature flags in
+`/api/plans`, and the daily spending cap at its new default of 400.
+Latest full run: **276/276 checks passed**.
+
 ## Safety built in
 - Key and JWT secret live only in `.env`; `/api/config` returns only public settings.
 - Credits are deducted and the job recorded in **one atomic transaction** (double-spend safe).
@@ -240,15 +250,45 @@ untouched). Latest full run: **235/235 checks passed**.
 
 ## Monetization (Phase 1 — plans, subscriptions, admin)
 
-Three PKR subscription plans sit on top of the existing credit system.
+Four PKR subscription plans sit on top of the existing credit system
+(owner's FINAL pricing, 2026-10-23 — migration v9; yearly = 10× monthly).
 Prices and credits are **defaults seeded into the `plans` table** — afterwards
 they are edited in the Admin Panel and boot never overwrites an admin's edits.
 
-| Plan | Monthly | Yearly | Credits/mo | Quality | Generation route |
+| Plan | Price | Credits | Quality | Generation route | Premium features |
 |---|---|---|---|---|---|
-| Normal | Rs 1,999 | Rs 19,990 | 150 | 768P | H3 model, resolution `768P` |
-| Pro | Rs 3,000 | Rs 30,000 | 120 | 2K | H3 model, resolution `2K` |
-| Extra Pro | Rs 5,000 | Rs 50,000 | 120 | Native 4K | Kling O3 4K native-4K endpoint (no `resolution` param; 16:9/9:16/1:1 only) |
+| Weekly | Rs 1,800 / **week** | 80 / week | 768P | H3 model, resolution `768P` | — (H3 modes only) |
+| Normal | Rs 5,600 / mo (Rs 56,000 / yr) | 400 / mo | 768P | H3 model, resolution `768P` | — |
+| Pro | Rs 9,500 / mo (Rs 95,000 / yr) | 500 / mo | 2K | H3 model, resolution `2K` | Veo + lip-sync flags |
+| Extra Pro | Rs 14,000 / mo (Rs 140,000 / yr) | 600 / mo | Native 4K | Kling O3 4K native-4K endpoint (no `resolution` param; 16:9/9:16/1:1 only) | Veo + lip-sync flags, all premium |
+
+**Allowance rationale (brief):** each tier's credits were sized from the
+worst case — the subscriber spends every credit at the tier's most
+expensive routed quality, priced at fal's published per-second rates
+(≈ Rs 277/$). Weekly: 80 credits = 40 s at 768P ≈ $2.40 ≈ Rs 665 of model
+cost against Rs 1,800. Normal: 400 credits = 200 s at 768P ≈ $12 ≈
+Rs 3,324 against Rs 5,600. Pro: 500 credits ≈ 165 s at 2K ≈ $21.50 ≈
+Rs 5,940 against Rs 9,500. Extra Pro: 600 credits = 75 s at native 4K ≈
+$31.50 ≈ Rs 8,726 against Rs 14,000. Every tier stays profitable even if
+a subscriber maxes out the allowance at the priciest quality.
+
+**The Weekly plan** is a first-class weekly subscription: its price and
+credits live in the plan's `price_weekly` / `credits_weekly` columns, a
+weekly subscription's period runs **start + 7 days**, and the weekly
+credits are granted once per weekly period (same reset/no-rollover rule
+as monthly grants). It has **no monthly or yearly price** — the API
+reports those fields as `null` for it, and buying it with a monthly or
+yearly period is rejected with 400 (as is buying a monthly plan with a
+weekly period). On Google Play it maps to its own subscription product
+(`ajk_weekly` by default) — Play supports weekly base plans, so the same
+verify-then-activate pipeline handles it.
+
+**Feature flags (Phase B groundwork):** plans carry `can_veo` and
+`can_lipsync` entitlements, exposed by `/api/plans` in each plan's
+`features` descriptor (with `max_quality`) and shown on the plan cards.
+They are **flags only in this wave** — the Veo talking-clip engine and
+the Urdu lip-sync add-on are Phase B and are not wired into generation
+yet; nothing about generation behavior changes based on them today.
 
 **Quality honesty:** on the H3 model, fal's own docs describe 2K/4K as
 upscaling a 768P base — the UI labels Pro's quality simply "2K". Extra Pro's
@@ -257,24 +297,35 @@ verified against fal.ai's API docs 2026-10-22 — genuine native 4K, no upscalin
 stage, flat $0.42/s). The endpoint id is configurable via `FAL_MODEL_4K` but the
 verified id is the built-in default; it is not a guess. Requests at aspect
 ratios the 4K endpoint can't render (only 16:9, 9:16, 1:1) fall back to H3 at
-2K with the standard credit rate — never charged or recorded as 4K.
+2K at the 2K rate — never charged or recorded as 4K.
 
 **Credit accounting (two buckets):**
 - Every user has `free_credits` (the 100 sign-up credits — never expire) and
   `plan_credits` (granted by a subscription). `users.credits` is always their
   sum, so older code paths see one balance.
 - Spending takes **plan credits first**. Refunds go back plan-bucket-first,
-  capped at the plan's monthly grant, so a refund can't inflate plan credits.
-- On activation and on each renewal month, plan credits **reset** to the
-  plan's `credits_monthly` — unused plan credits do **not** roll over.
-- Costs (rescaled ×10 in migration v5): 5s = 10 credits, 10s = 20 credits at
-  plan quality — except native-4K generations, which cost **double** (5s = 20,
-  10s = 40). If an Extra Pro user
-  explicitly picks a lower resolution, normal rates and the H3 model apply.
+  capped at the plan's grant for the subscription's period, so a refund can't inflate plan credits.
+- On activation and on each renewal, plan credits **reset** to the
+  plan's grant for that period (`credits_monthly`, or `credits_weekly`
+  for a weekly subscription) — unused plan credits do **not** roll over.
+- **Rate card (v9 — replaces the old "native 4K costs double" rule):**
+  every routed quality has its own row, charged by duration:
+
+  | Routed quality | 5s | 10s |
+  |---|---|---|
+  | 768P | 10 credits | 20 credits |
+  | 2K | 15 credits | 30 credits |
+  | Native 4K | 40 credits | 80 credits |
+
+  `/api/config` exposes the full table as `cost_by_quality` (plus
+  `cost_by_duration`, the 768P row, for compatibility), and the Studio
+  shows the exact charge for the selected duration at the signed-in
+  user's routed quality before generating. If an Extra Pro user
+  explicitly picks a lower resolution, that resolution's row and the H3 model apply.
   The same applies to the automatic fallback: a 4K-quality request at an
-  aspect ratio the 4K endpoint can't render goes to H3 at 2K at the normal
-  rate, and the row is recorded as H3/2K. The existing daily cap counts these
-  weighted costs, and failed generations keep the exact-once auto-refund.
+  aspect ratio the 4K endpoint can't render goes to H3 at 2K at the 2K
+  rate, and the row is recorded as H3/2K. The daily cap
+  (`MAX_DAILY_CREDITS`, default **400**) counts these costs, and failed generations keep the exact-once auto-refund.
 
 **Subscription lifecycle:** `active → canceled` (benefits continue to the
 period end) `→ expired` (period end passes; unused plan credits are removed
@@ -366,8 +417,9 @@ so refunded Play/gateway payments drop out of the totals automatically
 
 **App side.** In the installed Play app, `public/index.html`
 feature-detects the Digital Goods API (`window.getDigitalGoodsService`).
-When present, plan cards get monthly/yearly "Subscribe — Google Play"
-buttons and pack cards a "Buy with Google Play" button: the flow fetches
+When present, plan cards get "Subscribe — Google Play"
+buttons (monthly/yearly, or a single weekly button on the Weekly plan)
+and pack cards a "Buy with Google Play" button: the flow fetches
 the item details, launches Play's billing sheet, posts the returned
 purchase token to the verify endpoint, and only then reports success and
 refreshes the balance. Any error (no service, item missing, sheet
@@ -380,6 +432,7 @@ must match Play Console exactly):
 
 | Item | Play product ID |
 |---|---|
+| Weekly (weekly base plan) | `ajk_weekly` |
 | Normal monthly / yearly | `ajk_normal_monthly` / `ajk_normal_yearly` |
 | Pro monthly / yearly | `ajk_pro_monthly` / `ajk_pro_yearly` |
 | Extra Pro monthly / yearly | `ajk_extrapro_monthly` / `ajk_extrapro_yearly` |
@@ -391,7 +444,9 @@ must match Play Console exactly):
    exist yet; this is the one hard blocker for live testing.
 2. Create the app in Play Console with a package name; set the SAME value
    as `PLAY_PACKAGE_NAME` in the server env (it must match exactly).
-3. Create the 6 subscription products and 3 one-time products with the
+3. Create the 7 subscription products (the Weekly plan is a subscription
+   with a **weekly base plan** — Play supports weekly billing periods)
+   and 3 one-time products with the
    IDs in the table above (or edit the IDs in the Admin Panel to match
    whatever was created — they must agree).
 4. Create a **service account** (Google Cloud) with the Play Developer
