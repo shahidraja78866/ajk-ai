@@ -43,6 +43,12 @@
 # SFX + CassetteAI music sync endpoints) plus a translate stub (port
 # 18086) for the Urdu sound-prompt check. A tenth instance (port 18084)
 # runs with SOUND_ENABLED=0 to prove the sound endpoints fail closed.
+# The finisher/draft tests (Phase C1) use an eleventh instance (port
+# 18083, own DB) with the fal bases pointed at the stub (port 18082),
+# extended with Whisper (fixed timed chunks) and Topaz upscale, plus the
+# clip169.mp4 (16:9, with audio) and silent.mp4 (no audio) fixtures. A
+# python http server (port 18081) serves a 30-second clip for the
+# upscale price-formula check.
 # Outgoing provider request shapes are asserted via the TEST_RECORD-style
 # hook GET /api/_test/voice-calls.
 # e.g.  ADMIN_EMAIL=admin@example.com FAL_MODEL_4K=test-4k-model TEST_RECORD_FAL_BODY=1 TRANSLATE_API_BASE=http://127.0.0.1:18099 npm start
@@ -1248,6 +1254,169 @@ const mig = db.prepare('SELECT COUNT(*) AS c FROM schema_migrations WHERE versio
 console.log(cols === 'sound_cost,sound_mode,sound_prompt,sound_status,sound_volume' && Number(mig) === 1 ? 'ok' : 'bad');
 ")"
 kill $SRV9_PID $FALSTUB9_PID $TSTUB9_PID 2>/dev/null
+
+echo "--- finishers + draft workflow (Phase C1, fal stub) ---"
+FIN_STUB_PORT=18082
+FIN_HTTP_PORT=18081
+B11=http://127.0.0.1:18083
+rm -f /tmp/myvideoai-finish-test.db; rm -rf /tmp/fingen /tmp/finjoin /tmp/finmedia; mkdir -p /tmp/fingen /tmp/finjoin /tmp/finmedia
+FAL_STUB_PORT=$FIN_STUB_PORT node "$(dirname "$0")/test-fal-stub.js" > /tmp/fal-stub-finish.log 2>&1 &
+FALSTUB11_PID=$!
+for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:$FIN_STUB_PORT/__calls && break || sleep 0.25; done
+FFBIN11=$(node --input-type=module -e "import f from 'ffmpeg-static'; console.log(f)" 2>/dev/null)
+"$FFBIN11" -y -v error -f lavfi -i color=c=purple:size=640x360:rate=24:duration=30 -f lavfi -i sine=frequency=330:duration=30 -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest /tmp/finmedia/long.mp4
+(cd /tmp/finmedia && python3 -m http.server $FIN_HTTP_PORT > /tmp/fin-http.log 2>&1) &
+FINHTTP_PID=$!
+sleep 0.5
+FIN_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-finish-test.db PORT=18083 FAL_KEY=dummy_test_key "$FIN_JWT_NAME=finish-instance-dummy-value" \
+  ADMIN_EMAIL=finadmin@example.com TEST_RECORD_FAL_BODY=1 \
+  FAL_API_BASE_URL=http://127.0.0.1:$FIN_STUB_PORT FAL_QUEUE_BASE_URL=http://127.0.0.1:$FIN_STUB_PORT \
+  FAL_POLL_INTERVAL_MS=100 GENERATED_DIR=/tmp/fingen JOINED_DIR=/tmp/finjoin \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-finish-test.log 2>&1 &
+SRV11_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B11/api/health && break || sleep 0.25; done
+AR11=$(curl -s -X POST $B11/api/auth/register -H 'Content-Type: application/json' -d '{"email":"finadmin@example.com","password":"password123"}')
+AT11=$(echo $AR11 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+CFG11=$(curl -s $B11/api/config)
+check "config finishers: reframe 0 / captions 5" "0/5" "$(echo $CFG11 | python3 -c 'import sys,json;p=json.load(sys.stdin)["finishers"]["prices"];print(str(p["reframe"])+"/"+str(p["captions"]))')"
+check "config finishers: upscale model is topaz endpoint" "fal-ai/topaz/upscale/video" "$(echo $CFG11 | python3 -c 'import sys,json;print(json.load(sys.stdin)["finishers"]["prices"]["upscale"]["model"])')"
+check "config draft: 480P at 7/14 credits" "480P/7/14" "$(echo $CFG11 | python3 -c 'import sys,json;d=json.load(sys.stdin)["draft"];print(d["quality"]+"/"+str(d["cost_by_duration"]["5"])+"/"+str(d["cost_by_duration"]["10"]))')"
+RA11=$(curl -s -X POST $B11/api/auth/register -H 'Content-Type: application/json' -d '{"email":"fin-a@example.com","password":"password123"}')
+TA11=$(echo $RA11 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+AID11=$(curl -s $B11/api/me -H "Authorization: Bearer $TA11" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+RB11=$(curl -s -X POST $B11/api/auth/register -H 'Content-Type: application/json' -d '{"email":"fin-b@example.com","password":"password123"}')
+TB11=$(echo $RB11 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+seed_fin() { # userId prompt url resolution
+node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-finish-test.db');
+console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits, resolution) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run($1, '$2', '16:9', 5, 'realistic', 'completed', '$3', 10, '$4').lastInsertRowid));
+"
+}
+SEED169=$(seed_fin $AID11 "seed harbour clip" "http://127.0.0.1:$FIN_STUB_PORT/media/clip169.mp4" "768P")
+SEEDSIL=$(seed_fin $AID11 "seed silent clip" "http://127.0.0.1:$FIN_STUB_PORT/media/silent.mp4" "768P")
+
+# -- reframe: free, blurred-pad, correct output dimensions --
+RF11=$(curl -s -w '\n%{http_code}' -X POST $B11/api/finish/reframe -H "Authorization: Bearer $TA11" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEED169,\"aspect_ratio\":\"9:16\"}")
+check "reframe: -> 201" "201" "$(echo "$RF11" | tail -1)"
+RF11B=$(echo "$RF11" | sed '$d')
+check "reframe: kind reframe, linked to source, cost 0" "reframe/$SEED169/0" "$(echo $RF11B | python3 -c 'import sys,json;g=json.load(sys.stdin)["generation"];print(g["kind"]+"/"+str(g["source_generation_id"])+"/"+str(g["cost_credits"]))')"
+check "reframe: FREE — balance still 100" "100" "$(curl -s $B11/api/me -H "Authorization: Bearer $TA11" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+RFURL=$(echo $RF11B | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["video_url"])')
+curl -s -o /tmp/reframed.mp4 $B11$RFURL
+check "reframe: output is exactly 1080x1920 (9:16)" "1080x1920" "$("$FFBIN11" -i /tmp/reframed.mp4 2>&1 | python3 -c 'import sys,re; m=re.search(r"(\d{2,5})x(\d{2,5})", sys.stdin.read()); print(m.group(1)+"x"+m.group(2) if m else "none")')"
+check "reframe: another user's video -> 404" "404" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B11/api/finish/reframe -H "Authorization: Bearer $TB11" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEED169,\"aspect_ratio\":\"1:1\"}")"
+check "finish: unknown action -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B11/api/finish/bogus -H "Authorization: Bearer $TA11" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEED169}")"
+
+# -- captions: whisper stub -> burned subs, -5; silent video -> 400 free --
+CP11=$(curl -s -w '\n%{http_code}' -X POST $B11/api/finish/captions -H "Authorization: Bearer $TA11" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEED169}")
+check "captions: -> 201" "201" "$(echo "$CP11" | tail -1)"
+CP11B=$(echo "$CP11" | sed '$d')
+check "captions: kind captions, cost 5, credits_left 95" "captions/5/95" "$(echo $CP11B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["generation"]["kind"]+"/"+str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+CPURL=$(echo $CP11B | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["video_url"])')
+curl -s -o /tmp/captioned.mp4 $B11$CPURL
+check "captions: output keeps video + audio streams" "yes/yes" "$("$FFBIN11" -i /tmp/captioned.mp4 2>&1 | python3 -c 'import sys;s=sys.stdin.read();print(("yes" if "Video:" in s else "no")+"/"+("yes" if "Audio:" in s else "no"))')"
+VC11=$(curl -s $B11/api/_test/voice-calls)
+check "captions: whisper body has audio_url + task transcribe + segment chunks" "ok" "$(echo $VC11 | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x.get("model")=="fal-ai/whisper"][-1];b=c["body"];print("ok" if b.get("audio_url","").endswith("/media/clip169.mp4") and b.get("task")=="transcribe" and b.get("chunk_level")=="segment" else "bad")')"
+CPS11=$(curl -s -w '\n%{http_code}' -X POST $B11/api/finish/captions -H "Authorization: Bearer $TA11" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDSIL}")
+check "captions on silent video: -> 400 (no audio stream)" "400" "$(echo "$CPS11" | tail -1)"
+check "captions on silent video: nothing charged (still 95)" "95" "$(curl -s $B11/api/me -H "Authorization: Bearer $TA11" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+
+# -- draft: 480P at 7 credits, marked draft, add-ons rejected --
+DR11=$(curl -s -X POST $B11/api/generate -H "Authorization: Bearer $TA11" -H 'Content-Type: application/json' -d '{"prompt":"a lighthouse draft preview","aspect_ratio":"16:9","duration":5,"quality":"draft"}')
+check "draft: cost 7 credits" "7" "$(echo $DR11 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_credits"])')"
+check "draft: stage draft + resolution 480P in response" "draft/480P" "$(echo $DR11 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["stage"]+"/"+g["resolution"])')"
+check "draft: balance 88 (95 - 7)" "88" "$(echo $DR11 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
+DRAFTID=$(echo $DR11 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+FB11=$(curl -s $B11/api/_test/fal-body)
+check "draft: fal body resolution is 480P (H3 tier)" "480P" "$(echo $FB11 | python3 -c 'import sys,json;print(json.load(sys.stdin)["body"]["resolution"])')"
+for i in $(seq 1 30); do
+  ST=$(curl -s $B11/api/generations/$DRAFTID -H "Authorization: Bearer $TA11" | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])')
+  [[ "$ST" == "completed" ]] && break || sleep 0.3
+done
+check "draft: generation completes via the stub" "completed" "$ST"
+check "draft: history row is marked stage draft" "draft" "$(curl -s $B11/api/history -H "Authorization: Bearer $TA11" | python3 -c "import sys,json;print([g['stage'] for g in json.load(sys.stdin)['generations'] if g['id']==$DRAFTID][0])")"
+check "draft + sound add-on: -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B11/api/generate -H "Authorization: Bearer $TA11" -H 'Content-Type: application/json' -d '{"prompt":"a lighthouse draft with sound","duration":5,"quality":"draft","sound":{"mode":"sync"}}')"
+check "draft + sound rejected: balance still 88" "88" "$(curl -s $B11/api/me -H "Authorization: Bearer $TA11" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "sound apply on a draft: -> 400 (drafts take no add-ons)" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B11/api/sound/apply -H "Authorization: Bearer $TA11" -H 'Content-Type: application/json' -d "{\"generation_id\":$DRAFTID,\"mode\":\"sync\"}")"
+check "voiceover on a draft: -> 400 (drafts take no add-ons)" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B11/api/voice/voiceover -H "Authorization: Bearer $TA11" -H 'Content-Type: application/json' -d "{\"generation_id\":$DRAFTID,\"script\":\"hello draft world\"}")"
+
+# -- upgrade: same prompt/settings at full quality, standard rate, linked --
+UP11=$(curl -s -w '\n%{http_code}' -X POST $B11/api/generations/$DRAFTID/upgrade -H "Authorization: Bearer $TA11" -H 'Content-Type: application/json' -d '{"quality":"768P"}')
+check "upgrade: -> 200" "200" "$(echo "$UP11" | tail -1)"
+UP11B=$(echo "$UP11" | sed '$d')
+check "upgrade: standard rate 10 charged, linked to the draft" "10/$DRAFTID" "$(echo $UP11B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["source_generation_id"]))')"
+check "upgrade: balance 78 (88 - 10)" "78" "$(echo $UP11B | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
+UPID11=$(echo $UP11B | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+for i in $(seq 1 30); do
+  STU=$(curl -s $B11/api/generations/$UPID11 -H "Authorization: Bearer $TA11" | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["stage"]+"/"+g["resolution"]+"/"+g["prompt"])')
+  [[ "$STU" == completed* ]] && break || sleep 0.3
+done
+check "upgrade: completes as a final 768P generation with the same prompt" "completed/final/768P/a lighthouse draft preview" "$STU"
+check "upgrade on a non-draft: -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B11/api/generations/$SEED169/upgrade -H "Authorization: Bearer $TA11" -H 'Content-Type: application/json' -d '{"quality":"768P"}')"
+check "upgrade: another user's draft -> 404" "404" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B11/api/generations/$DRAFTID/upgrade -H "Authorization: Bearer $TB11" -H 'Content-Type: application/json' -d '{"quality":"768P"}')"
+
+# -- extend: last frame -> stub i2v -> join; standard rate once; refund on failure --
+EX11=$(curl -s -w '\n%{http_code}' -X POST $B11/api/finish/extend -H "Authorization: Bearer $TA11" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEED169,\"extra_seconds\":5}")
+check "extend: -> 201" "201" "$(echo "$EX11" | tail -1)"
+EX11B=$(echo "$EX11" | sed '$d')
+check "extend: kind extend, standard 768P/5s rate 10, balance 68" "extend/10/68" "$(echo $EX11B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["generation"]["kind"]+"/"+str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+EXURL=$(echo $EX11B | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["video_url"])')
+check "extend: joined video stored under /files/joined/" "yes" "$(python3 -c "print('yes' if '$EXURL'.startswith('/files/joined/') else 'no')")"
+curl -s -o /tmp/extended.mp4 $B11$EXURL
+check "extend: joined duration approx source + extension (2s + 2s)" "ok" "$("$FFBIN11" -i /tmp/extended.mp4 2>&1 | python3 -c 'import sys,re; m=re.search(r"Duration: (\d+):(\d+):([\d.]+)", sys.stdin.read()); d=int(m.group(1))*3600+int(m.group(2))*60+float(m.group(3)) if m else -1; print("ok" if 3.4 <= d <= 4.8 else "bad")')"
+VC11B=$(curl -s $B11/api/_test/voice-calls)
+check "extend: i2v body has data-URI image + 768P + 5s" "ok" "$(echo $VC11B | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x.get("model")=="minimax/h3/image-to-video"][-1];b=c["body"];print("ok" if str(b.get("image_url","")).startswith("data:image/jpeg;base64,") and b.get("resolution")=="768P" and b.get("duration")==5 else "bad")')"
+SEEDFAIL=$(seed_fin $AID11 "FAILME waterfall scene" "http://127.0.0.1:$FIN_STUB_PORT/media/clip169.mp4" "768P")
+check "extend failure: -> 502" "502" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B11/api/finish/extend -H "Authorization: Bearer $TA11" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDFAIL,\"extra_seconds\":5}")"
+check "extend failure: refunded exactly once (still 68)" "68" "$(curl -s $B11/api/me -H "Authorization: Bearer $TA11" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "extend failure: the job row is marked failed (no partial entry)" "failed" "$(curl -s $B11/api/history -H "Authorization: Bearer $TA11" | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["status"])')"
+SEED4K=$(seed_fin $AID11 "seed 4k clip" "http://127.0.0.1:$FIN_STUB_PORT/media/clip169.mp4" "4K")
+check "extend 4K source on free plan: -> 403 (plan cap)" "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B11/api/finish/extend -H "Authorization: Bearer $TA11" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEED4K,\"extra_seconds\":5}")"
+
+# -- upscale: plan gate, topaz body, price formula (min + computed) --
+check "upscale 768P on free plan: -> 403 (result 2K above plan max)" "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B11/api/finish/upscale -H "Authorization: Bearer $TA11" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEED169}")"
+check "upscale gate: nothing charged (still 68)" "68" "$(curl -s $B11/api/me -H "Authorization: Bearer $TA11" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+RP11=$(curl -s -X POST $B11/api/auth/register -H 'Content-Type: application/json' -d '{"email":"fin-pro@example.com","password":"password123"}')
+TP11=$(echo $RP11 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+PID11=$(curl -s $B11/api/me -H "Authorization: Bearer $TP11" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+curl -s -o /dev/null -X POST $B11/api/admin/users/$PID11/activate -H "Authorization: Bearer $AT11" -H 'Content-Type: application/json' -d '{"plan_id":"pro","period":"monthly"}'
+SEEDPRO=$(seed_fin $PID11 "seed pro harbour clip" "http://127.0.0.1:$FIN_STUB_PORT/media/clip169.mp4" "768P")
+US11=$(curl -s -w '\n%{http_code}' -X POST $B11/api/finish/upscale -H "Authorization: Bearer $TP11" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDPRO}")
+check "upscale (Pro): -> 201" "201" "$(echo "$US11" | tail -1)"
+US11B=$(echo "$US11" | sed '$d')
+check "upscale: kind upscale, recorded tier 2K, minimum price 10" "upscale/2K/10" "$(echo $US11B | python3 -c 'import sys,json;g=json.load(sys.stdin)["generation"];print(g["kind"]+"/"+g["resolution"]+"/"+str(g["cost_credits"]))')"
+VC11C=$(curl -s $B11/api/_test/voice-calls)
+check "upscale: topaz body has video_url + model Proteus + factor 2" "ok" "$(echo $VC11C | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x.get("model")=="fal-ai/topaz/upscale/video"][-1];b=c["body"];print("ok" if b.get("video_url","").endswith("/media/clip169.mp4") and b.get("model")=="Proteus" and b.get("upscale_factor")==2 else "bad")')"
+SEEDLONG=$(seed_fin $PID11 "seed long harbour clip" "http://127.0.0.1:$FIN_HTTP_PORT/long.mp4" "768P")
+USL11=$(curl -s -X POST $B11/api/finish/upscale -H "Authorization: Bearer $TP11" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDLONG}")
+check "upscale price formula: 30s to 720p = ceil(0.01*30*277/15)*2 = 12 credits" "12" "$(echo $USL11 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["cost_credits"])')"
+
+# -- migration v12: delete its record + drop its column, restart re-applies --
+kill $SRV11_PID 2>/dev/null; sleep 0.5
+node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-finish-test.db');
+db.exec('DELETE FROM schema_migrations WHERE version = 12');
+db.exec('ALTER TABLE generations DROP COLUMN stage');
+console.log('rolled back migration v12');
+"
+env DB_PATH=/tmp/myvideoai-finish-test.db PORT=18083 FAL_KEY=dummy_test_key "$FIN_JWT_NAME=finish-instance-dummy-value" \
+  ADMIN_EMAIL=finadmin@example.com TEST_RECORD_FAL_BODY=1 \
+  FAL_API_BASE_URL=http://127.0.0.1:$FIN_STUB_PORT FAL_QUEUE_BASE_URL=http://127.0.0.1:$FIN_STUB_PORT \
+  FAL_POLL_INTERVAL_MS=100 GENERATED_DIR=/tmp/fingen JOINED_DIR=/tmp/finjoin \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-finish-test2.log 2>&1 &
+SRV11_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B11/api/health && break || sleep 0.25; done
+check "migration v12 re-applies on boot (stage column restored)" "ok" "$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-finish-test.db');
+const cols = db.prepare(\"SELECT name FROM pragma_table_info('generations') WHERE name = 'stage'\").all().length;
+const mig = db.prepare('SELECT COUNT(*) AS c FROM schema_migrations WHERE version = 12').get().c;
+console.log(cols === 1 && Number(mig) === 1 ? 'ok' : 'bad');
+")"
+kill $SRV11_PID $FALSTUB11_PID $FINHTTP_PID 2>/dev/null
 
 echo "--- rate limit: burst until 429 ---"
 FOUND429="no"

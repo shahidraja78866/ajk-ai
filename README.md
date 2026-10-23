@@ -362,6 +362,84 @@ launch. And per the owner's rule, sound quality is **unproven** until
 real samples are generated on a funded fal.ai balance and reviewed —
 the suite covers everything above with stubs only.
 
+## Finishers, draft workflow & templates (Phase C1, migration v12)
+
+**One-tap finishers** — `POST /api/finish/:action` with
+`{generation_id, ...}` runs on one of the user's own **completed**
+videos and always creates a **new** History entry (`kind` = the
+finisher name) linked to the source via `source_generation_id`; the
+source is never modified. Cross-user ids return 404.
+
+- **reframe** (`{aspect_ratio: 16:9|9:16|1:1|4:5}`) — local ffmpeg:
+  the picture is scaled to fit inside the new frame over a
+  blurred-pad background (a blurred, enlarged copy of the video
+  itself), never a hard crop. **Free** (local compute, like clip
+  joining), no provider call.
+- **captions** — the video's own audio is transcribed with fal
+  Whisper (`fal-ai/whisper`; schema verified against fal's llms.txt +
+  queue OpenAPI 2026-10-23: `audio_url` — MP4 is an accepted format,
+  so the video file is passed directly — `task: transcribe`,
+  `chunk_level: segment`, `language` when the generation has a known
+  dialogue language, else auto-detect) and the timed segments are
+  rendered into an `.ass` file (Noto Naskh Arabic styling, the same
+  libass renderer as the watermark) and burned in with the
+  `subtitles` filter. **+5 credits**, refunded exactly once on any
+  failure. A video with **no audio stream is refused with 400 before
+  any charge** — there is nothing to transcribe.
+- **extend** (`{extra_seconds: 5|10}`) — the source's **last frame**
+  is extracted with ffmpeg and sent through the existing H3
+  image-to-video route for +5s/+10s at the **source clip's quality
+  tier**, charged at the **standard rate card** for that
+  quality/duration (plan quality caps apply exactly as in normal
+  generation; drafts cannot be extended). Source + extension are
+  joined with the clip-joining machinery into one longer video. Any
+  step failing refunds exactly once and leaves no partial entry.
+- **upscale** — Topaz video upscale on fal
+  (`fal-ai/topaz/upscale/video`, model `Proteus`, factor 2; endpoint
+  and prices verified against fal's llms.txt 2026-10-23: $0.01/s for
+  output up to 720p, $0.02/s up to 1080p, $0.08/s above 1080p). The
+  credit price is the owner's formula on the video's **measured**
+  duration and output height: `ceil(per-second USD × seconds × 277 /
+  15) × 2` margin, **minimum 10 credits** (e.g. a 30-second video
+  upscaled to 720p costs `ceil(0.01×30×277/15)×2 = 12` credits; a
+  5-second 768P video costs 16). The result is **one tier above the
+  source** and must be within the plan's max quality — the same gate
+  as generation — and the entry is labelled with the tier it reaches.
+
+**Draft → upgrade.** `POST /api/generate` accepts `quality: "draft"`:
+a cheap **480P** preview on the standard H3 model (480P is a
+documented H3 tier), flat **7 credits (5s) / 14 credits (10s)**,
+marked `stage: 'draft'` (migration v12) and counted against the daily
+cap like any charge. Drafts **cannot take sound or voice add-ons**
+(the API rejects them with a clear message; the app hides them for
+drafts). `POST /api/generations/:id/upgrade` with
+`{quality: 768P|2K|4K}` re-runs the **same** prompt/settings (mode,
+style, aspect, duration, language) at the chosen full quality for the
+standard rate — a normal new generation linked to the draft.
+
+**Template gallery.** The Studio opens with "Start from a template":
+Talking Photo (opens the existing voice lip-sync flow), Kids Story
+(cartoon mode + story scaffold), Product Ad (realistic, 9:16),
+Breaking-News Short (realistic, 9:16; the scaffold itself carries the
+honesty line that the visuals are AI-generated), Music Video
+(realistic + the existing music sound mode preselected) and Cartoon
+Episode (cartoon scaffold). Templates are pure frontend presets over
+existing controls — no new backend, no new capabilities.
+
+**Honest limits (stated in the app copy too).** Extend's continuation
+is a **new AI generation from the last frame** — continuity across
+the join is the model's best effort, **not guaranteed**, and the join
+may not be perfectly seamless. Caption **accuracy depends entirely on
+the transcription model** — Whisper's published pricing page lists no
+per-language accuracy, and Urdu/Hindi caption quality is unverified;
+always review captions before publishing. Upscale output is an
+**AI-enhanced upscale**, labelled with the tier it reaches (e.g.
+"Upscale to 2K") — it is not native capture at that resolution, and
+nothing here sells a "native 4K upscale" beyond what the Topaz
+endpoint actually does. All finisher quality is **unproven** until
+real outputs are generated on a funded fal.ai balance and reviewed —
+the suite covers everything above with stubs only.
+
 ## Test results (backend, 2026-10-20)
 Run locally with `bash test.sh` — **19/19 tests passed** with a dummy key (no paid calls):
 - ✅ health + config endpoint exposes no secrets

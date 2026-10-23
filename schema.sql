@@ -176,6 +176,15 @@ CREATE TABLE IF NOT EXISTS pack_purchases (
 --                     sound jobs are generations rows with kind='sound';
 --                     audio-only jobs keep their /files/sounds/ path in
 --                     video_url and have no source_generation_id.
+--
+-- === Finishers + draft workflow (migration v12, applied automatically
+-- === by server.js) ===
+-- generations gains:  stage ('final' for normal generations, 'draft' for
+--                     cheap 480P preview generations). Finisher outputs
+--                     reuse kind ('reframe' | 'captions' | 'extend' |
+--                     'upscale') and source_generation_id (the video they
+--                     derived from); a draft upgrade is a kind='video'
+--                     row whose source_generation_id is the draft.
 CREATE TABLE IF NOT EXISTS voice_jobs (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id       INTEGER NOT NULL REFERENCES users(id),

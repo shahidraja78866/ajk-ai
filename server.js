@@ -35,8 +35,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { randomUUID, createSign, createHash, timingSafeEqual } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { Readable, Transform } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite'; // built into Node 22.5+/24 — no native build step
 import ffmpegStatic from 'ffmpeg-static'; // pinned binary for clip joining
@@ -194,6 +192,33 @@ const CONFIG = {
   // endpoints then fail closed with 503 and charge nothing). The engines
   // all ride the FAL_KEY, so no key also means not configured.
   soundEnabled: process.env.SOUND_ENABLED !== '0',
+  // --- Finishers + draft workflow (Phase C1) -------------------------------
+  // One-tap finishers run on a completed video (POST /api/finish/:action)
+  // and always produce a NEW History entry linked to the source.
+  // Whisper transcription on fal (schema verified against fal's llms.txt +
+  // queue OpenAPI 2026-10-23): { audio_url (mp4 accepted), task, language,
+  // chunk_level } -> { text, chunks: [{ timestamp: [start, end], text }] }.
+  whisperModel: (process.env.FAL_WHISPER_MODEL || 'fal-ai/whisper').trim(),
+  // Topaz video upscale on fal (verified against fal's llms.txt
+  // 2026-10-23): fal-ai/topaz/upscale/video, { video_url, model,
+  // upscale_factor } -> { video }. Documented price: $0.01/s for output up
+  // to 720p, $0.02/s for output up to 1080p, $0.08/s above 1080p (60fps
+  // output doubles it — we never request it). The credit price uses the
+  // owner's formula: ceil(per-second USD x seconds x 277 / 15) x 2 margin,
+  // minimum 10 credits.
+  upscaleModel: (process.env.FAL_UPSCALE_MODEL || 'fal-ai/topaz/upscale/video').trim(),
+  upscaleTopazModel: (process.env.FAL_UPSCALE_TOPAZ_MODEL || 'Proteus').trim(),
+  upscalePerSecondUsd: { to720: 0.01, to1080: 0.02, above1080: 0.08 },
+  upscaleMinCredits: 10,
+  upscaleFactor: 2,
+  // Locked owner rates for the finishers (credits). Reframe is local
+  // ffmpeg compute — free, like clip joining.
+  captionsCost: 5,
+  // Draft generations: quality "draft" routes 480P on the standard H3
+  // model (480P is a documented H3 tier at $0.05/s) at a flat cheap rate.
+  // Drafts take no sound/voice add-ons; the full-quality version is a
+  // separate standard-rate generation (POST /api/generations/:id/upgrade).
+  draftCost: { 5: 7, 10: 14 },
 };
 
 // ---------- Prompt languages ----------
@@ -541,6 +566,14 @@ const MIGRATIONS = [
     ALTER TABLE generations ADD COLUMN sound_prompt TEXT;
     ALTER TABLE generations ADD COLUMN sound_volume INTEGER;
     ALTER TABLE generations ADD COLUMN sound_cost INTEGER NOT NULL DEFAULT 0;` },
+  // v12 — finishers + draft workflow (Phase C1): generations gain a stage
+  // marker. 'final' is every normal generation; 'draft' is a cheap 480P
+  // preview generation (quality "draft") that can later be upgraded to a
+  // full-quality generation at the standard rate. Finisher outputs reuse
+  // the existing kind column ('reframe' | 'captions' | 'extend' |
+  // 'upscale') and source_generation_id — no further columns needed.
+  { version: 12, up: `
+    ALTER TABLE generations ADD COLUMN stage TEXT NOT NULL DEFAULT 'final';` },
 ];
 {
   const applied = new Set(db.prepare('SELECT version FROM schema_migrations').all().map(r => r.version));
@@ -812,6 +845,11 @@ const voiceLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 30,
 const soundLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 30,
   keyGenerator: (req) => String(req.user?.id || req.ip),
   message: { error: 'Rate limit: max 30 sound requests per hour.' } });
+// Finishers mix local ffmpeg work and paid provider calls — limited per
+// signed-in user like the sound endpoints.
+const finishLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 30,
+  keyGenerator: (req) => String(req.user?.id || req.ip),
+  message: { error: 'Rate limit: max 30 finisher requests per hour.' } });
 
 function auth(req, res, next) {
   const token = (req.headers.authorization || '').replace('Bearer ', '');
@@ -894,6 +932,36 @@ app.get('/api/config', (req, res) => res.json({
     default_volume: SOUND_DEFAULT_VOLUME,
     models: { sync: CONFIG.soundSyncModel, premium_sync: CONFIG.soundSyncPremiumModel,
               sfx: CONFIG.soundSfxModel, music: CONFIG.soundMusicModel },
+  },
+  // Finishers (Phase C1): one-tap post-processing on a completed video.
+  // Each finisher creates a NEW History entry linked to the source video.
+  // reframe is local ffmpeg work (free, like clip joining); captions is a
+  // flat +5; extend is charged at the standard generation rate for the
+  // source video's quality and the added duration; upscale is priced from
+  // the verified Topaz per-second rate with the owner's formula
+  // (ceil(USD/s x seconds x 277 / 15) x 2, minimum 10 credits).
+  finishers: {
+    configured: Boolean(FAL_KEY),
+    actions: ['reframe', 'captions', 'extend', 'upscale'],
+    prices: {
+      reframe: 0,
+      captions: CONFIG.captionsCost,
+      extend: 'standard generation rate for the source quality and added duration',
+      upscale: { model: CONFIG.upscaleModel, per_second_usd: CONFIG.upscalePerSecondUsd,
+                 factor: CONFIG.upscaleFactor, min_credits: CONFIG.upscaleMinCredits,
+                 formula: 'ceil(per-second USD x seconds x 277 / 15) x 2, minimum min_credits' },
+    },
+    reframe_targets: ['16:9', '9:16', '1:1', '4:5'],
+    models: { captions: CONFIG.whisperModel, upscale: CONFIG.upscaleModel },
+  },
+  // Draft workflow (Phase C1): quality "draft" generates a cheap 480P
+  // preview; a draft can later be upgraded to a full-quality generation
+  // at the standard rate (POST /api/generations/:id/upgrade). Drafts
+  // cannot take sound or voice add-ons.
+  draft: {
+    quality: '480P',
+    cost_by_duration: CONFIG.draftCost,
+    upgrade_qualities: ['768P', '2K', '4K'],
   },
 }));
 app.get('/api/health', (req, res) => res.json({ ok: true, model: CONFIG.model }));
@@ -1108,6 +1176,12 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
     }
     soundSpec = { mode: smode, volume: svol, promptRaw: sPromptRaw, prompt: null };
   }
+  // Draft workflow (Phase C1): quality "draft" = a cheap 480P preview on
+  // the standard H3 model, priced flat (7/14 credits). Drafts cannot take
+  // sound add-ons — sound belongs on the upgraded full-quality version.
+  const isDraft = String(req.body?.quality || '').toLowerCase() === 'draft';
+  if (isDraft && soundSpec)
+    return res.status(400).json({ error: 'Drafts cannot take sound add-ons. Generate the draft first, then upgrade it to full quality and add sound to that version.' });
   // Optional image-to-video: the source image must be one of THIS user's
   // uploads (see POST /api/uploads/image). It is sent to the verified H3
   // image-to-video endpoint in its documented `image_url` field as a
@@ -1199,9 +1273,16 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
   // Credit rules are unchanged — the same per-quality rate card below
   // applies whether or not a source image is attached.
   if (sourceImagePath) model = CONFIG.modelI2V;
+  // Draft override: 480P on the standard H3 model (480P is a documented
+  // H3 resolution tier), flat draft pricing instead of the rate card.
+  if (isDraft) {
+    resolution = '480P';
+    model = sourceImagePath ? CONFIG.modelI2V : CONFIG.model;
+  }
   // Rate card (v9): the credit cost comes from the ROUTED quality's own
   // row — 768P 10/20, 2K 15/30, native 4K 40/80 for 5s/10s.
-  const cost = generationCost(resolution, Number(duration));
+  const cost = isDraft ? (CONFIG.draftCost[Number(duration)] ?? 7)
+                       : generationCost(resolution, Number(duration));
   // The sound add-on is charged together with the video in the same
   // atomic transaction (exactly once). If the video fails, the whole
   // amount is refunded by failAndRefund; if only the sound step fails,
@@ -1229,10 +1310,11 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
       if (creditBuckets(user).total < totalCost) throw Object.assign(new Error('NO_CREDITS'), { status: 402 });
       spendBuckets(user, totalCost); // plan credits first, then free credits
       const info = db.prepare(
-        `INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, cost_credits, idempotency_key, resolution, model, prompt_language, translated_prompt, mode, source_image_path, watermark_text, watermark_status, sound_mode, sound_status, sound_prompt, sound_volume, sound_cost)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(user.id, prompt.trim(), aspect_ratio, Number(duration), style, totalCost, idemKey, resolution, model, languageCode, translatedPrompt, mode, sourceImagePath, watermarkText, watermarkStatus,
+        `INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, cost_credits, idempotency_key, resolution, model, prompt_language, translated_prompt, mode, source_image_path, watermark_text, watermark_status, sound_mode, sound_status, sound_prompt, sound_volume, sound_cost, stage)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(user.id, prompt.trim(), aspect_ratio, Number(duration), style, totalCost, idemKey, resolution, model, languageCode, translatedPrompt, mode, sourceImagePath, watermarkText, watermarkStatus,
            soundSpec ? soundSpec.mode : null, soundSpec ? 'pending' : 'none',
-           soundSpec ? soundSpec.prompt : null, soundSpec ? soundSpec.volume : null, soundCost);
+           soundSpec ? soundSpec.prompt : null, soundSpec ? soundSpec.volume : null, soundCost,
+           isDraft ? 'draft' : 'final');
       return Number(info.lastInsertRowid);
     });
   } catch (e) {
@@ -1281,6 +1363,7 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
     const me = db.prepare('SELECT credits FROM users WHERE id = ?').get(req.user.id);
     res.json({ id: jobId, status: 'in_progress', credits_left: me.credits,
                cost_credits: totalCost, resolution, model, prompt_language: languageCode,
+               stage: isDraft ? 'draft' : 'final',
                mode, source_image_path: sourceImagePath,
                watermark_status: watermarkStatus,
                ...(soundSpec ? { sound_mode: soundSpec.mode, sound_status: 'pending',
@@ -1483,16 +1566,15 @@ async function downloadClip(url, dest, budget) {
   if (!r.ok || !r.body) throw new Error('Could not download one of the clips.');
   const declared = Number(r.headers.get('content-length') || 0);
   if (declared > budget.left) throw new Error('These clips are too large to join (200 MB total limit).');
-  let seen = 0;
-  const counter = new Transform({
-    transform(chunk, _enc, cb) {
-      seen += chunk.length;
-      if (seen > budget.left) cb(new Error('These clips are too large to join (200 MB total limit).'));
-      else cb(null, chunk);
-    },
-  });
-  await pipeline(Readable.fromWeb(r.body), counter, fs.createWriteStream(dest));
-  budget.left -= seen;
+  // Buffer the body instead of piping a stream through a counting
+  // Transform: backpressure-pausing the parser while a plain HTTP/1.0
+  // server closes the socket can trip an undici assertion and take the
+  // whole process down (seen with the test suite's python http.server).
+  // The 200 MB budget is checked again on the real byte count below.
+  const buf = Buffer.from(await r.arrayBuffer());
+  if (buf.length > budget.left) throw new Error('These clips are too large to join (200 MB total limit).');
+  fs.writeFileSync(dest, buf);
+  budget.left -= buf.length;
 }
 
 app.post('/api/generations/join', auth, joinLimiter, async (req, res) => {
@@ -2010,7 +2092,7 @@ function recordVoiceJob({ userId, kind, settings, text, status, audioPath = null
 
 // Charge + insert a generations row atomically (same rules as /api/generate:
 // daily cap, balance check, plan-bucket-first spend). Throws {status,error}.
-function chargeVoiceGeneration(userId, { cost, prompt, aspectRatio, duration, style, model, kind, sourceGenerationId = null, sourceImagePath = null, promptLanguage = null, translatedPrompt = null }) {
+function chargeVoiceGeneration(userId, { cost, prompt, aspectRatio, duration, style, model, kind, sourceGenerationId = null, sourceImagePath = null, promptLanguage = null, translatedPrompt = null, resolution = '768P', stage = 'final', mode = 'realistic' }) {
   return tx(() => {
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
     if (!user) throw Object.assign(new Error('Account not found.'), { status: 404 });
@@ -2025,10 +2107,11 @@ function chargeVoiceGeneration(userId, { cost, prompt, aspectRatio, duration, st
     const info = db.prepare(
       `INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status,
          cost_credits, resolution, model, prompt_language, translated_prompt,
-         mode, source_image_path, kind, source_generation_id)
-       VALUES (?, ?, ?, ?, ?, 'in_progress', ?, '768P', ?, ?, ?, 'realistic', ?, ?, ?)`)
-      .run(userId, prompt, aspectRatio, duration, style, cost, model,
-           promptLanguage, translatedPrompt, sourceImagePath, kind, sourceGenerationId);
+         mode, source_image_path, kind, source_generation_id, stage)
+       VALUES (?, ?, ?, ?, ?, 'in_progress', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(userId, prompt, aspectRatio, duration, style, cost, resolution, model,
+           promptLanguage, translatedPrompt, mode, sourceImagePath, kind, sourceGenerationId,
+           stage);
     return Number(info.lastInsertRowid);
   });
 }
@@ -2132,6 +2215,8 @@ app.post('/api/voice/lipsync', auth, voiceLimiter, async (req, res) => {
     if (!sourceGen) return res.status(404).json({ error: 'Generation not found.' });
     if (sourceGen.status !== 'completed' || !sourceGen.video_url)
       return res.status(400).json({ error: 'Only a completed video can be lip-synced.' });
+    if (sourceGen.stage === 'draft')
+      return res.status(400).json({ error: 'Drafts cannot take voice add-ons. Upgrade this draft to full quality first, then add lip-sync to that version.' });
   }
   // Audio source: a fresh script (synthesized now) or a previous voice job.
   let settings = null, audioJob = null;
@@ -2224,6 +2309,8 @@ app.post('/api/voice/voiceover', auth, voiceLimiter, async (req, res) => {
   if (!sourceGen) return res.status(404).json({ error: 'Generation not found.' });
   if (sourceGen.status !== 'completed' || !sourceGen.video_url)
     return res.status(400).json({ error: 'Only a completed video can get a voiceover.' });
+  if (sourceGen.stage === 'draft')
+    return res.status(400).json({ error: 'Drafts cannot take voice add-ons. Upgrade this draft to full quality first, then add a voiceover to that version.' });
   let settings;
   try { settings = parseVoiceSettings(b); }
   catch (e) { return res.status(e.status || 400).json({ error: e.message }); }
@@ -2576,6 +2663,8 @@ app.post('/api/sound/apply', auth, soundLimiter, async (req, res) => {
   if (!sourceGen) return res.status(404).json({ error: 'Generation not found.' });
   if (sourceGen.status !== 'completed' || !sourceGen.video_url)
     return res.status(400).json({ error: 'Only a completed video can get sound.' });
+  if (sourceGen.stage === 'draft')
+    return res.status(400).json({ error: 'Drafts cannot take sound add-ons. Upgrade this draft to full quality first, then add sound to that version.' });
   if (sourceGen.kind === 'sound' && !sourceGen.source_generation_id)
     return res.status(400).json({ error: 'That history entry is an audio file, not a video — sound can only be applied to a video.' });
   const mode = String(b.mode || '').toLowerCase();
@@ -2695,6 +2784,463 @@ app.post('/api/sound/generate', auth, soundLimiter, async (req, res) => {
     failAndRefund(jobId, `Sound generation failed (${e.message})`);
     db.prepare('UPDATE generations SET sound_status = ? WHERE id = ?').run('failed_refunded', jobId);
     res.status(502).json({ error: `Sound generation failed (${e.message}). Your ${cost} credits were refunded.` });
+  }
+});
+
+// ==========================================================================
+// Finishers + draft upgrade (Phase C1)
+// ==========================================================================
+// One-tap finishers run on a COMPLETED video the user owns and always
+// produce a NEW History entry (kind = the finisher name) linked back via
+// source_generation_id — the source video is never modified.
+//   reframe  — local ffmpeg: scale-to-fit over a blurred-pad background
+//              (never a hard crop). FREE, like clip joining.
+//   captions — fal Whisper transcription (verified schema) -> .ass built
+//              from the timed segments -> burned in with the subtitles
+//              filter (same libass styling family as the watermark).
+//              +5 credits, refunded on failure. A video with NO audio
+//              stream is refused with 400 BEFORE any charge.
+//   extend   — last frame -> the existing H3 image-to-video route for
+//              +5s/+10s at the SOURCE clip's quality tier (standard rate
+//              card, plan caps as in normal generation) -> joined with the
+//              source into one longer video. The extension is a NEW AI
+//              generation from the last frame: continuity is the model's
+//              best effort, not a guarantee. Any step failing refunds
+//              exactly once and leaves no partial entry completed.
+//   upscale  — Topaz video upscale on fal (verified endpoint + price).
+//              Credit price = ceil(per-second USD x seconds x 277 / 15)
+//              x 2 margin, minimum 10 credits. The result tier (one step
+//              above the source) must be within the plan's max quality —
+//              the same gate as generation.
+const FINISH_ACTIONS = ['reframe', 'captions', 'extend', 'upscale'];
+const REFRAME_TARGETS = { '16:9': [1920, 1080], '9:16': [1080, 1920], '1:1': [1080, 1080], '4:5': [1080, 1350] };
+// Whisper's documented language enum uses ISO codes; the app's prompt
+// languages map directly except Kashmiri (not a Whisper language —
+// auto-detect is used instead).
+const WHISPER_LANGUAGE_BY_PROMPT_LANG = { en: 'en', ur: 'ur', hi: 'hi', ar: 'ar', fa: 'fa', zh: 'zh' };
+
+function planResolutionFor(userId) {
+  refreshSubscriptionState(userId);
+  const sub = currentSubscription(userId);
+  const plan = sub ? getPlan(sub.plan_id) : null;
+  return { plan, planResolution: plan ? plan.resolution : CONFIG.resolution };
+}
+
+// Owner's upscale price formula on the verified Topaz per-second rate.
+function upscalePriceCredits(durationSeconds, outputHeight) {
+  const perSec = outputHeight <= 720 ? CONFIG.upscalePerSecondUsd.to720
+    : outputHeight <= 1080 ? CONFIG.upscalePerSecondUsd.to1080
+    : CONFIG.upscalePerSecondUsd.above1080;
+  const raw = Math.ceil(perSec * Math.max(1, Math.ceil(durationSeconds)) * 277 / 15) * 2;
+  return Math.max(CONFIG.upscaleMinCredits, raw);
+}
+
+// Join exactly two clips (source + extension) with the same normalize +
+// concat approach as the clip-joining endpoint: everything is conformed
+// to the FIRST clip's geometry/fps, silent audio is synthesized for a
+// clip that has none, and the result lands in the joined directory.
+async function joinTwoClips(urlA, urlB, workDir) {
+  const budget = { left: JOIN_MAX_BYTES };
+  const srcA = path.join(workDir, 'ext-src.mp4');
+  const srcB = path.join(workDir, 'ext-new.mp4');
+  await downloadClip(urlA, srcA, budget);
+  await downloadClip(urlB, srcB, budget);
+  const probes = [await probeMedia(srcA), await probeMedia(srcB)];
+  const target = probes[0];
+  const vf = `scale=${target.width}:${target.height}:force_original_aspect_ratio=decrease,` +
+             `pad=${target.width}:${target.height}:(ow-iw)/2:(oh-ih)/2,` +
+             `fps=${target.fps},setsar=1,format=yuv420p`;
+  const norms = [];
+  for (let i = 0; i < 2; i++) {
+    const src = i === 0 ? srcA : srcB;
+    const out = path.join(workDir, `ext-norm${i}.mp4`);
+    const enc = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
+                 '-c:a', 'aac', '-ar', '48000', '-ac', '2'];
+    if (probes[i].hasAudio) {
+      await runFfmpeg(['-y', '-i', src, '-map', '0:v:0', '-map', '0:a:0', '-vf', vf, ...enc, out]);
+    } else {
+      await runFfmpeg(['-y', '-i', src,
+                       '-f', 'lavfi', '-t', String(probes[i].duration),
+                       '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
+                       '-map', '0:v:0', '-map', '1:a:0', '-vf', vf, ...enc, '-shortest', out]);
+    }
+    norms.push(out);
+  }
+  const listFile = path.join(workDir, 'ext-list.txt');
+  fs.writeFileSync(listFile, norms.map(n => `file '${n}'`).join('\n'));
+  const joinedTmp = path.join(workDir, 'ext-joined.mp4');
+  try {
+    await runFfmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', joinedTmp]);
+  } catch {
+    await runFfmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', listFile,
+                     '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
+                     '-c:a', 'aac', joinedTmp]);
+  }
+  fs.mkdirSync(CONFIG.joinedDir, { recursive: true });
+  const name = `${randomUUID()}.mp4`;
+  fs.copyFileSync(joinedTmp, path.join(CONFIG.joinedDir, name));
+  return { videoUrl: `/files/joined/${name}`,
+           duration: probes[0].duration + probes[1].duration };
+}
+
+// Build an .ass subtitle file from Whisper segments (chunks with
+// [start, end] timestamps in seconds). Same libass styling approach as
+// the watermark: Noto Naskh Arabic so Urdu/Arabic captions shape
+// correctly, white text with a dark outline, bottom-centre.
+function buildCaptionsAss(chunks, width, height, totalDuration) {
+  const fontSize = Math.min(64, Math.max(16, Math.round(height / 16)));
+  const lines = [
+    '[Script Info]',
+    'ScriptType: v4.00+',
+    `PlayResX: ${width}`,
+    `PlayResY: ${height}`,
+    'WrapStyle: 0',
+    '',
+    '[V4+ Styles]',
+    'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
+    `Style: Captions,Noto Naskh Arabic,${fontSize},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,1,2,24,24,28,1`,
+    '',
+    '[Events]',
+    'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
+  ];
+  for (const c of chunks) {
+    const start = Number(c?.timestamp?.[0]) || 0;
+    let end = Number(c?.timestamp?.[1]) || 0;
+    if (end <= start) end = Math.min(totalDuration || start + 2, start + 2);
+    const text = escapeAssText(String(c?.text || '').trim());
+    if (!text) continue;
+    lines.push(`Dialogue: 0,${assTimestamp(start)},${assTimestamp(end)},Captions,,0,0,0,,${text}`);
+  }
+  lines.push('');
+  return lines.join('\n');
+}
+
+function loadFinishSource(req, res, generationId) {
+  const sourceGen = db.prepare('SELECT * FROM generations WHERE id = ? AND user_id = ?')
+    .get(Number(generationId), req.user.id);
+  if (!sourceGen) { res.status(404).json({ error: 'Generation not found.' }); return null; }
+  if (sourceGen.status !== 'completed' || !sourceGen.video_url) {
+    res.status(400).json({ error: 'Finishers can only run on a completed video.' });
+    return null;
+  }
+  if (sourceGen.kind === 'sound' && !sourceGen.source_generation_id) {
+    res.status(400).json({ error: 'That history entry is an audio file, not a video.' });
+    return null;
+  }
+  return sourceGen;
+}
+
+app.post('/api/finish/:action', auth, finishLimiter, async (req, res) => {
+  const action = String(req.params.action || '').toLowerCase();
+  const b = req.body || {};
+  if (!FINISH_ACTIONS.includes(action))
+    return res.status(400).json({ error: `action must be one of: ${FINISH_ACTIONS.join(', ')}` });
+  const sourceGen = loadFinishSource(req, res, b.generation_id);
+  if (!sourceGen) return; // response already sent
+  const base = CONFIG.publicBaseUrl || `${req.protocol}://${req.get('host')}`;
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ajk-finish-'));
+  try {
+    // ---------------- reframe (free, local ffmpeg) ----------------
+    if (action === 'reframe') {
+      const target = String(b.aspect_ratio || '');
+      if (!Object.hasOwn(REFRAME_TARGETS, target))
+        return res.status(400).json({ error: `aspect_ratio must be one of: ${Object.keys(REFRAME_TARGETS).join(', ')}` });
+      const [W, H] = REFRAME_TARGETS[target];
+      const info = db.prepare(
+        `INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status,
+           cost_credits, resolution, model, mode, kind, source_generation_id, stage)
+         VALUES (?, ?, ?, ?, ?, 'in_progress', 0, ?, 'local-ffmpeg', ?, 'reframe', ?, 'final')`)
+        .run(req.user.id, `Reframe to ${target}: ${sourceGen.prompt}`.slice(0, 500), target,
+             sourceGen.duration, sourceGen.style, sourceGen.resolution || '768P',
+             sourceGen.mode || 'realistic', sourceGen.id);
+      const jobId = Number(info.lastInsertRowid);
+      try {
+        const input = path.join(work, 'reframe-in.mp4');
+        await downloadClip(sourceGen.video_url, input, { left: JOIN_MAX_BYTES });
+        const probe = await probeMedia(input);
+        fs.mkdirSync(CONFIG.generatedDir, { recursive: true });
+        const name = `${randomUUID()}.mp4`;
+        const output = path.join(CONFIG.generatedDir, name);
+        const fc = `[0:v]split=2[bgin][fgin];` +
+          `[bgin]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},boxblur=luma_radius=24:luma_power=3[bg];` +
+          `[fgin]scale=${W}:${H}:force_original_aspect_ratio=decrease[fg];` +
+          `[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p[v]`;
+        const args = ['-y', '-i', input, '-filter_complex', fc, '-map', '[v]'];
+        if (probe.hasAudio) args.push('-map', '0:a:0', '-c:a', 'aac', '-ar', '48000', '-ac', '2');
+        args.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', output);
+        await runFfmpeg(args);
+        if (!fs.existsSync(output) || fs.statSync(output).size === 0)
+          throw new Error('reframe render produced no output');
+        db.prepare(`UPDATE generations SET status = 'completed', video_url = ?,
+                    updated_at = datetime('now') WHERE id = ?`).run(`/files/generated/${name}`, jobId);
+        const row = db.prepare('SELECT * FROM generations WHERE id = ?').get(jobId);
+        const me = db.prepare('SELECT credits FROM users WHERE id = ?').get(req.user.id);
+        return res.status(201).json({ generation: row, credits_left: me.credits, cost_credits: 0 });
+      } catch (e) {
+        db.prepare(`UPDATE generations SET status = 'failed', error = ?,
+                    updated_at = datetime('now') WHERE id = ?`).run(`Reframe failed (${e.message})`, jobId);
+        return res.status(502).json({ error: `Reframe failed (${e.message}). Reframing is free — nothing was charged.` });
+      }
+    }
+
+    // Paid finishers need the provider key; without it they fail closed
+    // with 503 and charge nothing (reframe above stays available).
+    if (!FAL_KEY)
+      return res.status(503).json({ error: 'finisher_not_configured', message: 'This finisher is not configured on this server yet, so nothing was charged.' });
+
+    // ---------------- captions (+5, Whisper -> .ass -> burn) ----------------
+    if (action === 'captions') {
+      const input = path.join(work, 'captions-in.mp4');
+      await downloadClip(sourceGen.video_url, input, { left: JOIN_MAX_BYTES });
+      const probe = await probeMedia(input);
+      if (!probe.hasAudio)
+        return res.status(400).json({ error: 'This video has no audio track, so there is nothing to transcribe into captions. Nothing was charged.' });
+      let jobId;
+      try {
+        jobId = chargeVoiceGeneration(req.user.id, {
+          cost: CONFIG.captionsCost,
+          prompt: `Captions: ${sourceGen.prompt}`.slice(0, 500),
+          aspectRatio: sourceGen.aspect_ratio, duration: sourceGen.duration,
+          style: sourceGen.style, model: CONFIG.whisperModel, kind: 'captions',
+          sourceGenerationId: sourceGen.id,
+          resolution: sourceGen.resolution || '768P', mode: sourceGen.mode || 'realistic',
+          promptLanguage: sourceGen.prompt_language,
+        });
+      } catch (e) { return res.status(e.status || 500).json({ error: e.message }); }
+      try {
+        const language = WHISPER_LANGUAGE_BY_PROMPT_LANG[sourceGen.prompt_language] || null;
+        const result = await runFalQueueJob(CONFIG.whisperModel, {
+          audio_url: absoluteMediaUrl(sourceGen.video_url, base),
+          task: 'transcribe', chunk_level: 'segment',
+          ...(language ? { language } : {}),
+        });
+        let chunks = Array.isArray(result?.chunks) ? result.chunks : [];
+        if (!chunks.length && result?.text)
+          chunks = [{ timestamp: [0, probe.duration], text: result.text }];
+        if (!chunks.length)
+          throw new Error('the transcription returned no timed segments');
+        const assPath = path.join(work, 'captions.ass');
+        fs.writeFileSync(assPath, buildCaptionsAss(chunks, probe.width, probe.height, probe.duration));
+        fs.mkdirSync(CONFIG.generatedDir, { recursive: true });
+        const name = `${randomUUID()}.mp4`;
+        const output = path.join(CONFIG.generatedDir, name);
+        const filterPath = assPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
+        await runFfmpeg(['-y', '-i', input, '-vf', `subtitles=${filterPath}`,
+                         '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
+                         '-c:a', 'copy', output]);
+        if (!fs.existsSync(output) || fs.statSync(output).size === 0)
+          throw new Error('caption burn-in produced no output');
+        db.prepare(`UPDATE generations SET status = 'completed', video_url = ?,
+                    updated_at = datetime('now') WHERE id = ?`).run(`/files/generated/${name}`, jobId);
+        const row = db.prepare('SELECT * FROM generations WHERE id = ?').get(jobId);
+        const me = db.prepare('SELECT credits FROM users WHERE id = ?').get(req.user.id);
+        return res.status(201).json({ generation: row, credits_left: me.credits, cost_credits: CONFIG.captionsCost });
+      } catch (e) {
+        failAndRefund(jobId, `Captions failed (${e.message})`);
+        return res.status(502).json({ error: `Captions failed (${e.message}). Your ${CONFIG.captionsCost} credits were refunded.` });
+      }
+    }
+
+    // ---------------- extend (standard rate, i2v from last frame) ------------
+    if (action === 'extend') {
+      if (sourceGen.stage === 'draft' || (sourceGen.resolution || '') === '480P')
+        return res.status(400).json({ error: 'Drafts cannot be extended. Upgrade this draft to full quality first, then extend that version.' });
+      const extra = Number(b.extra_seconds ?? b.duration ?? 5);
+      if (!CONFIG.durations.includes(extra))
+        return res.status(400).json({ error: `extra_seconds must be one of: ${CONFIG.durations.join(', ')}` });
+      const tier = RESOLUTIONS.includes(sourceGen.resolution) ? sourceGen.resolution : '768P';
+      const { planResolution } = planResolutionFor(req.user.id);
+      if (RESOLUTIONS.indexOf(tier) > RESOLUTIONS.indexOf(planResolution))
+        return res.status(403).json({ error: `Extending a ${tier} video needs a plan that includes ${tier}. Your current plan goes up to ${planResolution}.` });
+      const cost = generationCost(tier, extra);
+      let jobId;
+      try {
+        jobId = chargeVoiceGeneration(req.user.id, {
+          cost,
+          prompt: `Extended (+${extra}s): ${sourceGen.prompt}`.slice(0, 500),
+          aspectRatio: sourceGen.aspect_ratio, duration: sourceGen.duration + extra,
+          style: sourceGen.style, model: CONFIG.modelI2V, kind: 'extend',
+          sourceGenerationId: sourceGen.id,
+          resolution: tier, mode: sourceGen.mode || 'realistic',
+          promptLanguage: sourceGen.prompt_language,
+          translatedPrompt: sourceGen.translated_prompt,
+        });
+      } catch (e) { return res.status(e.status || 500).json({ error: e.message }); }
+      try {
+        const input = path.join(work, 'extend-in.mp4');
+        await downloadClip(sourceGen.video_url, input, { left: JOIN_MAX_BYTES });
+        const probe = await probeMedia(input);
+        const frame = path.join(work, 'last-frame.jpg');
+        const seek = Math.max(0, probe.duration - 0.25).toFixed(2);
+        await runFfmpeg(['-y', '-ss', seek, '-i', input, '-frames:v', '1', '-q:v', '3', frame]);
+        if (!fs.existsSync(frame) || fs.statSync(frame).size === 0)
+          throw new Error('could not extract the last frame of the source video');
+        const frameUri = `data:image/jpeg;base64,${fs.readFileSync(frame).toString('base64')}`;
+        const effectivePrompt = sourceGen.translated_prompt || sourceGen.prompt;
+        const result = await runFalQueueJob(CONFIG.modelI2V, {
+          prompt: `${effectivePrompt} — style: ${sourceGen.style}`,
+          duration: extra, resolution: tier,
+          enable_safety_checker: true, image_url: frameUri,
+        });
+        const extUrl = result?.video?.url || result?.data?.video?.url || null;
+        if (!extUrl) throw new Error('the extension generation returned no video');
+        const joined = await joinTwoClips(sourceGen.video_url, extUrl, work);
+        db.prepare(`UPDATE generations SET status = 'completed', video_url = ?, duration = ?,
+                    updated_at = datetime('now') WHERE id = ?`)
+          .run(joined.videoUrl, Math.max(1, Math.round(joined.duration)), jobId);
+        const row = db.prepare('SELECT * FROM generations WHERE id = ?').get(jobId);
+        const me = db.prepare('SELECT credits FROM users WHERE id = ?').get(req.user.id);
+        return res.status(201).json({ generation: row, credits_left: me.credits, cost_credits: cost });
+      } catch (e) {
+        failAndRefund(jobId, `Extend failed (${e.message})`);
+        return res.status(502).json({ error: `Extend failed (${e.message}). Your ${cost} credits were refunded.` });
+      }
+    }
+
+    // ---------------- upscale (Topaz, owner price formula) ------------------
+    if (action === 'upscale') {
+      const tier = RESOLUTIONS.includes(sourceGen.resolution) ? sourceGen.resolution : '768P';
+      const tierIdx = RESOLUTIONS.indexOf(tier);
+      if (tierIdx >= RESOLUTIONS.length - 1)
+        return res.status(400).json({ error: 'This video is already at the highest quality tier — there is nothing to upscale to.' });
+      const resultTier = RESOLUTIONS[tierIdx + 1];
+      const { planResolution } = planResolutionFor(req.user.id);
+      if (RESOLUTIONS.indexOf(resultTier) > RESOLUTIONS.indexOf(planResolution))
+        return res.status(403).json({ error: `Upscaling this video to ${resultTier} needs a plan that includes ${resultTier}. Your current plan goes up to ${planResolution}.` });
+      const input = path.join(work, 'upscale-in.mp4');
+      await downloadClip(sourceGen.video_url, input, { left: JOIN_MAX_BYTES });
+      const probe = await probeMedia(input);
+      const outputHeight = Math.min(4320, Math.round(probe.height * CONFIG.upscaleFactor));
+      const cost = upscalePriceCredits(probe.duration, outputHeight);
+      let jobId;
+      try {
+        jobId = chargeVoiceGeneration(req.user.id, {
+          cost,
+          prompt: `Upscale to ${resultTier}: ${sourceGen.prompt}`.slice(0, 500),
+          aspectRatio: sourceGen.aspect_ratio, duration: sourceGen.duration,
+          style: sourceGen.style, model: CONFIG.upscaleModel, kind: 'upscale',
+          sourceGenerationId: sourceGen.id,
+          resolution: resultTier, mode: sourceGen.mode || 'realistic',
+          promptLanguage: sourceGen.prompt_language,
+        });
+      } catch (e) { return res.status(e.status || 500).json({ error: e.message }); }
+      try {
+        const result = await runFalQueueJob(CONFIG.upscaleModel, {
+          video_url: absoluteMediaUrl(sourceGen.video_url, base),
+          model: CONFIG.upscaleTopazModel,
+          upscale_factor: CONFIG.upscaleFactor,
+          H264_output: true,
+        });
+        const outUrl = result?.video?.url || result?.data?.video?.url || null;
+        if (!outUrl) throw new Error('the upscale provider returned no video');
+        db.prepare(`UPDATE generations SET status = 'completed', video_url = ?,
+                    updated_at = datetime('now') WHERE id = ?`).run(outUrl, jobId);
+        const row = db.prepare('SELECT * FROM generations WHERE id = ?').get(jobId);
+        const me = db.prepare('SELECT credits FROM users WHERE id = ?').get(req.user.id);
+        return res.status(201).json({ generation: row, credits_left: me.credits, cost_credits: cost });
+      } catch (e) {
+        failAndRefund(jobId, `Upscale failed (${e.message})`);
+        return res.status(502).json({ error: `Upscale failed (${e.message}). Your ${cost} credits were refunded.` });
+      }
+    }
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+});
+
+// ---------- Draft upgrade ---------------------------------------------------
+// One tap on a draft re-runs the SAME prompt/settings (mode, style,
+// aspect, duration, language) at a chosen full quality for the standard
+// rate — a normal new generation linked to the draft via
+// source_generation_id. Plan quality caps apply exactly as in /api/generate.
+app.post('/api/generations/:id/upgrade', auth, generateLimiter, async (req, res) => {
+  const draft = db.prepare('SELECT * FROM generations WHERE id = ? AND user_id = ?')
+    .get(req.params.id, req.user.id);
+  if (!draft) return res.status(404).json({ error: 'Generation not found.' });
+  if (draft.stage !== 'draft')
+    return res.status(400).json({ error: 'Only draft generations can be upgraded — this video is already a full generation.' });
+  const quality = String(req.body?.quality || req.body?.resolution || '768P').toUpperCase();
+  if (!['768P', '2K', '4K'].includes(quality))
+    return res.status(400).json({ error: 'quality must be one of: 768P, 2K, 4K' });
+  const { plan, planResolution } = planResolutionFor(req.user.id);
+  if (RESOLUTIONS.indexOf(quality) > RESOLUTIONS.indexOf(planResolution))
+    return res.status(403).json({ error: `The ${quality} quality needs a plan that includes it. Your current plan goes up to ${planResolution}.` });
+  let resolution = quality;
+  let model = resolution === '4K' ? (plan && plan.resolution === '4K' ? plan.model : CONFIG.model4k)
+                                  : CONFIG.model;
+  let fallbackNote = null;
+  if (resolution === '4K' && !FOUR_K_ASPECTS.includes(draft.aspect_ratio)) {
+    resolution = '2K';
+    model = CONFIG.model;
+    fallbackNote = 'Native 4K is only available for 16:9, 9:16 and 1:1 videos; ' +
+                   'this upgrade was generated at 2K instead.';
+  }
+  // Keep the draft's route family: an image-to-video draft upgrades
+  // through the image-to-video endpoint when its source image still exists.
+  let sourceImageDataUri = null;
+  if (draft.source_image_path) {
+    const owned = resolveOwnedUpload(req.user.id, draft.source_image_path);
+    if (owned) { sourceImageDataUri = owned.dataUri; model = CONFIG.modelI2V; }
+  }
+  const cost = generationCost(resolution, Number(draft.duration));
+  let jobId;
+  try {
+    jobId = tx(() => {
+      const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+      const spentToday = db.prepare(
+        `SELECT COALESCE(SUM(cost_credits),0) AS s FROM generations
+         WHERE user_id = ? AND date(created_at) = date('now') AND status != 'failed'`).get(user.id).s;
+      if (spentToday + cost > CONFIG.maxDailyCredits) throw Object.assign(new Error('DAILY_LIMIT'), { status: 429 });
+      if (creditBuckets(user).total < cost) throw Object.assign(new Error('NO_CREDITS'), { status: 402 });
+      spendBuckets(user, cost);
+      const info = db.prepare(
+        `INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, cost_credits,
+           resolution, model, prompt_language, translated_prompt, mode, source_image_path,
+           kind, source_generation_id, stage)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'video', ?, 'final')`)
+        .run(user.id, draft.prompt, draft.aspect_ratio, Number(draft.duration), draft.style,
+             cost, resolution, model, draft.prompt_language, draft.translated_prompt,
+             draft.mode || 'realistic', sourceImageDataUri ? draft.source_image_path : null,
+             draft.id);
+      return Number(info.lastInsertRowid);
+    });
+  } catch (e) {
+    if (e.message === 'DAILY_LIMIT') return res.status(429).json({ error: 'Daily spending limit reached. Try again tomorrow.' });
+    if (e.message === 'NO_CREDITS') return res.status(402).json({ error: 'Not enough credits.' });
+    return res.status(e.status || 500).json({ error: e.message });
+  }
+  const effectivePrompt = draft.translated_prompt || draft.prompt;
+  const isNative4k = resolution === '4K' && model === CONFIG.model4k;
+  const falBody = sourceImageDataUri
+    ? { prompt: `${effectivePrompt} — style: ${draft.style}`,
+        duration: Number(draft.duration), resolution,
+        enable_safety_checker: true, image_url: sourceImageDataUri }
+    : isNative4k
+    ? { prompt: `${effectivePrompt} — style: ${draft.style}`,
+        duration: String(draft.duration), aspect_ratio: draft.aspect_ratio,
+        generate_audio: false, enable_safety_checker: true }
+    : { prompt: `${effectivePrompt} — style: ${draft.style}`,
+        duration: Number(draft.duration), aspect_ratio: draft.aspect_ratio, resolution,
+        enable_safety_checker: true };
+  lastFalBody = falBody;
+  try {
+    const r = await fetch(`${CONFIG.falQueueBase}/${model}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Key ${FAL_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(falBody),
+    });
+    if (!r.ok) throw new Error(`fal.ai returned ${r.status}`);
+    const data = await r.json();
+    db.prepare(`UPDATE generations SET fal_request_id = ?, status = 'in_progress',
+                updated_at = datetime('now') WHERE id = ?`).run(data.request_id, jobId);
+    const me = db.prepare('SELECT credits FROM users WHERE id = ?').get(req.user.id);
+    res.json({ id: jobId, status: 'in_progress', credits_left: me.credits,
+               cost_credits: cost, resolution, model,
+               source_generation_id: draft.id, stage: 'final',
+               ...(fallbackNote ? { note: fallbackNote } : {}) });
+  } catch (e) {
+    failAndRefund(jobId, `Provider submission failed (${e.message})`);
+    res.status(502).json({ error: 'Video service is unavailable right now. Your credit was refunded.' });
   }
 });
 

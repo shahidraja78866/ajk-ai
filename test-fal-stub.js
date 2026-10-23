@@ -13,6 +13,12 @@
 //   POST /fal-ai/latentsync                       (queue submit)
 //   POST /fal-ai/mmaudio-v2                       (queue submit; a `prompt`
 //        containing "FAILME" gets an HTTP 500 — sound-step failure tests)
+//   POST /fal-ai/whisper                          (queue submit; the result
+//        returns fixed timed chunks for the captions tests)
+//   POST /fal-ai/topaz/upscale/video              (queue submit; the result
+//        returns clip.mp4 like any other video job)
+//   POST /minimax/h3/image-to-video               (queue submit; a prompt
+//        containing "FAILME" gets an HTTP 500 — extend failure tests)
 //   POST /mirelo-ai/sfx2.0/video-to-audio         (queue submit)
 //   POST <any other path>                         (queue submit — covers
 //        the video models on instances that complete generations here)
@@ -50,6 +56,16 @@ execFileSync(ffmpegStatic, ['-y', '-v', 'error', '-f', 'lavfi',
   '-i', 'color=c=green:size=320x240:rate=24:duration=2', '-f', 'lavfi',
   '-i', 'sine=frequency=440:duration=2', '-c:v', 'libx264', '-pix_fmt',
   'yuv420p', '-c:a', 'aac', '-shortest', path.join(mediaDir, 'clip.mp4')]);
+// Phase C1 fixtures: a 16:9 clip WITH audio (reframe/captions/extend
+// source) and a video-only clip with NO audio stream (captions must
+// refuse it with 400 before charging).
+execFileSync(ffmpegStatic, ['-y', '-v', 'error', '-f', 'lavfi',
+  '-i', 'color=c=blue:size=640x360:rate=24:duration=2', '-f', 'lavfi',
+  '-i', 'sine=frequency=440:duration=2', '-c:v', 'libx264', '-pix_fmt',
+  'yuv420p', '-c:a', 'aac', '-shortest', path.join(mediaDir, 'clip169.mp4')]);
+execFileSync(ffmpegStatic, ['-y', '-v', 'error', '-f', 'lavfi',
+  '-i', 'color=c=red:size=320x240:rate=24:duration=2', '-c:v', 'libx264',
+  '-pix_fmt', 'yuv420p', path.join(mediaDir, 'silent.mp4')]);
 
 const calls = [];
 const TTS_PATHS = new Set(['/fal-ai/gemini-3.1-flash-tts', '/fal-ai/elevenlabs/tts/eleven-v3']);
@@ -76,6 +92,11 @@ http.createServer((req, res) => {
   if (req.method === 'GET' && /\/requests\/stub-req-1\/status$/.test(u.pathname))
     return send(200, { status: 'COMPLETED' });
   if (req.method === 'GET' && /\/requests\/stub-req-1$/.test(u.pathname)) {
+    if (u.pathname.includes('whisper'))
+      return send(200, { text: 'Hello world, this is a test caption.',
+                         chunks: [ { timestamp: [0, 1], text: 'Hello world,' },
+                                   { timestamp: [1, 2], text: 'this is a test caption.' } ],
+                         inferred_languages: ['en'] });
     if (u.pathname.includes('mirelo'))
       return send(200, { audio: [{ url: `http://127.0.0.1:${port}/media/tone.mp3`,
                                    content_type: 'audio/mpeg', file_name: 'sound.mp3' }],
@@ -106,6 +127,13 @@ http.createServer((req, res) => {
           String(body?.prompt || '').includes('FAILME')) {
         res.writeHead(500);
         return res.end('stub mmaudio failure');
+      }
+      // Extend failure hook (Phase C1): an image-to-video submit whose
+      // prompt contains "FAILME" fails, so the extend refund path runs.
+      if (u.pathname.includes('image-to-video') &&
+          String(body?.prompt || '').includes('FAILME')) {
+        res.writeHead(500);
+        return res.end('stub i2v failure');
       }
       if (QUEUE_PATHS.has(u.pathname)) return send(200, { request_id: 'stub-req-1' });
       // Any other POST is a queue submit (e.g. the video models on the
