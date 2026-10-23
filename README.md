@@ -190,6 +190,98 @@ assumed on the host). Generated files live on local disk, like joined
 clips: on ephemeral hosting they disappear on restart/redeploy, so
 users should download watermarked videos promptly.
 
+## Audio included — one price, no audio add-ons (Phase G, migration v15)
+
+**Owner directive (2026-10-23, point 5 of the comprehensive
+instruction):** voice, dialogue, lip-sync, sound effects and background
+music are **not charged separately** — all necessary audio is included
+in the single generation price shown before generating. There are no
+hidden audio fees. Plan **gates** stay (lip-sync still needs the plan's
+`can_lipsync`; premium sync still needs Pro / Extra Pro) — they are
+feature tiers now, not prices. Concretely:
+
+- `CONFIG.voiceoverCost = 0` and `CONFIG.soundCosts = { sync: 0,
+  premium_sync: 0, sfx: 0, music: 0 }`; Auto Director voice/sound
+  proposals carry `cost: 0` and no longer trigger a cost confirmation —
+  `needs_confirmation` is true only for true conflicts (mode clash,
+  explicit-aspect contradiction, speaking-vs-silent).
+- The UI shows **"Included · قیمت میں شامل"** wherever an audio price
+  used to appear; the sticky Studio total equals the base video price
+  whenever only audio options are chosen.
+- **Negations are respected.** The analyzer detects "no music",
+  "without dialogue", "no sound effects" and Urdu equivalents
+  (موسیقی نہیں / مت، مکالمہ نہیں) and suppresses the matching proposal.
+  A global silence request ("silent video", "no audio", خاموش،
+  بغیر آواز) sets `apply.mute = true`: no audio is proposed, and after
+  the video completes the server strips its audio track locally
+  (ffmpeg `-an`; migration v15 adds `generations.mute_status`:
+  `pending → applied`). If stripping fails, the original is delivered
+  with `mute_status = 'failed'` and an honest note stored on the plan —
+  a video is never presented as silent when it is not. A **speaking**
+  job can never be silent: at plan time that becomes an `audio`
+  conflict for the confirmation path to explain; a direct
+  `engine: 'speaking'` generate whose prompt asks for silence is
+  rejected with 400 before any charge.
+- The speaking engine stays flat **50 credits** — its synchronized
+  audio was always part of that one price, never an add-on.
+
+**Sustainability check (run BEFORE the price change, per the owner's
+no-loss rule).** Per-use fal prices verified from fal's own model
+pages / llms.txt on 2026-10-23:
+
+| Audio step | Endpoint | Verified fal price |
+|---|---|---|
+| Lip-sync on a finished video (the only lip-sync the in-generation routes use) | `fal-ai/latentsync` | **$0.20 flat** (output ≤ 40 s; $0.005/s beyond) |
+| Auto sync sound | `fal-ai/mmaudio-v2` | $0.001/s |
+| Premium sync sound | `mirelo-ai/sfx2.0/video-to-audio` | $0.010/s promo until 2026-12-13, then $0.015/s (server pins `num_samples: 1`) |
+| Sound effects | `fal-ai/elevenlabs/sound-effects/v2` | $0.002/s of generated audio (≤ 22 s) |
+| Music bed | `cassetteai/music-generator` | $0.02 per output minute |
+| Voice (default TTS) | `fal-ai/gemini-3.1-flash-tts` | $0.05 / 1,000 chars |
+| Voice (premium TTS) | `fal-ai/elevenlabs/tts/eleven-v3` | $0.10 / 1,000 chars |
+| Lip-sync from an image (standalone job only — see the exception) | `minimax/h3-max/lip-sync/image-to-video` | per second of output (= audio length): $0.05 @480p, **$0.08 @768p**, $0.16 @1080p, $0.32 @2K; ×1.2 past 15 s |
+
+Worst case per tier — the video plus EVERY audio step the workflow can
+attach (auto dialogue is capped at 300 chars ≈ $0.03 of premium TTS;
+USD/PKR 277; floor revenue values one credit at Rs 14 = $0.0505; Pro
+plan credits are worth Rs 19 each, Extra Pro Rs 23.33):
+
+| Tier | Worst-case fal cost | Revenue compared | Verdict |
+|---|---|---|---|
+| Draft 480P (7/14 cr) | $0.25 / $0.50 — drafts accept NO audio steps at all | $0.354 / $0.708 (floor) | ✅ absorbs |
+| 768P 5s/10s (10/20 cr) | $0.34 / $0.65 (video + TTS + priciest sound a free user can attach) | $0.505 / $1.011 (floor) | ✅ absorbs |
+| 2K 5s/10s (15/30 cr, Pro/Extra Pro only) | $0.89 / $1.55 (adds LatentSync $0.20 + premium sync) | $1.03 / $2.06 (Pro credit value) | ✅ absorbs |
+| Native 4K 5s/10s (40/80 cr, Extra Pro) | $2.34 / $4.45 (the Kling base is silent — `generate_audio: false` — so sound/voice steps attach after it) | $3.37 / $6.74 (Extra Pro value) | ✅ absorbs |
+| Speaking / Omni (flat 50 cr) | $0.50 / $1.00 (native synchronized audio; add-ons are rejected, none can attach) | $2.53 (floor) | ✅ absorbs |
+| Post-hoc applies, per use | premium sync ≤ $0.15 (10 s), sync $0.01, SFX $0.02, music $0.003; audio-only SFX ≤ $0.044, music ≤ $0.02 | included at 0 cr — absorbed by the margins above | ✅ |
+
+Notes on the 2K row: valued at the absolute Rs 14 pack floor, the 10 s
+stack would be ~$0.03 over — but 2K cannot be bought with pack credits
+at all (it requires a Pro / Extra Pro plan, whose credits are worth
+Rs 19+), so that combination is not purchasable. A Pro user generating
+at 768P with the full lip-sync + premium stack stays inside too
+(≈ $0.98 vs $1.37 at Pro credit value for 10 s).
+
+> ⚠️ **THE ONE EXCEPTION — standalone `POST /api/voice/lipsync` keeps
+> its flat 30 credits.** Unlike every in-generation route, this job's
+> script can run to **6,000 characters (~400 s of speech)**, and its
+> image route bills **per second of output**: at 768P that is
+> 400 s × $0.08 × 1.2 ≈ **$38.40** worst case (the video route ≈ $2.60)
+> — beyond any plan's per-job revenue, so no included price can absorb
+> it. It stays gated (Pro / Extra Pro) and priced exactly as before,
+> and the app keeps showing its real price on its button.
+> **Recommended follow-up (owner's decision):** cap lip-sync scripts
+> (e.g. ≤ 300 chars ≈ 20 s of audio → ≤ $1.92 on the image route),
+> after which this job could be included too. Also noted: a
+> pathological standalone *voiceover* script (6,000 chars on the
+> premium TTS = $0.60) exceeds what its old 10-credit price covered
+> either — typical scripts (≤ 300 chars ≈ $0.03) sit far inside the
+> margin, and the same script cap would close that corner too.
+
+**Unchanged by this phase:** captions (**+5 credits**) and the
+upscale/extend finisher prices keep their rates — they are post-video
+finishers, not generation audio. Plan prices are unchanged (frozen by
+the owner).
+
 ## Voice system — TTS, voice preview, lip-sync & voiceover (Phase B, migration v10)
 
 The Studio's **Voice & Dialogue** card adds spoken Urdu / Hindi /
@@ -273,17 +365,21 @@ returned to the user (preview response) and stored on the job.
   `FAL_LIPSYNC_VIDEO_MODEL`. Note: fal fetches the audio itself, so the
   server must be publicly reachable at `PUBLIC_BASE_URL` (or the
   request host) for the audio URL. The H3 lip-sync endpoint documents
-  that its audio should be **at least 5 seconds** long. **Charge: +30
-  credits exactly once** (the owner's locked add-on rate), refunded
-  exactly once on any failure via the standard refund path. The result
-  lands in History labelled **Talking / Lip-Sync**.
+  that its audio should be **at least 5 seconds** long. **Charge: 30
+  credits exactly once** — the ONE documented exception to the Phase G
+  "audio included" policy (see *Audio included* above: this standalone
+  job's per-second image route cannot be absorbed for long scripts),
+  refunded exactly once on any failure via the standard refund path.
+  The result lands in History labelled **Talking / Lip-Sync**.
 - `POST /api/voice/voiceover` (signed in, all plans) — takes a
   completed generation + script/settings, synthesizes the voice, and
   muxes it over the video with ffmpeg, **replacing the video's
   original audio track** (the model's native audio is not kept; if the
   voice is longer than the video it is trimmed to the video's length).
   The result is stored under `data/generated/` and lands in History
-  labelled **Voiceover**. **Charge: +10 credits**, refunded on failure.
+  labelled **Voiceover**. **Charge: 0 credits — included** (Phase G
+  "audio included"); on failure nothing was charged and the source
+  video is untouched.
 
 **Honesty note (owner's rule).** Voice and lip-sync *quality is
 unproven*: no real sample has been generated or listened to yet,
@@ -302,12 +398,15 @@ until the owner's key exists.
 Four fal-hosted engines (all schemas verified against fal.ai's own API
 docs on 2026-10-23; model ids are env-overridable):
 
-| Engine | Model (env) | Price (fal) | Add-on credits |
+| Engine | Model (env) | Price (fal) | Credits |
 |---|---|---|---|
-| Auto sync sound | `fal-ai/mmaudio-v2` (`SOUND_SYNC_MODEL`) | $0.001/s | **+10** |
-| Premium sync | `mirelo-ai/sfx2.0/video-to-audio` (`SOUND_SYNC_PREMIUM_MODEL`) | $0.010/s promo to 2026-12-13, then $0.015/s | **+25** (Pro / Extra Pro only) |
-| Sound effects | `fal-ai/elevenlabs/sound-effects/v2` (`SOUND_SFX_MODEL`) | $0.002/s | **+5** |
-| Music bed | `cassetteai/music-generator` (`SOUND_MUSIC_MODEL`) | $0.02/output min | **+5** |
+| Auto sync sound | `fal-ai/mmaudio-v2` (`SOUND_SYNC_MODEL`) | $0.001/s | **Included (0)** |
+| Premium sync | `mirelo-ai/sfx2.0/video-to-audio` (`SOUND_SYNC_PREMIUM_MODEL`) | $0.010/s promo to 2026-12-13, then $0.015/s | **Included (0)** (Pro / Extra Pro gate stays) |
+| Sound effects | `fal-ai/elevenlabs/sound-effects/v2` (`SOUND_SFX_MODEL`) | $0.002/s | **Included (0)** |
+| Music bed | `cassetteai/music-generator` (`SOUND_MUSIC_MODEL`) | $0.02/output min | **Included (0)** |
+
+(Credit column updated by Phase G — see *Audio included* above; before
+Phase G these were +10 / +25 / +5 / +5 add-ons.)
 
 MMAudio takes the finished video's URL + a prompt and returns a
 finished MP4 whose audio track **is** the generated soundtrack (it
@@ -323,8 +422,9 @@ lives under `data/sounds/` (env `SOUNDS_DIR`), served at
 
 **Three flows.** (1) Generate-time: `POST /api/generate` accepts an
 optional `sound: {mode: sync|sfx|music, prompt?, volume?}` — one
-combined atomic charge (video + add-on, daily cap and balance checked
-on the total); the video generates first, then the sound step runs
+atomic charge (the video price; sound is included at 0 since Phase G,
+daily cap and balance checked on the total); the video generates
+first, then the sound step runs
 before the completed video is shown. Sync is applied as returned
 (an ffmpeg gain pass runs only when volume ≠ 100); SFX/music are
 generated and ffmpeg-mixed **under** the video's original audio at the
@@ -342,11 +442,12 @@ music 10–60s, default 30) returns a playable/downloadable audio file.
 translate-to-English pipeline as video prompts (any of the 7 prompt
 languages) **before** charging — a translation failure charges
 nothing. If the sound step fails after the video succeeded, the video
-is still delivered as a normal completed generation, the add-on is
-refunded exactly once, and the row is honestly marked
-`sound_status: 'failed_refunded'` (its `cost_credits` drops back to
-the video-only price). Standalone sound jobs charge through the same
-charge/refund machinery as voice jobs and refund in full on failure.
+is still delivered as a normal completed generation and the row is
+honestly marked `sound_status: 'failed_refunded'` (the status name is
+kept from the add-on era; since Phase G the sound portion costs 0, so
+the refund bookkeeping moves no money and `cost_credits` already is
+the video-only price). Standalone sound jobs run through the same
+charge/refund machinery as voice jobs — at 0 credits since Phase G.
 Fail-closed: with `SOUND_ENABLED=0` (or no `FAL_KEY`) the sound
 endpoints return `503 sound_not_configured` and charge nothing.
 
@@ -457,7 +558,8 @@ before (Talking Photo still scrolls to the voice card, which now also
 opens; Music Video still preselects the music sound mode, with the
 sound card opened so the choice is visible). A sticky action bar
 pinned to the bottom of the Studio shows the **live total credit
-cost** (video + sound add-on, draft-aware — the same `updateCost()`
+cost** (the video price — sound is included at 0 since Phase G —
+draft-aware; the same `updateCost()`
 computation and the same `#costNum` / `#generateBtn` elements as
 before, just relocated) and the Generate button, so neither ever
 needs scrolling to find. On phones the hero and connection banner are
@@ -584,32 +686,40 @@ then analyzes the English text together with the original script
   dialogue markers are extracted (language: Urdu script → `ur`,
   Devanagari → `hi`, else `en`). When the job has a face (a selected
   character or a human scene) and the plan includes lip-sync, the plan
-  proposes the **lip-sync route (+30)**; otherwise a **voiceover
-  (+10)**. A voice is never charged silently — any voice proposal
-  requires confirmation. The voice step runs after the base video
-  completes, through the existing TTS / lip-sync pipeline; if only the
-  voice step fails, its credits alone are refunded (exactly once) and
-  the video is still delivered.
+  proposes the **lip-sync route**; otherwise a **voiceover** — both
+  **included (0 credits)** since Phase G, so a voice proposal no
+  longer requires confirmation; it is itemized in the plan summary as
+  included. The voice step runs after the base video completes,
+  through the existing TTS / lip-sync pipeline; if only the voice
+  step fails, the video is still delivered and the step is honestly
+  marked failed (the included portion costs 0, so no money moves).
 - **Sound** — detected events (rain, thunder, car/braking, traffic,
   crowd, ocean/waves, birds, explosion, footsteps, door, wind, city)
-  propose the synchronized-sound add-on (+10); an explicit music ask
-  proposes the music add-on (+5). If both fire, sync wins and the plan
-  notes that music was skipped. A sound the user already selected is
-  enriched silently instead.
+  propose synchronized sound; an explicit music ask proposes music —
+  both **included (0 credits)** since Phase G. If both fire, sync wins
+  and the plan notes that music was skipped. A sound the user already
+  selected is kept and enriched instead. **Negations (Phase G):**
+  "no music" / "without dialogue" / "no sound effects" (and Urdu
+  equivalents) suppress the matching proposal, and a global silence
+  request sets `apply.mute` — see *Audio included* above.
 - **Orientation** — "shorts / reel / vertical / عمودی" suggests 9:16;
   "widescreen / landscape / افقی" suggests 16:9 — only when the user
   did not explicitly choose an aspect ratio.
 - **Engine / route** — see the routing table below.
 
-**When it asks.** `needs_confirmation` is true when (a) the prompt
-clearly conflicts with a selected option (cartoon prompt + realistic
-mode, photoreal prompt + cartoon mode, real-wildlife animal prompt +
-cartoon mode, or an explicit aspect ratio that contradicts the
-prompt's orientation), (b) any chargeable add-on is proposed, or (c)
-an aspect change is proposed. The confirmation panel shows what was
-understood, each conflict as a two-choice question (my selection wins
-/ the prompt wins), the itemized cost (base + add-ons = total), and
-the honest notes. Confirming generates with the plan; cancelling
+**When it asks.** Since Phase G, `needs_confirmation` is true **only
+for true conflicts**: (a) the prompt clearly conflicts with a selected
+option (cartoon prompt + realistic mode, photoreal prompt + cartoon
+mode, real-wildlife animal prompt + cartoon mode, or an explicit
+aspect ratio that contradicts the prompt's orientation), or (b) a
+silence request collides with the speaking engine (a speaking video
+cannot be silent). Audio proposals and auto-picked orientations apply
+automatically — audio is included in the price, so there is no cost
+surprise to confirm. (Before Phase G, chargeable add-ons and aspect
+changes also forced confirmation.) The confirmation panel shows what
+was understood, each conflict as a two-choice question (my selection
+wins / the prompt wins), the itemized cost (base + add-ons = total),
+and the honest notes. Confirming generates with the plan; cancelling
 generates with the user's manual settings and no plan.
 
 **Engine routing (only routes already integrated in this codebase)**
@@ -637,10 +747,11 @@ family; free). Body: the generate form's fields (`prompt`,
 `duration`, `quality`, `character_id`, `image_path`, plus optional
 `sound` and `voice` selections). Response: `{ plan }` with
 `detected { content_class, dialogue, sfx_events, music,
-orientation_hint }`, `apply { mode, style_suffix, aspect_ratio,
-sound, voice }`, `engine { route, model, reason, voice_route?,
-voice_model? }`, `conflicts[]`, `base_cost`, `addons_cost`,
-`total_cost`, `notes[]`, `needs_confirmation`.
+negations { mute, music, dialogue, sfx }, orientation_hint }`,
+`apply { mode, style_suffix, aspect_ratio, sound, voice,
+speaking_engine, mute }`, `engine { route, model, reason,
+voice_route?, voice_model? }`, `conflicts[]`, `base_cost`,
+`addons_cost`, `total_cost`, `notes[]`, `needs_confirmation`.
 `POST /api/generate` accepts `auto_plan` + `auto_confirmed: true`;
 the applied plan is stored on the generation row (migration v14,
 `generations.auto_plan`) and returned in the generate response and
@@ -651,8 +762,8 @@ and patterns, it does not truly "understand" a prompt, and unusual
 phrasing can be misread (the confirmation panel exists for exactly
 that). Urdu dialogue in a video model's own native audio is not
 guaranteed by any integrated model — Urdu speech is routed through
-the separate voice/lip-sync add-on, and lip-sync quality is
-best-effort. Whether any of this produces good *output* can only be
+the separate voice/lip-sync route (included since Phase G), and
+lip-sync quality is best-effort. Whether any of this produces good *output* can only be
 judged from real generated samples on a funded fal.ai balance; the
 test suite verifies the planning, charging, routing and refund logic
 against local stubs only. `GET /api/config` exposes
@@ -818,6 +929,22 @@ per-quality rate card in `/api/config` and in real generation charges
 `/api/plans`, and the daily spending cap at its new default of 400.
 Latest full run: **276/276 checks passed**.
 
+**Update (2026-10-23, Phase G — audio included, migration v15):** the
+suite now also covers the Phase G policy end to end: config reports
+voiceover 0 and all sound modes 0 (the standalone lip-sync exception
+stays 30); generate-time sync/SFX totals equal the base video price,
+and post-hoc applies (incl. the Pro premium gate at 0) and audio-only
+jobs charge 0; Auto Director plans itemize voice/sound at 0 with
+`needs_confirmation` false (the Phase D/E expectations that asserted
+add-on charges were updated — AP2/AP3/AP7, GEN1–GEN3, the B18 failure
+balances, and the Phase E omni plan's confirmation flag); negation
+plans ("no music", "without dialogue") suppress the matching proposal;
+a "silent video" plan generates a job whose **delivered file is
+asserted to have no audio stream** (the stub source clip has one);
+omni + mute is an `audio` conflict at plan time and a clear 400 for a
+direct speaking generate; migration v15 re-applies on boot. Latest
+full run: **595/595 checks passed**.
+
 ## Safety built in
 - Key and JWT secret live only in `.env`; `/api/config` returns only public settings.
 - Credits are deducted and the job recorded in **one atomic transaction** (double-spend safe).
@@ -863,7 +990,10 @@ verify-then-activate pipeline handles it.
 **Feature flags:** plans carry `can_veo` and `can_lipsync`
 entitlements, exposed by `/api/plans` in each plan's `features`
 descriptor (with `max_quality`) and shown on the plan cards.
-`can_lipsync` gates the lip-sync add-on (wired in Phase B).
+`can_lipsync` gates lip-sync (wired in Phase B; since Phase G it is a
+feature gate, not a price — in-generation lip-sync is included, and
+only the standalone lip-sync job keeps its 30-credit price; see
+*Audio included*).
 `can_veo` — the name is historical — gates the one-step **speaking
 video engine** (Gemini Omni, wired in Phase E; the Veo engine it was
 named for was never wired and Veo 3.1 is being retired by Google).

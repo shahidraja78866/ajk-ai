@@ -73,6 +73,11 @@
 # exactly 10 plan/generate calls), and an eighteenth instance (port
 # 18069, stubs 18068/18067) for the failure refunds (provider submit,
 # voice step, sound step) and the migration-v14 re-apply check.
+# The Phase G tests (audio included + negation respect + mute) use a
+# twentieth instance (port 18063, fal stub 18062 + translate stub 18061):
+# negation plans, a silent generation whose delivered file is asserted to
+# have NO audio stream, the omni+mute conflict, the speaking+silent 400,
+# and the migration-v15 re-apply check.
 # Outgoing provider request shapes are asserted via the TEST_RECORD-style
 # hook GET /api/_test/voice-calls.
 # e.g.  ADMIN_EMAIL=admin@example.com FAL_MODEL_4K=test-4k-model TEST_RECORD_FAL_BODY=1 TRANSLATE_API_BASE=http://127.0.0.1:18099 npm start
@@ -867,12 +872,12 @@ check "voice: gemini provider configured (fal key present)" "True" "$(echo $CV |
 check "voice: azure provider NOT configured (no owner key yet)" "False" "$(echo $CV | python3 -c 'import sys,json;print(json.load(sys.stdin)["voice"]["providers"]["azure"])')"
 check "voice: default provider is gemini" "gemini" "$(echo $CV | python3 -c 'import sys,json;print(json.load(sys.stdin)["voice"]["default_provider"])')"
 check "voice: catalog lists Kore as a female gemini voice" "female" "$(echo $CV | python3 -c 'import sys,json;d=json.load(sys.stdin);g=[x for x in d["voice"]["voices"] if x["provider"]=="gemini"][0];print([v for v in g["voices"] if v["id"]=="Kore"][0]["gender"])')"
-check "voice: add-on costs lipsync 30 / voiceover 10" "30/10" "$(echo $CV | python3 -c 'import sys,json;d=json.load(sys.stdin)["voice"]["costs"];print(str(d["lipsync_credits"])+"/"+str(d["voiceover_credits"]))')"
+check "voice: standalone lipsync 30 (documented exception) / voiceover 0 (included)" "30/0" "$(echo $CV | python3 -c 'import sys,json;d=json.load(sys.stdin)["voice"]["costs"];print(str(d["lipsync_credits"])+"/"+str(d["voiceover_credits"]))')"
 
 echo "--- sound system: config on the main server ---"
 CS=$(curl -s $B/api/config)
 check "sound: configured (fal key present)" "True" "$(echo $CS | python3 -c 'import sys,json;print(json.load(sys.stdin)["sound"]["configured"])')"
-check "sound: add-on costs sync 10 / premium 25 / sfx 5 / music 5" "10/25/5/5" "$(echo $CS | python3 -c 'import sys,json;c=json.load(sys.stdin)["sound"]["costs"];print(str(c["sync"])+"/"+str(c["premium_sync"])+"/"+str(c["sfx"])+"/"+str(c["music"]))')"
+check "sound: all modes included in the price — costs 0/0/0/0" "0/0/0/0" "$(echo $CS | python3 -c 'import sys,json;c=json.load(sys.stdin)["sound"]["costs"];print(str(c["sync"])+"/"+str(c["premium_sync"])+"/"+str(c["sfx"])+"/"+str(c["music"]))')"
 check "sound: modes list" "music,premium_sync,sfx,sync" "$(echo $CS | python3 -c 'import sys,json;print(",".join(sorted(json.load(sys.stdin)["sound"]["modes"])))')"
 check "sound: sync engine is mmaudio-v2" "fal-ai/mmaudio-v2" "$(echo $CS | python3 -c 'import sys,json;print(json.load(sys.stdin)["sound"]["models"]["sync"])')"
 
@@ -1019,7 +1024,7 @@ VO=$(curl -s -w '\n%{http_code}' -X POST $B7/api/voice/voiceover -H "Authorizati
 check "voiceover: -> 201" "201" "$(echo "$VO" | tail -1)"
 VOB=$(echo "$VO" | sed '$d')
 check "voiceover: generation kind is voiceover" "voiceover" "$(echo $VOB | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["kind"])')"
-check "voiceover: cost 10, credits_left 90" "10/90" "$(echo $VOB | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "voiceover: included — cost 0, credits_left 100" "0/100" "$(echo $VOB | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
 check "voiceover: output under /files/generated/" "yes" "$(echo $VOB | python3 -c 'import sys,json;u=json.load(sys.stdin)["generation"]["video_url"];print("yes" if u.startswith("/files/generated/") else "no")')"
 check "voiceover: voice_audio_path under /files/voice/" "yes" "$(echo $VOB | python3 -c 'import sys,json;u=json.load(sys.stdin)["generation"]["voice_audio_path"] or "";print("yes" if u.startswith("/files/voice/") else "no")')"
 VOURL=$(echo $VOB | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["video_url"])')
@@ -1095,38 +1100,38 @@ FFBIN9=$(node --input-type=module -e "import f from 'ffmpeg-static'; console.log
 RA9=$(curl -s -X POST $B9/api/auth/register -H 'Content-Type: application/json' -d '{"email":"syncgen@example.com","password":"password123"}')
 TA9=$(echo $RA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 GA9=$(curl -s -X POST $B9/api/generate -H "Authorization: Bearer $TA9" -H 'Content-Type: application/json' -d '{"prompt":"a red car speeding down a wet road","aspect_ratio":"16:9","duration":5,"sound":{"mode":"sync","prompt":"rain and thunder over the city"}}')
-check "gen+sync: total cost 20 (10 video + 10 sync)" "20" "$(echo $GA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_credits"])')"
-check "gen+sync: sound add-on reported as 10" "10" "$(echo $GA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["sound_cost_credits"])')"
-check "gen+sync: balance 80 after submit (charged exactly once)" "80" "$(echo $GA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
+check "gen+sync: total == base video price 10 (sync included)" "10" "$(echo $GA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_credits"])')"
+check "gen+sync: sound cost reported as 0 (included)" "0" "$(echo $GA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["sound_cost_credits"])')"
+check "gen+sync: balance 90 after submit (charged exactly once)" "90" "$(echo $GA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
 JOBA9=$(echo $GA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 POLLA9=$(curl -s $B9/api/generations/$JOBA9 -H "Authorization: Bearer $TA9")
 check "gen+sync: job completed" "completed" "$(echo $POLLA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])')"
 check "gen+sync: sound_status applied" "applied" "$(echo $POLLA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["sound_status"])')"
 check "gen+sync: sound_mode recorded" "sync" "$(echo $POLLA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["sound_mode"])')"
 check "gen+sync: video_url is the sounded (mmaudio) version" "http://127.0.0.1:$SOUND_STUB_PORT/media/clip.mp4" "$(echo $POLLA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["video_url"])')"
-check "gen+sync: still 80 after completion (no second charge)" "80" "$(curl -s $B9/api/me -H "Authorization: Bearer $TA9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "gen+sync: still 90 after completion (no second charge)" "90" "$(curl -s $B9/api/me -H "Authorization: Bearer $TA9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 VC9=$(curl -s $B9/api/_test/voice-calls)
 check "gen+sync: mmaudio body has video_url + prompt + duration" "ok" "$(echo $VC9 | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x.get("model")=="fal-ai/mmaudio-v2"][-1];b=c["body"];print("ok" if b.get("video_url","").endswith("/media/clip.mp4") and b.get("prompt")=="rain and thunder over the city" and b.get("duration")==5 else "bad")')"
-check "gen+sync: unknown sound mode -> 400, no charge" "400/80" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B9/api/generate -H "Authorization: Bearer $TA9" -H 'Content-Type: application/json' -d '{"prompt":"a calm lake","duration":5,"sound":{"mode":"bogus"}}')/$(curl -s $B9/api/me -H "Authorization: Bearer $TA9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "gen+sync: unknown sound mode -> 400, no charge" "400/90" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B9/api/generate -H "Authorization: Bearer $TA9" -H 'Content-Type: application/json' -d '{"prompt":"a calm lake","duration":5,"sound":{"mode":"bogus"}}')/$(curl -s $B9/api/me -H "Authorization: Bearer $TA9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 # -- generate with sync sound, engine fails: video delivered, add-on refunded --
 RB9=$(curl -s -X POST $B9/api/auth/register -H 'Content-Type: application/json' -d '{"email":"soundfail@example.com","password":"password123"}')
 TB9=$(echo $RB9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 GB9=$(curl -s -X POST $B9/api/generate -H "Authorization: Bearer $TB9" -H 'Content-Type: application/json' -d '{"prompt":"a quiet beach at sunset","aspect_ratio":"16:9","duration":5,"sound":{"mode":"sync","prompt":"FAILME waves crashing"}}')
-check "gen+sync fail: balance 80 after submit" "80" "$(echo $GB9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
+check "gen+sync fail: balance 90 after submit" "90" "$(echo $GB9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
 JOBB9=$(echo $GB9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 POLLB9=$(curl -s $B9/api/generations/$JOBB9 -H "Authorization: Bearer $TB9")
 check "gen+sync fail: video still completed" "completed" "$(echo $POLLB9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])')"
 check "gen+sync fail: sound_status failed_refunded" "failed_refunded" "$(echo $POLLB9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["sound_status"])')"
-check "gen+sync fail: add-on refunded (balance 90)" "90" "$(curl -s $B9/api/me -H "Authorization: Bearer $TB9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
-check "gen+sync fail: row cost reduced to the video-only 10" "10" "$(echo $POLLB9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_credits"])')"
+check "gen+sync fail: balance still 90 (sound included — nothing extra to refund)" "90" "$(curl -s $B9/api/me -H "Authorization: Bearer $TB9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "gen+sync fail: row cost stays the video-only 10" "10" "$(echo $POLLB9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_credits"])')"
 
 # -- generate with sound effects: mixed under the original audio --
 RC9=$(curl -s -X POST $B9/api/auth/register -H 'Content-Type: application/json' -d '{"email":"sfxgen@example.com","password":"password123"}')
 TC9=$(echo $RC9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 GC9=$(curl -s -X POST $B9/api/generate -H "Authorization: Bearer $TC9" -H 'Content-Type: application/json' -d '{"prompt":"a dog playing in a park","aspect_ratio":"16:9","duration":5,"sound":{"mode":"sfx","prompt":"dog barking and birds","volume":40}}')
-check "gen+sfx: total cost 15 (10 video + 5 sfx)" "15" "$(echo $GC9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_credits"])')"
-check "gen+sfx: balance 85 after submit" "85" "$(echo $GC9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
+check "gen+sfx: total == base 10 (sfx included)" "10" "$(echo $GC9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_credits"])')"
+check "gen+sfx: balance 90 after submit" "90" "$(echo $GC9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
 JOBC9=$(echo $GC9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 POLLC9=$(curl -s $B9/api/generations/$JOBC9 -H "Authorization: Bearer $TC9")
 check "gen+sfx: completed with sound applied" "completed/applied" "$(echo $POLLC9 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["sound_status"])')"
@@ -1149,7 +1154,7 @@ POLLH9=$(curl -s $B9/api/generations/$JOBH9 -H "Authorization: Bearer $TH9")
 check "urdu sound: job completed with sound applied" "completed/applied" "$(echo $POLLH9 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["sound_status"])')"
 VC9H=$(curl -s $B9/api/_test/voice-calls)
 check "urdu sound: mmaudio received the ENGLISH translation" "ok" "$(echo $VC9H | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x.get("model")=="fal-ai/mmaudio-v2"][-1];print("ok" if c["body"].get("prompt","").startswith("TRANSLATED:") else "bad")')"
-check "urdu sound: charged once (balance 80)" "80" "$(curl -s $B9/api/me -H "Authorization: Bearer $TH9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "urdu sound: charged once (balance 90 — sound included)" "90" "$(curl -s $B9/api/me -H "Authorization: Bearer $TH9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 # -- apply sound to an existing video: sync, premium gate, music, failure --
 RD9=$(curl -s -X POST $B9/api/auth/register -H 'Content-Type: application/json' -d '{"email":"apply@example.com","password":"password123"}')
@@ -1165,24 +1170,24 @@ check "apply sync: -> 201" "201" "$(echo "$AP19" | tail -1)"
 AP1B=$(echo "$AP19" | sed '$d')
 check "apply sync: new history entry kind is sound" "sound" "$(echo $AP1B | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["kind"])')"
 check "apply sync: linked to the source generation" "$SEEDD9" "$(echo $AP1B | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["source_generation_id"])')"
-check "apply sync: cost 10, credits_left 90" "10/90" "$(echo $AP1B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "apply sync: included — cost 0, credits_left 100" "0/100" "$(echo $AP1B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
 check "apply sync: sound_status applied on the new entry" "applied" "$(echo $AP1B | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["sound_status"])')"
 check "apply: another user's video -> 404" "404" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B9/api/sound/apply -H "Authorization: Bearer $TA9" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDD9,\"mode\":\"sync\"}")"
 AP29=$(curl -s -w '\n%{http_code}' -X POST $B9/api/sound/apply -H "Authorization: Bearer $TD9" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDD9,\"mode\":\"premium_sync\"}")
 check "apply premium (no plan): -> 403" "403" "$(echo "$AP29" | tail -1)"
 check "apply premium 403: error names the Pro plan" "yes" "$(echo "$AP29" | sed '$d' | python3 -c 'import sys,json;print("yes" if "Pro" in json.load(sys.stdin)["error"] else "no")')"
-check "apply premium 403: credits untouched (90)" "90" "$(curl -s $B9/api/me -H "Authorization: Bearer $TD9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "apply premium 403: credits untouched (100)" "100" "$(curl -s $B9/api/me -H "Authorization: Bearer $TD9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 AP39=$(curl -s -w '\n%{http_code}' -X POST $B9/api/sound/apply -H "Authorization: Bearer $TD9" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDD9,\"mode\":\"music\",\"prompt\":\"soft piano bed\",\"volume\":100}")
 check "apply music: -> 201" "201" "$(echo "$AP39" | tail -1)"
 AP3B=$(echo "$AP39" | sed '$d')
-check "apply music: cost 5, credits_left 85" "5/85" "$(echo $AP3B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "apply music: included — cost 0, credits_left 100" "0/100" "$(echo $AP3B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
 MUSURL=$(echo $AP3B | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["video_url"])')
 curl -s -o /tmp/music-mixed.mp4 $B9$MUSURL
 check "apply music: mixed output HAS an audio stream" "yes" "$("$FFBIN9" -i /tmp/music-mixed.mp4 2>&1 | python3 -c 'import sys;print("yes" if "Audio:" in sys.stdin.read() else "no")')"
 SC9B=$(curl -s $B9/api/_test/sound-calls)
 check "apply music: engine body asks for instrumental, duration 10" "ok" "$(echo $SC9B | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x.get("engine")=="music"][-1];b=c["body"];print("ok" if "instrumental, no vocals" in b.get("prompt","") and b.get("duration")==10 else "bad")')"
 check "apply sfx (engine fails): -> 502" "502" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B9/api/sound/apply -H "Authorization: Bearer $TD9" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDD9,\"mode\":\"sfx\",\"prompt\":\"FAILME dog\"}")"
-check "apply sfx failure: full refund (still 85)" "85" "$(curl -s $B9/api/me -H "Authorization: Bearer $TD9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "apply sfx failure: balance untouched (still 100)" "100" "$(curl -s $B9/api/me -H "Authorization: Bearer $TD9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "apply sfx failure: job row marked failed" "failed" "$(curl -s $B9/api/history -H "Authorization: Bearer $TD9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["status"])')"
 
 # -- volume: sync at 50% measurably lowers the soundtrack level --
@@ -1205,7 +1210,7 @@ curl -s -o /tmp/vol-out.mp4 $B9$VOLURL
 OUTMAX=$("$FFBIN9" -i /tmp/vol-out.mp4 -af volumedetect -f null - 2>&1 | python3 -c 'import sys,re; m=re.search(r"mean_volume: (-?[\d.]+) dB", sys.stdin.read()); print(m.group(1) if m else "nan")')
 check "apply sync volume 50: output is ~6 dB quieter than the source" "ok" "$(python3 -c "s=float('$SRCMAX'); o=float('$OUTMAX'); print('ok' if 4.0 <= (s - o) <= 8.0 else 'bad')")"
 
-# -- premium sync succeeds for a Pro user (+25, speech preserved by design) --
+# -- premium sync succeeds for a Pro user (included, speech preserved) --
 RF9=$(curl -s -X POST $B9/api/auth/register -H 'Content-Type: application/json' -d '{"email":"soundpro@example.com","password":"password123"}')
 TF9=$(echo $RF9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 FID9=$(curl -s $B9/api/me -H "Authorization: Bearer $TF9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
@@ -1219,7 +1224,7 @@ console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_
 APP9=$(curl -s -w '\n%{http_code}' -X POST $B9/api/sound/apply -H "Authorization: Bearer $TF9" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDF9,\"mode\":\"premium_sync\",\"prompt\":\"distant sirens\"}")
 check "apply premium (Pro): -> 201" "201" "$(echo "$APP9" | tail -1)"
 APPB=$(echo "$APP9" | sed '$d')
-check "apply premium (Pro): cost 25, credits_left 575" "25/575" "$(echo $APPB | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "apply premium (Pro): included — cost 0, credits_left 600" "0/600" "$(echo $APPB | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
 PREMURL=$(echo $APPB | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["video_url"])')
 curl -s -o /tmp/premium-out.mp4 $B9$PREMURL
 check "apply premium: muxed output HAS an audio stream" "yes" "$("$FFBIN9" -i /tmp/premium-out.mp4 2>&1 | python3 -c 'import sys;print("yes" if "Audio:" in sys.stdin.read() else "no")')"
@@ -1232,7 +1237,7 @@ TG9=$(echo $RG9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"
 SGA9=$(curl -s -w '\n%{http_code}' -X POST $B9/api/sound/generate -H "Authorization: Bearer $TG9" -H 'Content-Type: application/json' -d '{"kind":"sfx","prompt":"dog barking in the rain","duration_seconds":10}')
 check "audio-only sfx: -> 201" "201" "$(echo "$SGA9" | tail -1)"
 SGAB=$(echo "$SGA9" | sed '$d')
-check "audio-only sfx: kind sound, cost 5, credits_left 95" "sound/5/95" "$(echo $SGAB | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["generation"]["kind"]+"/"+str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "audio-only sfx: kind sound, included — cost 0, credits_left 100" "sound/0/100" "$(echo $SGAB | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["generation"]["kind"]+"/"+str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
 check "audio-only sfx: file under /files/sounds/ (.mp3)" "yes" "$(echo $SGAB | python3 -c 'import sys,json;u=json.load(sys.stdin)["audio_url"];print("yes" if u.startswith("/files/sounds/") and u.endswith(".mp3") else "no")')"
 SFXAURL=$(echo $SGAB | python3 -c 'import sys,json;print(json.load(sys.stdin)["audio_url"])')
 check "audio-only sfx: file is served (200)" "200" "$(curl -s -o /dev/null -w '%{http_code}' $B9$SFXAURL)"
@@ -1241,14 +1246,14 @@ check "audio-only sfx: engine body has text + duration_seconds 10" "ok" "$(echo 
 SMA9=$(curl -s -w '\n%{http_code}' -X POST $B9/api/sound/generate -H "Authorization: Bearer $TG9" -H 'Content-Type: application/json' -d '{"kind":"music","prompt":"calm piano for a rainy evening","duration_seconds":30}')
 check "audio-only music: -> 201" "201" "$(echo "$SMA9" | tail -1)"
 SMAB=$(echo "$SMA9" | sed '$d')
-check "audio-only music: credits_left 90" "90" "$(echo $SMAB | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
+check "audio-only music: credits_left 100 (included)" "100" "$(echo $SMAB | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
 check "audio-only music: file under /files/sounds/ (.wav)" "yes" "$(echo $SMAB | python3 -c 'import sys,json;u=json.load(sys.stdin)["audio_url"];print("yes" if u.startswith("/files/sounds/") and u.endswith(".wav") else "no")')"
 MUSAURL=$(echo $SMAB | python3 -c 'import sys,json;print(json.load(sys.stdin)["audio_url"])')
 check "audio-only music: file is served (200)" "200" "$(curl -s -o /dev/null -w '%{http_code}' $B9$MUSAURL)"
 SC9D=$(curl -s $B9/api/_test/sound-calls)
 check "audio-only music: engine body asks for instrumental, duration 30" "ok" "$(echo $SC9D | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x.get("engine")=="music"][-1];b=c["body"];print("ok" if "instrumental, no vocals" in b.get("prompt","") and b.get("duration")==30 else "bad")')"
 check "audio-only: engine failure -> 502" "502" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B9/api/sound/generate -H "Authorization: Bearer $TG9" -H 'Content-Type: application/json' -d '{"kind":"sfx","prompt":"FAILME thunder"}')"
-check "audio-only failure: full refund (still 90)" "90" "$(curl -s $B9/api/me -H "Authorization: Bearer $TG9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "audio-only failure: balance untouched (still 100)" "100" "$(curl -s $B9/api/me -H "Authorization: Bearer $TG9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "audio-only: unknown kind -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B9/api/sound/generate -H "Authorization: Bearer $TG9" -H 'Content-Type: application/json' -d '{"kind":"bogus","prompt":"rain sounds"}')"
 check "audio-only: sfx duration over 22 -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B9/api/sound/generate -H "Authorization: Bearer $TG9" -H 'Content-Type: application/json' -d '{"kind":"sfx","prompt":"rain sounds","duration_seconds":30}')"
 
@@ -1691,11 +1696,11 @@ check "auto plan: cat -> animal, no voice, no confirmation" "animal/None/False" 
 URDU_DLG='ایک آدمی کہتا ہے: \"میرا نام احمد ہے\"'
 AP2=$(curl -s -X POST $B16/api/generate/plan -H "Authorization: Bearer $FT16" -H 'Content-Type: application/json' -d "{\"prompt\":\"$URDU_DLG\",\"prompt_language\":\"ur\",\"mode\":\"realistic\",\"style\":\"realistic\",\"duration\":5}")
 check "auto plan: urdu dialogue detected with language ur" "میرا نام احمد ہے/ur" "$(echo $AP2 | python3 -c 'import sys,json;d=json.load(sys.stdin)["plan"]["detected"]["dialogue"];print(d["text"]+"/"+d["language"])')"
-check "auto plan: urdu dialogue -> voiceover proposal +10, confirmation needed" "voiceover/10/True" "$(echo $AP2 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];v=p["apply"]["voice"];print(v["kind"]+"/"+str(v["cost"])+"/"+str(p["needs_confirmation"]))')"
+check "auto plan: urdu dialogue -> voiceover included (0), no cost confirmation" "voiceover/0/False" "$(echo $AP2 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];v=p["apply"]["voice"];print(v["kind"]+"/"+str(v["cost"])+"/"+str(p["needs_confirmation"]))')"
 check "auto plan: urdu voice note is honest about the route" "yes" "$(echo $AP2 | python3 -c 'import sys,json;print("yes" if any("Urdu dialogue" in n for n in json.load(sys.stdin)["plan"]["notes"]) else "no")')"
 AP3=$(curl -s -X POST $B16/api/generate/plan -H "Authorization: Bearer $FT16" -H 'Content-Type: application/json' -d '{"prompt":"heavy rain and a car braking in city traffic","mode":"realistic","style":"realistic","duration":5}')
 check "auto plan: rain+car -> sfx events include rain and car" "True/True" "$(echo $AP3 | python3 -c 'import sys,json;e=json.load(sys.stdin)["plan"]["detected"]["sfx_events"];print(str("rain" in e)+"/"+str("car" in e))')"
-check "auto plan: sfx -> sync sound proposal +10, total 20" "sync/10/20" "$(echo $AP3 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["apply"]["sound"]["mode"]+"/"+str(p["apply"]["sound"]["cost"])+"/"+str(p["total_cost"]))')"
+check "auto plan: sfx -> sync sound included (0), total == base 10" "sync/0/10" "$(echo $AP3 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["apply"]["sound"]["mode"]+"/"+str(p["apply"]["sound"]["cost"])+"/"+str(p["total_cost"]))')"
 AP4=$(curl -s -X POST $B16/api/generate/plan -H "Authorization: Bearer $FT16" -H 'Content-Type: application/json' -d '{"prompt":"a cartoon fox tells a kids story in a sunny forest","mode":"realistic","style":"realistic","duration":5}')
 check "auto plan: cartoon prompt + realistic mode -> mode conflict" "mode/realistic/cartoon" "$(echo $AP4 | python3 -c 'import sys,json;c=json.load(sys.stdin)["plan"]["conflicts"][0];print(c["field"]+"/"+c["selected"]+"/"+c["detected"])')"
 AP5=$(curl -s -X POST $B16/api/generate/plan -H "Authorization: Bearer $FT16" -H 'Content-Type: application/json' -d '{"prompt":"a vertical shorts clip of ocean waves at sunset","mode":"realistic","style":"realistic","duration":5,"aspect_ratio":"16:9"}')
@@ -1703,7 +1708,7 @@ check "auto plan: explicit 16:9 + vertical shorts -> aspect conflict, aspect unc
 AP6=$(curl -s -X POST $B16/api/generate/plan -H "Authorization: Bearer $FT16" -H 'Content-Type: application/json' -d '{"prompt":"a calm mountain lake at dawn","mode":"realistic","style":"realistic","duration":5}')
 check "auto plan: plain prompt -> H3 text route, no confirmation" "h3_text_to_video/False" "$(echo $AP6 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["engine"]["route"]+"/"+str(p["needs_confirmation"]))')"
 AP7=$(curl -s -X POST $B16/api/generate/plan -H "Authorization: Bearer $FT16" -H 'Content-Type: application/json' -d '{"prompt":"a calm valley scene with soft background music","mode":"realistic","style":"realistic","duration":5}')
-check "auto plan: explicit music ask -> music add-on +5 (no sync invented)" "music/5" "$(echo $AP7 | python3 -c 'import sys,json;s=json.load(sys.stdin)["plan"]["apply"]["sound"];print(s["mode"]+"/"+str(s["cost"]))')"
+check "auto plan: explicit music ask -> music included (0) (no sync invented)" "music/0" "$(echo $AP7 | python3 -c 'import sys,json;s=json.load(sys.stdin)["plan"]["apply"]["sound"];print(s["mode"]+"/"+str(s["cost"]))')"
 PR16=$(curl -s -X POST $B16/api/auth/register -H 'Content-Type: application/json' -d '{"email":"autopro@example.com","password":"password123"}')
 PT16=$(echo $PR16 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 PID16=$(curl -s $B16/api/me -H "Authorization: Bearer $PT16" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
@@ -1769,21 +1774,21 @@ poll17() { # jobId token -> echoes the final generation JSON
 # NOTE: exactly 10 plan/generate calls on this instance (shared limiter).
 GP1=$(curl -s -X POST $B17/api/generate/plan -H "Authorization: Bearer $FT17" -H 'Content-Type: application/json' -d '{"prompt":"heavy rain and a car braking in city traffic","mode":"realistic","style":"realistic","duration":5}')
 GEN1=$(curl -s -X POST $B17/api/generate -H "Authorization: Bearer $FT17" -H 'Content-Type: application/json' -d "$(echo $GP1 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(json.dumps({"prompt":"heavy rain and a car braking in city traffic","mode":"realistic","style":"realistic","duration":5,"auto_plan":p,"auto_confirmed":True}))')")
-check "auto gen+sync: charged the plan total 20 exactly" "20/80" "$(echo $GEN1 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "auto gen+sync: charged the plan total 10 exactly (sound included)" "10/90" "$(echo $GEN1 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
 JOB1=$(echo $GEN1 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 POLL1=$(poll17 $JOB1 $FT17)
 check "auto gen+sync: completed with sound applied" "completed/applied" "$(echo $POLL1 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["sound_status"])')"
-check "auto gen+sync: row carries the auto plan (total 20)" "20" "$(echo $POLL1 | python3 -c 'import sys,json;print(json.load(sys.stdin)["auto_plan"]["total_cost"])')"
+check "auto gen+sync: row carries the auto plan (total 10)" "10" "$(echo $POLL1 | python3 -c 'import sys,json;print(json.load(sys.stdin)["auto_plan"]["total_cost"])')"
 GP2=$(curl -s -X POST $B17/api/generate/plan -H "Authorization: Bearer $FT17" -H 'Content-Type: application/json' -d "{\"prompt\":\"$URDU_DLG\",\"prompt_language\":\"ur\",\"mode\":\"realistic\",\"style\":\"realistic\",\"duration\":5}")
 GEN2=$(curl -s -X POST $B17/api/generate -H "Authorization: Bearer $FT17" -H 'Content-Type: application/json' -d "$(echo $GP2 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(json.dumps({"prompt":"ایک آدمی کہتا ہے: \"میرا نام احمد ہے\"","prompt_language":"ur","mode":"realistic","style":"realistic","duration":5,"auto_plan":p,"auto_confirmed":True}))')")
-check "auto gen+voiceover: charged the plan total 20 exactly" "20/60" "$(echo $GEN2 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "auto gen+voiceover: charged the plan total 10 exactly (voice included)" "10/80" "$(echo $GEN2 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
 JOB2=$(echo $GEN2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 POLL2=$(poll17 $JOB2 $FT17)
-check "auto gen+voiceover: completed, voice step applied, cost stays 20" "completed/applied/20" "$(echo $POLL2 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["auto_voice_status"]+"/"+str(g["cost_credits"]))')"
+check "auto gen+voiceover: completed, voice step applied, cost stays 10" "completed/applied/10" "$(echo $POLL2 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["auto_voice_status"]+"/"+str(g["cost_credits"]))')"
 GP3=$(curl -s -X POST $B17/api/generate/plan -H "Authorization: Bearer $FT17" -H 'Content-Type: application/json' -d '{"prompt":"heavy rain and a car braking in city traffic","mode":"realistic","style":"realistic","duration":5}')
 TAMP3=$(echo $GP3 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];p["base_cost"]=0;p["total_cost"]=1;p["apply"]["sound"]["cost"]=0;p["engine"]={"route":"kling_o3_4k","model":"fal-ai/kling-video/o3/4k/text-to-video","reason":"forged"};print(json.dumps({"prompt":"heavy rain and a car braking in city traffic","mode":"realistic","style":"realistic","duration":5,"auto_plan":p,"auto_confirmed":True}))')
 GEN3=$(curl -s -X POST $B17/api/generate -H "Authorization: Bearer $FT17" -H 'Content-Type: application/json' -d "$TAMP3")
-check "auto tampered plan: server charges the recomputed rate-card total 20" "20/40" "$(echo $GEN3 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "auto tampered plan: server charges the recomputed rate-card total 10" "10/70" "$(echo $GEN3 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
 check "auto tampered plan: forged Kling claim ignored — server routing (H3) recorded" "minimax/h3/text-to-video/h3_text_to_video" "$(echo $GEN3 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["model"]+"/"+g["auto_plan"]["engine"]["route"])')"
 CR17=$(curl -s -X POST $B17/api/auth/register -H 'Content-Type: application/json' -d '{"email":"autogenchar@example.com","password":"password123"}')
 CT17=$(echo $CR17 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
@@ -1839,13 +1844,13 @@ FP1=$(curl -s -X POST $B18/api/generate/plan -H "Authorization: Bearer $FT18" -H
 FGEN1=$(curl -s -w '\n%{http_code}' -X POST $B18/api/generate -H "Authorization: Bearer $FT18" -H 'Content-Type: application/json' -d "$(echo $FP1 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(json.dumps({"prompt":"FAILME heavy rain over a street","mode":"realistic","style":"realistic","duration":5,"image_path":"'$IMGA18'","auto_plan":p,"auto_confirmed":True}))')")
 check "auto fail: provider submission failure -> 502" "502" "$(echo "$FGEN1" | tail -1)"
 check "auto fail: EVERYTHING refunded exactly once (balance back to 100)" "100" "$(curl -s $B18/api/me -H "Authorization: Bearer $FT18" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
-check "auto fail: failed row carries the auto plan (total was 20)" "failed/20" "$(curl -s $B18/api/history -H "Authorization: Bearer $FT18" | python3 -c 'import sys,json;g=json.load(sys.stdin)["generations"][0];print(g["status"]+"/"+str(g["auto_plan"]["total_cost"]))')"
+check "auto fail: failed row carries the auto plan (total was 10)" "failed/10" "$(curl -s $B18/api/history -H "Authorization: Bearer $FT18" | python3 -c 'import sys,json;g=json.load(sys.stdin)["generations"][0];print(g["status"]+"/"+str(g["auto_plan"]["total_cost"]))')"
 FP2=$(curl -s -X POST $B18/api/generate/plan -H "Authorization: Bearer $FT18" -H 'Content-Type: application/json' -d '{"prompt":"a man says: \"FAILME hello friend\"","mode":"realistic","style":"realistic","duration":5}')
 FGEN2=$(curl -s -X POST $B18/api/generate -H "Authorization: Bearer $FT18" -H 'Content-Type: application/json' -d "$(echo $FP2 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(json.dumps({"prompt":"a man says: \"FAILME hello friend\"","mode":"realistic","style":"realistic","duration":5,"auto_plan":p,"auto_confirmed":True}))')")
 JOBF2=$(echo $FGEN2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 POLLF2=$(poll18 $JOBF2)
 check "auto voice fail: video still delivered, voice marked failed_refunded" "completed/failed_refunded" "$(echo $POLLF2 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["auto_voice_status"])')"
-check "auto voice fail: only the voice add-on refunded (row cost 10, balance 90)" "10/90" "$(echo $POLLF2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_credits"])')/$(curl -s $B18/api/me -H "Authorization: Bearer $FT18" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "auto voice fail: voice was included (0 to refund) — row cost 10, balance 90" "10/90" "$(echo $POLLF2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_credits"])')/$(curl -s $B18/api/me -H "Authorization: Bearer $FT18" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 FP3=$(curl -s -X POST $B18/api/generate/plan -H "Authorization: Bearer $FT18" -H 'Content-Type: application/json' -d '{"prompt":"FAILME rain over a street","mode":"realistic","style":"realistic","duration":5}')
 FGEN3=$(curl -s -X POST $B18/api/generate -H "Authorization: Bearer $FT18" -H 'Content-Type: application/json' -d "$(echo $FP3 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(json.dumps({"prompt":"FAILME rain over a street","mode":"realistic","style":"realistic","duration":5,"auto_plan":p,"auto_confirmed":True}))')")
 JOBF3=$(echo $FGEN3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
@@ -1933,7 +1938,7 @@ check "speaking gen: aspect 1:1 -> 400 before charging" "400/550" "$(curl -s -o 
 check "speaking gen: sound add-on combo -> 400 (rejected, not silently dropped), no charge" "400/550" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B19/api/generate -H "Authorization: Bearer $PT19" -H 'Content-Type: application/json' -d '{"prompt":"a man says hello to the camera","engine":"speaking","aspect_ratio":"16:9","duration":5,"sound":{"mode":"sync","prompt":"city ambience"}}')/$(curl -s $B19/api/me -H "Authorization: Bearer $PT19" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "speaking gen: provider failure -> 502 with full exactly-once refund" "502/550" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B19/api/generate -H "Authorization: Bearer $PT19" -H 'Content-Type: application/json' -d '{"prompt":"FAILME a man says: \"this will fail today\"","engine":"speaking","aspect_ratio":"16:9","duration":5}')/$(curl -s $B19/api/me -H "Authorization: Bearer $PT19" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 SPPL=$(curl -s -X POST $B19/api/generate/plan -H "Authorization: Bearer $PT19" -H 'Content-Type: application/json' -d '{"prompt":"a man stands in his shop and says: \"Welcome in, everything is fresh today\"","mode":"realistic","style":"realistic","duration":5}')
-check "auto plan (Pro): dialogue -> omni_speaking engine, speaking flag set, total = flat 50, confirmation needed" "omni_speaking/True/None/50/50/True" "$(echo $SPPL | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["engine"]["route"]+"/"+str(p["apply"]["speaking_engine"])+"/"+str(p["apply"]["voice"])+"/"+str(p["base_cost"])+"/"+str(p["total_cost"])+"/"+str(p["needs_confirmation"]))')"
+check "auto plan (Pro): dialogue -> omni_speaking engine, speaking flag set, total = flat 50, no confirmation (no conflict)" "omni_speaking/True/None/50/50/False" "$(echo $SPPL | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["engine"]["route"]+"/"+str(p["apply"]["speaking_engine"])+"/"+str(p["apply"]["voice"])+"/"+str(p["base_cost"])+"/"+str(p["total_cost"])+"/"+str(p["needs_confirmation"]))')"
 SPG2=$(curl -s -X POST $B19/api/generate -H "Authorization: Bearer $PT19" -H 'Content-Type: application/json' -d "$(echo $SPPL | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(json.dumps({"prompt":"a man stands in his shop and says: \"Welcome in, everything is fresh today\"","mode":"realistic","style":"realistic","duration":5,"auto_plan":p,"auto_confirmed":True}))')")
 check "auto omni gen: confirmed plan generates through the speaking route at flat 50" "50/500/google/gemini-omni-flash/v1.1/text-to-video/omni_speaking" "$(echo $SPG2 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"])+"/"+g["model"]+"/"+g["auto_plan"]["engine"]["route"])')"
 SPJ2=$(echo $SPG2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
@@ -1946,6 +1951,105 @@ CID19=$(echo $CHA19 | python3 -c 'import sys,json;print(json.load(sys.stdin)["ch
 SPPC=$(curl -s -X POST $B19/api/generate/plan -H "Authorization: Bearer $PT19" -H 'Content-Type: application/json' -d "{\"prompt\":\"the captain says: \\\"Follow me now, we sail at dawn\\\"\",\"mode\":\"realistic\",\"style\":\"realistic\",\"duration\":5,\"character_id\":$CID19}")
 check "auto plan (Pro): character + dialogue -> still reference route + lipsync (omni is fresh-t2v only)" "h3_reference_to_video/lipsync/latentsync_video" "$(echo $SPPC | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["engine"]["route"]+"/"+p["apply"]["voice"]["kind"]+"/"+p["engine"]["voice_route"])')"
 kill $SRV19_PID $SPKSTUB_PID $SPKTSTUB_PID 2>/dev/null
+
+echo "--- Phase G: audio included + negation respect + mute (stub instance) ---"
+G_STUB_PORT=18062
+G_TSTUB_PORT=18061
+B20=http://127.0.0.1:18063
+rm -f /tmp/myvideoai-phaseg-test.db; rm -rf /tmp/phaseggen /tmp/phasegvoice; mkdir -p /tmp/phaseggen /tmp/phasegvoice
+FAL_STUB_PORT=$G_STUB_PORT node "$(dirname "$0")/test-fal-stub.js" > /tmp/fal-stub-phaseg.log 2>&1 &
+GSTUB_PID=$!
+TRANSLATE_STUB_PORT=$G_TSTUB_PORT node "$(dirname "$0")/test-translate-stub.js" > /tmp/translate-stub-phaseg.log 2>&1 &
+GTSTUB_PID=$!
+for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:$G_STUB_PORT/__calls && break || sleep 0.25; done
+for i in $(seq 1 40); do curl -s -o /dev/null http://127.0.0.1:$G_TSTUB_PORT/__count && break || sleep 0.25; done
+G_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-phaseg-test.db PORT=18063 FAL_KEY=dummy_test_key "$G_JWT_NAME=phaseg-instance-dummy-value" \
+  ADMIN_EMAIL=gadmin@example.com TEST_RECORD_FAL_BODY=1 \
+  FAL_API_BASE_URL=http://127.0.0.1:$G_STUB_PORT FAL_QUEUE_BASE_URL=http://127.0.0.1:$G_STUB_PORT \
+  FAL_POLL_INTERVAL_MS=100 TRANSLATE_API_BASE=http://127.0.0.1:$G_TSTUB_PORT \
+  GENERATED_DIR=/tmp/phaseggen VOICE_DIR=/tmp/phasegvoice \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-phaseg-test.log 2>&1 &
+SRV20_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B20/api/health && break || sleep 0.25; done
+AR20=$(curl -s -X POST $B20/api/auth/register -H 'Content-Type: application/json' -d '{"email":"gadmin@example.com","password":"password123"}')
+AT20=$(echo $AR20 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+GR20=$(curl -s -X POST $B20/api/auth/register -H 'Content-Type: application/json' -d '{"email":"gfree@example.com","password":"password123"}')
+GT20=$(echo $GR20 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+PR20=$(curl -s -X POST $B20/api/auth/register -H 'Content-Type: application/json' -d '{"email":"gpro@example.com","password":"password123"}')
+PT20=$(echo $PR20 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+PID20=$(curl -s $B20/api/me -H "Authorization: Bearer $PT20" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+curl -s -o /dev/null -X POST $B20/api/admin/users/$PID20/activate -H "Authorization: Bearer $AT20" -H 'Content-Type: application/json' -d '{"plan_id":"pro","period":"monthly"}'
+poll20() { # jobId token -> echoes the final generation JSON
+  local st=""
+  for i in $(seq 1 40); do
+    st=$(curl -s $B20/api/generations/$1 -H "Authorization: Bearer $2")
+    [[ "$(echo "$st" | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])' 2>/dev/null)" == "completed" ]] && break || sleep 0.3
+  done
+  echo "$st"
+}
+FFBIN20=$(node --input-type=module -e "import f from 'ffmpeg-static'; console.log(f)" 2>/dev/null)
+HOMEPAGE20=$(curl -s $B20/)
+check "phase G frontend: 'Included · قیمت میں شامل' label logic ships" "yes" "$(echo "$HOMEPAGE20" | grep -q 'قیمت میں شامل' && echo "$HOMEPAGE20" | grep -q 'audioCostLabel' && echo yes || echo no)"
+# NOTE: exactly 9 plan/generate calls on this instance (shared limiter).
+GP_NO_MUSIC=$(curl -s -X POST $B20/api/generate/plan -H "Authorization: Bearer $GT20" -H 'Content-Type: application/json' -d '{"prompt":"a cat in a garden, no music","mode":"realistic","style":"realistic","duration":5}')
+check "negation: 'no music' -> no sound proposal, music negation detected" "None/True" "$(echo $GP_NO_MUSIC | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(str(p["apply"]["sound"])+"/"+str(p["detected"]["negations"]["music"]))')"
+GP_SILENT=$(curl -s -X POST $B20/api/generate/plan -H "Authorization: Bearer $GT20" -H 'Content-Type: application/json' -d '{"prompt":"silent video of rain in a garden","mode":"realistic","style":"realistic","duration":5}')
+check "negation: 'silent video' -> mute:true, no sound, no confirmation, total == base" "True/None/False/10" "$(echo $GP_SILENT | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(str(p["apply"]["mute"])+"/"+str(p["apply"]["sound"])+"/"+str(p["needs_confirmation"])+"/"+str(p["total_cost"]))')"
+curl -s -o /tmp/mute-source.mp4 http://127.0.0.1:$G_STUB_PORT/media/clip.mp4
+check "mute fixture: the stub's source clip HAS an audio stream" "yes" "$("$FFBIN20" -i /tmp/mute-source.mp4 2>&1 | python3 -c 'import sys;print("yes" if "Audio:" in sys.stdin.read() else "no")')"
+GEN_SILENT=$(curl -s -X POST $B20/api/generate -H "Authorization: Bearer $GT20" -H 'Content-Type: application/json' -d "$(echo $GP_SILENT | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(json.dumps({"prompt":"silent video of rain in a garden","mode":"realistic","style":"realistic","duration":5,"auto_plan":p,"auto_confirmed":True}))')")
+check "mute gen: charged the base 10 only" "10/90" "$(echo $GEN_SILENT | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+JOB_SILENT=$(echo $GEN_SILENT | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+POLL_SILENT=$(poll20 $JOB_SILENT $GT20)
+check "mute gen: completed with mute_status applied" "completed/applied" "$(echo $POLL_SILENT | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["mute_status"])')"
+MUTEURL=$(echo $POLL_SILENT | python3 -c 'import sys,json;print(json.load(sys.stdin)["video_url"])')
+curl -s -o /tmp/muted-out.mp4 $B20$MUTEURL
+check "mute gen: delivered file has NO audio stream, keeps video" "no/yes" "$("$FFBIN20" -i /tmp/muted-out.mp4 2>&1 | python3 -c 'import sys;s=sys.stdin.read();print(("yes" if "Audio:" in s else "no")+"/"+("yes" if "Video:" in s else "no"))')"
+GP_NODLG=$(curl -s -X POST $B20/api/generate/plan -H "Authorization: Bearer $GT20" -H 'Content-Type: application/json' -d '{"prompt":"a man says: \"hello my friend\", without dialogue","mode":"realistic","style":"realistic","duration":5}')
+check "negation: 'without dialogue' -> no voice route, dialogue negation detected" "None/True" "$(echo $GP_NODLG | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(str(p["apply"]["voice"])+"/"+str(p["detected"]["negations"]["dialogue"]))')"
+GP_MANUAL_VOICE=$(curl -s -X POST $B20/api/generate/plan -H "Authorization: Bearer $GT20" -H 'Content-Type: application/json' -d "{\"prompt\":\"$URDU_DLG\",\"prompt_language\":\"ur\",\"mode\":\"realistic\",\"style\":\"realistic\",\"duration\":5,\"voice\":{\"kind\":\"voiceover\"}}")
+GEN_MANUAL_VOICE=$(curl -s -X POST $B20/api/generate -H "Authorization: Bearer $GT20" -H 'Content-Type: application/json' -d "$(echo $GP_MANUAL_VOICE | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(json.dumps({"prompt":"ایک آدمی کہتا ہے: \"میرا نام احمد ہے\"","prompt_language":"ur","mode":"realistic","style":"realistic","duration":5,"voice":{"kind":"voiceover"},"auto_plan":p,"auto_confirmed":True}))')")
+check "manual voiceover selection: total == base 10 (voice included)" "10/80" "$(echo $GEN_MANUAL_VOICE | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+JOB_MV=$(echo $GEN_MANUAL_VOICE | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+POLL_MV=$(poll20 $JOB_MV $GT20)
+check "manual voiceover selection: voice step applied" "completed/applied" "$(echo $POLL_MV | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["auto_voice_status"])')"
+UPA20=$(curl -s -X POST $B20/api/uploads/image -H "Authorization: Bearer $PT20" -H 'Content-Type: application/json' -d "{\"image_base64\":\"$PNG_B64_A\",\"content_type\":\"image/png\"}")
+IMG20=$(echo $UPA20 | python3 -c 'import sys,json;print(json.load(sys.stdin)["image_path"])')
+CHA20=$(curl -s -X POST $B20/api/characters -H "Authorization: Bearer $PT20" -H 'Content-Type: application/json' -d "{\"name\":\"Captain Sara\",\"image_path\":\"$IMG20\"}")
+CID20=$(echo $CHA20 | python3 -c 'import sys,json;print(json.load(sys.stdin)["character"]["id"])')
+GP_CHAR_LIP=$(curl -s -X POST $B20/api/generate/plan -H "Authorization: Bearer $PT20" -H 'Content-Type: application/json' -d "{\"prompt\":\"the captain says: \\\"Follow me now, we sail at dawn\\\"\",\"mode\":\"realistic\",\"style\":\"realistic\",\"duration\":5,\"character_id\":$CID20}")
+check "lip-sync selection (Pro, character): included — voice cost 0, total == base" "lipsync/0/15/15" "$(echo $GP_CHAR_LIP | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["apply"]["voice"]["kind"]+"/"+str(p["apply"]["voice"]["cost"])+"/"+str(p["base_cost"])+"/"+str(p["total_cost"]))')"
+GP_OMNI_MUTE=$(curl -s -X POST $B20/api/generate/plan -H "Authorization: Bearer $PT20" -H 'Content-Type: application/json' -d '{"prompt":"a man says: \"welcome to my shop\" in a silent video","mode":"realistic","style":"realistic","duration":5}')
+check "omni + mute plan: audio conflict, speaking suppressed, mute set, confirmation required" "audio/False/True/True" "$(echo $GP_OMNI_MUTE | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["conflicts"][0]["field"]+"/"+str(p["apply"]["speaking_engine"])+"/"+str(p["apply"]["mute"])+"/"+str(p["needs_confirmation"]))')"
+SPK_SILENT=$(curl -s -w '\n%{http_code}' -X POST $B20/api/generate -H "Authorization: Bearer $PT20" -H 'Content-Type: application/json' -d '{"prompt":"a silent video of a man saying hello to the camera","engine":"speaking","aspect_ratio":"16:9","duration":5,"mode":"realistic","style":"realistic"}')
+check "speaking + silent prompt: -> 400, no charge" "400/600" "$(echo "$SPK_SILENT" | tail -1)/$(curl -s $B20/api/me -H "Authorization: Bearer $PT20" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "speaking + silent prompt: error says a speaking video cannot be silent" "yes" "$(echo "$SPK_SILENT" | sed '$d' | python3 -c 'import sys,json;print("yes" if "cannot be silent" in json.load(sys.stdin)["error"] else "no")')"
+# -- migration v15: delete its record + drop its column, restart re-applies --
+kill $SRV20_PID 2>/dev/null; sleep 0.5
+node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-phaseg-test.db');
+db.exec('DELETE FROM schema_migrations WHERE version = 15');
+db.exec('ALTER TABLE generations DROP COLUMN mute_status');
+console.log('rolled back migration v15');
+"
+env DB_PATH=/tmp/myvideoai-phaseg-test.db PORT=18063 FAL_KEY=dummy_test_key "$G_JWT_NAME=phaseg-instance-dummy-value" \
+  ADMIN_EMAIL=gadmin@example.com TEST_RECORD_FAL_BODY=1 \
+  FAL_API_BASE_URL=http://127.0.0.1:$G_STUB_PORT FAL_QUEUE_BASE_URL=http://127.0.0.1:$G_STUB_PORT \
+  FAL_POLL_INTERVAL_MS=100 TRANSLATE_API_BASE=http://127.0.0.1:$G_TSTUB_PORT \
+  GENERATED_DIR=/tmp/phaseggen VOICE_DIR=/tmp/phasegvoice \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-phaseg-test2.log 2>&1 &
+SRV20_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B20/api/health && break || sleep 0.25; done
+check "migration v15 re-applies on boot (mute_status restored)" "ok" "$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-phaseg-test.db');
+const cols = db.prepare(\"SELECT name FROM pragma_table_info('generations') WHERE name = 'mute_status'\").all().length;
+const mig = db.prepare('SELECT COUNT(*) AS c FROM schema_migrations WHERE version = 15').get().c;
+console.log(cols === 1 && Number(mig) === 1 ? 'ok' : 'bad');
+")"
+kill $SRV20_PID $GSTUB_PID $GTSTUB_PID 2>/dev/null
 
 echo "--- rate limit: burst until 429 ---"
 FOUND429="no"

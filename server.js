@@ -187,9 +187,18 @@ const CONFIG = {
   // takes video_url + audio_url. Both env-overridable.
   lipsyncImageModel: (process.env.FAL_LIPSYNC_IMAGE_MODEL || 'minimax/h3-max/lip-sync/image-to-video').trim(),
   lipsyncVideoModel: (process.env.FAL_LIPSYNC_VIDEO_MODEL || 'fal-ai/latentsync').trim(),
-  // Locked owner rates for the voice add-ons (credits).
+  // Voice add-on rates (credits). Phase G (owner directive 2026-10-23,
+  // point 5 — "audio included"): voiceover is 0 — voice/dialogue is part
+  // of the single generation price, never a separate fee. The standalone
+  // /api/voice/lipsync job keeps its flat 30 as the ONE documented
+  // exception (see the README sustainability table): its script can run
+  // to 6,000 chars (~400 s of speech) and the image route bills per
+  // output second (H3-Max lip-sync 768P $0.08/s, x1.2 past 15 s — up to
+  // ~$38), which no included price can absorb. The in-generation Auto
+  // Director lip-sync route (<=300-char dialogue, LatentSync flat $0.20)
+  // IS included at 0.
   lipsyncCost: 30,
-  voiceoverCost: 10,
+  voiceoverCost: 0,
   // Voice previews are free but rate-limited: per user per day, plus a
   // global daily guard so previews can't run up provider cost.
   voicePreviewDailyCap: Number(process.env.VOICE_PREVIEW_DAILY_CAP || 5),
@@ -203,8 +212,16 @@ const CONFIG = {
   soundSyncPremiumModel: (process.env.SOUND_SYNC_PREMIUM_MODEL || 'mirelo-ai/sfx2.0/video-to-audio').trim(),
   soundSfxModel: (process.env.SOUND_SFX_MODEL || 'fal-ai/elevenlabs/sound-effects/v2').trim(),
   soundMusicModel: (process.env.SOUND_MUSIC_MODEL || 'cassetteai/music-generator').trim(),
-  // Locked owner rates for the sound add-ons (credits).
-  soundCosts: { sync: 10, premium_sync: 25, sfx: 5, music: 5 },
+  // Sound add-on rates (credits). Phase G (owner directive 2026-10-23,
+  // point 5 — "audio included"): every mode is 0 — sound effects, sync
+  // and background music are part of the single generation price, never
+  // a separate fee. Sustainability (prices verified from fal's own
+  // pages; full table in README): the priciest step is premium sync at
+  // $0.010/s promo ($0.015/s after 2026-12-13) = $0.15 for a 10 s clip;
+  // sync $0.001/s, SFX $0.002/s, music $0.02/output-minute — every tier
+  // clears its floor revenue. Plan GATES stay (premium sync is still
+  // Pro/Extra-Pro only): feature tiers now, not prices.
+  soundCosts: { sync: 0, premium_sync: 0, sfx: 0, music: 0 },
   // Master switch: SOUND_ENABLED=0 turns the whole sound system off (the
   // endpoints then fail closed with 503 and charge nothing). The engines
   // all ride the FAL_KEY, so no key also means not configured.
@@ -672,6 +689,13 @@ const MIGRATIONS = [
     ALTER TABLE generations ADD COLUMN auto_plan TEXT;
     ALTER TABLE generations ADD COLUMN auto_voice_status TEXT NOT NULL DEFAULT 'none';
     ALTER TABLE generations ADD COLUMN auto_voice_cost INTEGER NOT NULL DEFAULT 0;` },
+  // v15 — Phase G ("audio included" + negation respect): when a confirmed
+  // Auto Director plan asks for a silent video (mute:true), the row tracks
+  // the post-completion audio-strip step: 'none' | 'pending' | 'applied' |
+  // 'failed' (the original is then delivered WITH an honest note in the
+  // stored plan — never silently presented as silent).
+  { version: 15, up: `
+    ALTER TABLE generations ADD COLUMN mute_status TEXT NOT NULL DEFAULT 'none';` },
 ];
 {
   const applied = new Set(db.prepare('SELECT version FROM schema_migrations').all().map(r => r.version));
@@ -1553,6 +1577,50 @@ function autoBaseCost(routed, speaking) {
 
 // The pure analyzer. Callers supply the translated prompt, the validated
 // selections and a costForAspect(aspect) closure (server-side routing).
+// Phase G negation detection (owner directive 2026-10-23, point 5): when
+// the user says what they do NOT want — "no music", "silent video",
+// "without dialogue", Urdu موسیقی نہیں / خاموش / بغیر آواز — the Auto
+// Director must respect it: suppress the matching audio proposal, and for
+// a global silence request flag the plan mute:true so the delivered
+// video's audio track is stripped after generation. Detection runs on the
+// raw user prompt (original + normalized effective text), never on
+// server-appended style suffixes. Patterns are word-boundary based so
+// unrelated words ("noir", "musical") never trigger.
+const AUTO_NEGATION_PATTERNS = {
+  mute: [
+    /\bsilent\b/i, /\bsilence\b/i, /\bmuted?\b/i, /\bno audio\b/i,
+    /\bwithout audio\b/i, /\bno sound\b/i, /\bwithout sound\b/i,
+    /\bno voice\b/i, /\bwithout voice\b/i,
+    /خاموش/, /بغیر آواز/, /آواز نہیں/, /کوئی آواز نہیں/,
+  ],
+  music: [
+    /\bno music\b/i, /\bwithout music\b/i, /\bno background music\b/i,
+    /\bno soundtrack\b/i, /\bno song\b/i,
+    /موسیقی نہیں/, /موسیقی مت/, /بغیر موسیقی/, /گانا نہیں/,
+  ],
+  dialogue: [
+    /\bno dialogue\b/i, /\bno dialog\b/i, /\bwithout dialogue\b/i,
+    /\bno voiceover\b/i, /\bno voice-over\b/i, /\bno talking\b/i,
+    /\bno speech\b/i, /\bno narration\b/i, /\bno narrator\b/i,
+    /مکالمہ نہیں/, /مکالمے نہیں/, /گفتگو نہیں/,
+  ],
+  sfx: [
+    /\bno sound effects\b/i, /\bno sfx\b/i, /\bwithout sound effects\b/i,
+    /ساؤنڈ ایفیکٹس نہیں/,
+  ],
+};
+function autoDetectNegations(...texts) {
+  const hay = texts.filter(Boolean).join(' \n ');
+  const hit = (list) => list.some(re => re.test(hay));
+  const mute = hit(AUTO_NEGATION_PATTERNS.mute);
+  return {
+    mute,
+    music: mute || hit(AUTO_NEGATION_PATTERNS.music),
+    dialogue: mute || hit(AUTO_NEGATION_PATTERNS.dialogue),
+    sfx: mute || hit(AUTO_NEGATION_PATTERNS.sfx),
+  };
+}
+
 function analyzeAutoDirector(opts) {
   const {
     userId, originalPrompt, effectivePrompt, languageCode = 'en',
@@ -1567,6 +1635,9 @@ function analyzeAutoDirector(opts) {
   const combined = `${original} ${effectivePrompt || ''}`;
   const notes = ['AI Auto Director is rule-based v1: it reads keywords and patterns in your prompt — it is not a large language model.'];
   const conflicts = [];
+  // Phase G: what the user asked NOT to have (no music / no dialogue /
+  // silent …) — computed once from the raw prompt and honoured below.
+  const neg = autoDetectNegations(original, effectivePrompt);
 
   // --- content class ------------------------------------------------------
   const cartoonCues = /\bcartoon|animation|animated|anime|kids story|children'?s story|pixar\b/.test(text) ||
@@ -1643,7 +1714,7 @@ function analyzeAutoDirector(opts) {
   const omniRoute = !!(dialogue && !dialogue.from_translation &&
     ['ur', 'hi', 'en'].includes(dialogue.language) && !isDraft &&
     canSpeaking && !character && !hasSourceImage && speakingScene &&
-    !voiceSelection && !existingSound &&
+    !voiceSelection && !existingSound && !neg.mute && !neg.dialogue &&
     CONFIG.speakingAspects.includes(finalAspect));
   if (dialogue && canSpeaking && !character && !hasSourceImage && !isDraft &&
       speakingScene && !dialogue.from_translation &&
@@ -1653,9 +1724,26 @@ function analyzeAutoDirector(opts) {
     else if (existingSound)
       notes.push('You selected a sound add-on yourself, so the one-step speaking engine was not used — its own synchronized audio would clash with the add-on. The dialogue uses the voice route instead.');
   }
+  // Phase G: a global silence request suppresses EVERY audio proposal
+  // (voice, sound, and the speaking engine) and flags the plan mute:true —
+  // the finished video's audio track is stripped before delivery. A
+  // speaking video can never be silent, so when the dialogue would have
+  // routed to the speaking engine this is a TRUE conflict for the
+  // confirmation path to explain (the standard engine + mute wins).
+  if (neg.mute) {
+    notes.push('You asked for a silent video: no voice, sound effects or music will be added, and the generated audio track is removed before delivery (plan flag: mute = true).');
+    if (dialogue && !dialogue.from_translation && canSpeaking && speakingScene &&
+        !character && !hasSourceImage && !isDraft)
+      conflicts.push({ field: 'audio', selected: 'speaking engine (synchronized speech)', detected: 'silent video',
+        question: 'A speaking video cannot be silent — the speaking engine always generates speech audio. Make the silent video on the standard engine instead?' });
+  }
   let voice = null;
   if (dialogue) {
-    if (dialogue.from_translation) {
+    if (neg.dialogue) {
+      // Phase G: "no dialogue / no voice / خاموش" wins over every voice
+      // route — including a manually echoed voice selection.
+      notes.push('You asked for no dialogue/voice, so the detected dialogue was not routed to a voice.');
+    } else if (dialogue.from_translation) {
       notes.push('Dialogue was detected, but the exact original words could not be isolated, so no voice add-on was proposed — quote the spoken line in your prompt to use the voice route.');
     } else if (!['ur', 'hi', 'en'].includes(dialogue.language)) {
       notes.push(`Dialogue in "${dialogue.language}" cannot use the voice route — the voice catalog covers Urdu, Hindi and English only — so no voice add-on was proposed.`);
@@ -1669,7 +1757,11 @@ function analyzeAutoDirector(opts) {
     } else if (voiceSelection && voiceSelection.kind) {
       const kind = voiceSelection.kind === 'lipsync' ? 'lipsync' : 'voiceover';
       voice = { kind, language: dialogue.language,
-        cost: kind === 'lipsync' ? CONFIG.lipsyncCost : CONFIG.voiceoverCost,
+        // Phase G: in-generation audio is INCLUDED (cost 0) — the auto
+        // route's lip-sync is LatentSync flat $0.20 + capped TTS, absorbed
+        // by every tier (see README). The standalone /api/voice/lipsync
+        // job keeps its own separate price; it does not pass through here.
+        cost: 0,
         text: dialogue.text, script_mode: dialogue.script_mode || 'native' };
     } else if (!defaultVoiceProvider()) {
       notes.push('Dialogue was detected, but no voice provider is configured on this server, so no voice add-on was proposed.');
@@ -1677,7 +1769,7 @@ function analyzeAutoDirector(opts) {
       const hasFace = !!character || contentClass === 'human';
       const kind = hasFace && canLipsync ? 'lipsync' : 'voiceover';
       voice = { kind, language: dialogue.language,
-        cost: kind === 'lipsync' ? CONFIG.lipsyncCost : CONFIG.voiceoverCost,
+        cost: 0, // Phase G: included in the generation price (see above).
         text: dialogue.text, script_mode: dialogue.script_mode || 'native' };
       if (voicePreferences && typeof voicePreferences === 'object') {
         for (const k of ['provider', 'voice', 'style', 'speed'])
@@ -1701,7 +1793,14 @@ function analyzeAutoDirector(opts) {
   const { events: sfxEvents, labels: sfxLabels } = autoDetectSfx(combined.toLowerCase());
   const musicAsk = /\bbackground music|music|song|soundtrack|melody\b/.test(text) || /موسیقی|گانا/.test(combined);
   let sound = null;
-  if (existingSound && existingSound.mode) {
+  if (neg.mute) {
+    // Phase G: silence wins over every sound proposal — including a sound
+    // mode selected before "silent" was written in the prompt.
+    if (existingSound && existingSound.mode)
+      notes.push('You asked for a silent video, so the selected sound was dropped — the delivered video will have no audio track.');
+    else if (sfxEvents.length || musicAsk)
+      notes.push('You asked for a silent video, so the detected sounds/music were not added.');
+  } else if (existingSound && existingSound.mode) {
     const mode = existingSound.mode;
     let prompt = existingSound.prompt || String(effectivePrompt || '');
     if (sfxLabels.length && !sfxLabels.some(l => prompt.toLowerCase().includes(l)))
@@ -1719,16 +1818,24 @@ function analyzeAutoDirector(opts) {
   } else if (!soundConfigured()) {
     if (sfxEvents.length || musicAsk)
       notes.push('Sounds were detected, but the sound engines are not configured on this server, so no sound add-on was proposed.');
-  } else if (sfxEvents.length) {
+  } else if (sfxEvents.length && !neg.sfx) {
     sound = { mode: 'sync',
       prompt: `${String(effectivePrompt || '').slice(0, 300)} — natural synchronized sounds: ${sfxLabels.join(', ')}`.slice(0, 500),
       cost: CONFIG.soundCosts.sync, volume: SOUND_DEFAULT_VOLUME.sync };
-    if (musicAsk)
-      notes.push('Music was also mentioned, but auto sync sound was chosen — only one generate-time sound mode can be applied, so the separate music add-on was skipped.');
-  } else if (musicAsk) {
+    if (musicAsk && !neg.music)
+      notes.push('Music was also mentioned, but auto sync sound was chosen — only one generate-time sound mode can be applied, so the separate music track was skipped.');
+    else if (musicAsk && neg.music)
+      notes.push('You asked for no music, so no background music was added — only the scene sounds are synced.');
+  } else if (musicAsk && !neg.music) {
     sound = { mode: 'music',
       prompt: `${String(effectivePrompt || '').slice(0, 300)} — instrumental background music matching the scene`.slice(0, 500),
       cost: CONFIG.soundCosts.music, volume: SOUND_DEFAULT_VOLUME.music };
+  }
+  if (!sound && !neg.mute && !isDraft) {
+    if (neg.sfx && sfxEvents.length)
+      notes.push('You asked for no sound effects, so the detected sound events were not added.');
+    if (neg.music && musicAsk)
+      notes.push('You asked for no music, so no background music was added.');
   }
 
   // --- costs + engine ---------------------------------------------------------
@@ -1736,9 +1843,13 @@ function analyzeAutoDirector(opts) {
   const baseCost = autoBaseCost(routed, omniRoute);
   const addonsCost = omniRoute ? 0 : (sound ? sound.cost : 0) + (voice ? voice.cost : 0);
   const engine = autoEngineRoute({ character, hasSourceImage, resolution: routed.resolution, plan: routed.plan, voice, speaking: omniRoute });
-  const needsConfirmation = conflicts.length > 0 ||
-    finalAspect !== selectedAspect || omniRoute ||
-    (!!sound && !existingSound) || (!!voice && !(voiceSelection && voiceSelection.kind));
+  // Phase G: confirmation is for TRUE conflicts only (owner directive,
+  // point 3). Audio is included in the generation price, so a voice/sound
+  // proposal is standard — never a cost surprise — and the speaking route
+  // and an auto-picked orientation apply automatically like everything
+  // else. Only a genuine contradiction (mode clash, explicit aspect vs
+  // prompt, speaking-vs-silent) asks the user first.
+  const needsConfirmation = conflicts.length > 0;
 
   return {
     detected: {
@@ -1747,6 +1858,7 @@ function analyzeAutoDirector(opts) {
         ? { text: dialogue.text, language: dialogue.language } : (dialogue ? { text: dialogue.text, language: dialogue.language } : null),
       sfx_events: sfxEvents,
       music: musicAsk,
+      negations: neg,
       orientation_hint: orientationHint,
     },
     apply: {
@@ -1758,6 +1870,10 @@ function analyzeAutoDirector(opts) {
       // engine; speaking_dialogue carries the exact line the engine
       // should speak (server-derived, re-validated on generate).
       speaking_engine: omniRoute,
+      // Phase G: true when the user asked for a silent video — after the
+      // video completes, its audio track is stripped before delivery
+      // (ensureMuteApplied); the row tracks it via mute_status.
+      mute: neg.mute,
       ...(omniRoute && dialogue ? { speaking_dialogue: { text: dialogue.text, language: dialogue.language } } : {}),
     },
     engine,
@@ -1811,7 +1927,7 @@ function canonicalizeAutoPlan(fresh, echo, { character = null, hasSourceImage = 
   if (e.voice && fresh.apply.voice && e.voice.kind === fresh.apply.voice.kind &&
       e.voice.language === fresh.apply.voice.language && e.voice.text === fresh.apply.voice.text)
     voice = { ...fresh.apply.voice,
-      cost: fresh.apply.voice.kind === 'lipsync' ? CONFIG.lipsyncCost : CONFIG.voiceoverCost };
+      cost: 0 }; // Phase G: in-generation audio is included — recomputed as 0.
   // Speaking route (Phase E): applies ONLY when the fresh analysis AND
   // the echoed plan both carry the speaking route — a client can never
   // forge it, and when it applies, voice/sound add-ons stay null (the
@@ -1821,6 +1937,11 @@ function canonicalizeAutoPlan(fresh, echo, { character = null, hasSourceImage = 
     fresh.engine && fresh.engine.route === 'omni_speaking' &&
     echo.engine && echo.engine.route === 'omni_speaking';
   if (speaking) { sound = null; voice = null; }
+  // Phase G mute: applies ONLY when the fresh analysis AND the echoed
+  // plan both carry it — server-derived, never forgeable. (Speaking +
+  // mute cannot co-occur canonically: the analyzer never proposes the
+  // speaking route for a muted prompt, so `speaking` is false then.)
+  const mute = fresh.apply.mute === true && e.mute === true;
   const routed = costForAspect(aspect);
   const baseCost = autoBaseCost(routed, speaking);
   const addonsCost = (sound ? sound.cost : 0) + (voice ? voice.cost : 0);
@@ -1828,7 +1949,7 @@ function canonicalizeAutoPlan(fresh, echo, { character = null, hasSourceImage = 
   return {
     ...fresh,
     apply: { mode, style_suffix: suffix, aspect_ratio: aspect, sound, voice,
-      speaking_engine: speaking,
+      speaking_engine: speaking, mute,
       ...(speaking && fresh.apply.speaking_dialogue
         ? { speaking_dialogue: fresh.apply.speaking_dialogue } : {}) },
     engine,
@@ -2108,6 +2229,7 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
   let autoPlanToStore = null;
   let autoVoiceSpec = null;
   let autoVoiceCost = 0;
+  let autoMute = false;
   if (req.body?.auto_confirmed === true && req.body?.auto_plan &&
       typeof req.body.auto_plan === 'object') {
     if (req.body.resolution !== undefined) {
@@ -2164,6 +2286,10 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
         autoVoiceSpec = appliedPlan.apply.voice;
         autoVoiceCost = Number(autoVoiceSpec.cost) || 0;
       }
+      // Phase G: a confirmed silent plan — the row starts with
+      // mute_status='pending' and the audio track is stripped after the
+      // video completes (ensureMuteApplied), before watermarking.
+      if (appliedPlan.apply.mute === true) autoMute = true;
     }
   }
 
@@ -2183,6 +2309,12 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
   let isSpeaking = false;
   let speakingDialogue = null;
   if (wantsSpeaking || planSpeaking) {
+    // Phase G: a speaking video CANNOT be silent — the engine always
+    // generates synchronized speech audio. A silence request in the
+    // prompt (or a confirmed mute plan) is a true conflict: reject with a
+    // clear message before any charge.
+    if (autoMute || autoDetectNegations(prompt).mute)
+      return res.status(400).json({ error: 'A speaking video cannot be silent — the speaking engine always generates speech audio. Remove the silence request, or generate the silent video without the speaking engine (AI Auto strips the audio track instead).' });
     if (isDraft)
       return res.status(400).json({ error: 'The speaking engine makes full-quality videos only — it cannot be combined with a draft.' });
     if (character)
@@ -2304,13 +2436,14 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
       if (creditBuckets(user).total < totalCost) throw Object.assign(new Error('NO_CREDITS'), { status: 402 });
       spendBuckets(user, totalCost); // plan credits first, then free credits
       const info = db.prepare(
-        `INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, cost_credits, idempotency_key, resolution, model, prompt_language, translated_prompt, mode, source_image_path, watermark_text, watermark_status, sound_mode, sound_status, sound_prompt, sound_volume, sound_cost, stage, character_id, auto_plan, auto_voice_status, auto_voice_cost)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(user.id, prompt.trim(), aspect_ratio, Number(duration), style, totalCost, idemKey, resolution, model, languageCode, translatedPrompt, mode, sourceImagePath, watermarkText, watermarkStatus,
+        `INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, cost_credits, idempotency_key, resolution, model, prompt_language, translated_prompt, mode, source_image_path, watermark_text, watermark_status, sound_mode, sound_status, sound_prompt, sound_volume, sound_cost, stage, character_id, auto_plan, auto_voice_status, auto_voice_cost, mute_status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(user.id, prompt.trim(), aspect_ratio, Number(duration), style, totalCost, idemKey, resolution, model, languageCode, translatedPrompt, mode, sourceImagePath, watermarkText, watermarkStatus,
            soundSpec ? soundSpec.mode : null, soundSpec ? 'pending' : 'none',
            soundSpec ? soundSpec.prompt : null, soundSpec ? soundSpec.volume : null, soundCost,
            isDraft ? 'draft' : 'final', character ? character.id : null,
            autoPlanToStore ? JSON.stringify(autoPlanToStore) : null,
-           autoVoiceSpec ? 'pending' : 'none', autoVoiceCost);
+           autoVoiceSpec ? 'pending' : 'none', autoVoiceCost,
+           autoMute ? 'pending' : 'none');
       return Number(info.lastInsertRowid);
     });
   } catch (e) {
@@ -2566,6 +2699,68 @@ async function ensureAutoVoiceApplied(job, baseUrl) {
 }
 
 
+// ---------- Mute post-processing (Phase G) --------------------------------
+// A confirmed Auto Director plan with mute:true promised a SILENT video.
+// After the video completes (a muted plan never schedules sound/voice
+// steps), the audio track is stripped locally with ffmpeg -an — the same
+// generated-dir/local-file pattern the finishers use — and the muted file
+// replaces video_url. Honesty rule: if the strip fails, the ORIGINAL is
+// delivered, the row is marked mute_status='failed' and a note is appended
+// to the stored plan — a video is never presented as silent when it is
+// not. Muting is included in the generation price; there is no charge and
+// therefore nothing to refund.
+const muteInFlight = new Set();
+async function ensureMuteApplied(job) {
+  if (!job || job.status !== 'completed' || !job.video_url) return job;
+  if (job.mute_status !== 'pending') return job;
+  if (muteInFlight.has(job.id)) return job;
+  muteInFlight.add(job.id);
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ajk-mute-'));
+  try {
+    const input = path.join(work, 'input.mp4');
+    await downloadClip(job.video_url, input, { left: JOIN_MAX_BYTES });
+    const probe = await probeMedia(input);
+    fs.mkdirSync(CONFIG.generatedDir, { recursive: true });
+    const name = `${randomUUID()}.mp4`;
+    const output = path.join(CONFIG.generatedDir, name);
+    if (probe.hasAudio) {
+      try {
+        await runFfmpeg(['-y', '-i', input, '-map', '0:v:0', '-c:v', 'copy', '-an', output]);
+      } catch {
+        await runFfmpeg(['-y', '-i', input, '-map', '0:v:0', '-c:v', 'libx264',
+          '-preset', 'veryfast', '-crf', '20', '-an', output]);
+      }
+      const outProbe = await probeMedia(output);
+      if (outProbe.hasAudio) throw new Error('Mute render still has an audio track');
+    } else {
+      fs.copyFileSync(input, output); // already silent — keep the same bytes
+    }
+    db.prepare(`UPDATE generations SET video_url = ?, mute_status = 'applied',
+                updated_at = datetime('now') WHERE id = ? AND mute_status = 'pending'`)
+      .run(`/files/generated/${name}`, job.id);
+  } catch (e) {
+    console.error(`mute step failed for generation ${job.id}:`, e.message);
+    const plan = parseStoredAutoPlan(job.auto_plan);
+    if (plan && Array.isArray(plan.notes)) {
+      const noted = { ...plan, notes: [...plan.notes,
+        'The silent version could not be rendered, so the original video (WITH its audio) was delivered — it is NOT silent.'] };
+      db.prepare(`UPDATE generations SET mute_status = 'failed', auto_plan = ?,
+                  updated_at = datetime('now') WHERE id = ? AND mute_status = 'pending'`)
+        .run(JSON.stringify(noted), job.id);
+    } else {
+      db.prepare(`UPDATE generations SET mute_status = 'failed',
+                  updated_at = datetime('now') WHERE id = ? AND mute_status = 'pending'`)
+        .run(job.id);
+    }
+  } finally {
+    muteInFlight.delete(job.id);
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+  const fresh = db.prepare('SELECT * FROM generations WHERE id = ?').get(job.id);
+  if (fresh) Object.assign(job, fresh);
+  return job;
+}
+
 // ---------- Watermark post-processing ----------
 // NOTE on the renderer: the pinned ffmpeg-static 5.3.0 binary has NO
 // drawtext filter (it was built without libfreetype), but it DOES ship
@@ -2655,6 +2850,10 @@ app.get('/api/generations/:id', auth, async (req, res) => {
       await ensureSoundApplied(job, base);
     if (job.auto_voice_status === 'pending')
       await ensureAutoVoiceApplied(job, base);
+    // Phase G: a confirmed silent plan strips the audio track after the
+    // voice step and before the watermark.
+    if (job.mute_status === 'pending')
+      await ensureMuteApplied(job);
     return res.json(publicGenerationRow(await ensureWatermarkApplied(job)));
   }
   if (job.status === 'failed' || !job.fal_request_id)
@@ -2686,6 +2885,10 @@ app.get('/api/generations/:id', auth, async (req, res) => {
           // with the video still delivered and the add-on refunded).
           if (job.auto_voice_status === 'pending')
             await ensureAutoVoiceApplied(job, base);
+          // Phase G: strip the audio track for a confirmed silent plan
+          // (applied, or honestly marked failed with the original kept).
+          if (job.mute_status === 'pending')
+            await ensureMuteApplied(job);
           // If this job asked for a watermark, post-process BEFORE the
           // client sees the completed video (applied or honestly failed).
           if (job.watermark_text && job.watermark_status === 'pending')
