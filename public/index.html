@@ -538,6 +538,20 @@
       .actionbar-cost strong{ color:var(--text); font-family:var(--font-mono); font-weight:500; font-size:17px; }
       .actionbar-btn{ flex:1; width:auto; margin-top:0; }
 
+      /* ---------- AI Auto Director (Phase D) ---------- */
+      .auto-panel{
+        margin-top:12px; border:1px solid var(--line); border-radius:12px;
+        padding:12px 14px; background:var(--panel-2);
+      }
+      .auto-panel[hidden]{ display:none !important; }
+      .auto-panel h3{ margin:0 0 8px; font-size:15px; font-family:var(--font-display); }
+      .auto-panel ul{ margin:0 0 8px; padding-left:18px; font-size:13.5px; }
+      .auto-conflict{ border-top:1px dashed var(--line); padding:9px 0 2px; }
+      .auto-conflict p{ margin:0 0 6px; font-size:13.5px; }
+      .auto-cost{ font-weight:700; font-size:14.5px; margin:8px 0 0; }
+      .auto-panel .row-actions{ display:flex; gap:9px; margin-top:12px; flex-wrap:wrap; }
+      .auto-panel .row-actions .btn{ flex:1; justify-content:center; min-width:180px; }
+
       /* ---------- ads: groundwork slots (inert until AdMob go-live) ----------
          The containers start with the `hidden` attribute and are only
          unhidden by updateAdSlots() when /api/config says ads.enabled AND
@@ -703,6 +717,21 @@
                 <button type="button" class="tool-btn" data-example="A red panda eating bamboo in a misty forest, soft morning light, slow push-in camera">Try: red panda</button>
                 <button type="button" class="tool-btn" data-example="A paper boat sailing down a rainy city street at night, neon reflections on wet pavement, tracking shot">Try: paper boat</button>
                 <button type="button" class="tool-btn" data-example="Fresh bread being sliced on a wooden table in a sunlit bakery, steam rising, close-up, warm tones">Try: bakery</button>
+              </div>
+
+              <div class="field-label"><span>AI Auto Director</span></div>
+              <label class="check-row"><input type="checkbox" id="aiAutoToggle" checked /> <span><strong>AI Auto</strong> — the app reads your prompt and picks the fitting settings itself (animal / human / cartoon, dialogue voice, sound effects, orientation and engine). It only asks first when an add-on costs extra credits or the prompt conflicts with your selected option.</span></label>
+              <p class="lang-hint">AI Auto is rule-based: it follows keywords and patterns in your prompt. Where a model does not support something, it says so instead of promising it.</p>
+              <div class="auto-panel" id="autoPlanPanel" hidden>
+                <h3>AI Auto نے یہ سمجھا</h3>
+                <div id="autoPlanSummary"></div>
+                <div id="autoPlanConflicts"></div>
+                <p class="auto-cost" id="autoPlanCost"></p>
+                <p class="lang-hint" id="autoPlanNotes"></p>
+                <div class="row-actions">
+                  <button type="button" class="btn primary" id="autoPlanConfirmBtn">اسی طرح بنائیں</button>
+                  <button type="button" class="btn ghost" id="autoPlanCancelBtn">منسوخ — ترتیبات خود رکھوں</button>
+                </div>
               </div>
 
               <div class="field-label"><span>Video mode</span></div>
@@ -1306,6 +1335,7 @@
         /* ---------- storage (per the integration contract: base URL + token live in localStorage) ---------- */
         var LS_BASE = "mvai.apiBase";
         var LS_TOKEN = "mvai.token";
+        var LS_AUTO = "mvai.aiAuto";
         function lsGet(k) { try { return window.localStorage.getItem(k); } catch (e) { return null; } }
         function lsSet(k, v) { try { window.localStorage.setItem(k, v); } catch (e) {} }
         function lsDel(k) { try { window.localStorage.removeItem(k); } catch (e) {} }
@@ -1333,8 +1363,8 @@
         var me = null;             // last /api/me response
         var credits = null;        // last known balance (server-sourced)
         var state = {
-          aspect: "16:9", duration: 5, style: "realistic", mode: "realistic",
-          quality: "full",
+          aspect: "16:9", aspectExplicit: false, duration: 5, style: "realistic", mode: "realistic",
+          quality: "full", auto: lsGet(LS_AUTO) !== "0",
           imagePath: null, imageName: "",
           generating: false, currentJobId: null, pollTimer: null, pollCount: 0,
           reportTarget: null, lastStudioJob: null
@@ -1574,6 +1604,7 @@
             }
             b.addEventListener("click", function () {
               state.aspect = a;
+              state.aspectExplicit = true;
               $$("#aspectSeg button").forEach(function (x) { x.classList.toggle("sel", x === b); });
               applyFrameAspect();
               updateCost(); // 4K falls back to the 2K rate at unsupported aspects
@@ -1647,6 +1678,7 @@
           state.mode = t.mode;
           if (MODE_STYLES[state.mode].indexOf(t.style) !== -1) state.style = t.style;
           state.aspect = t.aspect;
+          state.aspectExplicit = true;
           state.quality = "full";
           $$("#qualitySeg button").forEach(function (x) {
             x.classList.toggle("sel", x.getAttribute("data-quality") === "full");
@@ -2047,6 +2079,9 @@
           if (state.generating) return;
           hideError();
           clearResult();
+          var apPanel = $("#autoPlanPanel");
+          if (apPanel) apPanel.hidden = true;
+          pendingAuto = null;
           var prompt = promptEl.value.trim();
           if (!prompt) { showError("Describe the video you want first — one or two sentences is enough."); promptEl.focus(); return; }
           if (prompt.length < 10) { showError("That prompt is very short. Add a subject, a setting, and a camera move."); promptEl.focus(); return; }
@@ -2074,10 +2109,7 @@
 
           var idemKey = uuid(); // fresh per click — the server dedupes retries with it
           var sndSpec = currentSoundSpec();
-          api("/api/generate", {
-            method: "POST",
-            headers: { "Idempotency-Key": idemKey },
-            body: { prompt: prompt, aspect_ratio: state.aspect, duration: state.duration, style: state.style,
+          var genBody = { prompt: prompt, aspect_ratio: state.aspect, duration: state.duration, style: state.style,
                     mode: state.mode,
                     ...(state.quality === "draft" ? { quality: "draft" } : {}),
                     language: ($("#promptLang") ? $("#promptLang").value : "en"),
@@ -2085,34 +2117,190 @@
                     ...($("#genCharacter").value ? { character_id: Number($("#genCharacter").value) } : {}),
                     ...(sndSpec ? { sound: sndSpec } : {}),
                     ...($("#watermarkEnabled").checked && $("#watermarkText").value.trim()
-                      ? { watermark_text: $("#watermarkText").value.trim() } : {}) }
-          }).then(function (res) {
-            if (res.network) {
-              failStudio("Backend not connected",
-                "No response from " + apiBase + "/api/generate. Start the server, or fix the API base URL in Settings, then try again.",
-                "Idempotency-Key: " + idemKey);
+                      ? { watermark_text: $("#watermarkText").value.trim() } : {}) };
+          function submitGenerate(plan) {
+            api("/api/generate", {
+              method: "POST",
+              headers: { "Idempotency-Key": idemKey },
+              body: plan ? Object.assign({}, genBody, { auto_plan: plan, auto_confirmed: true }) : genBody
+            }).then(function (res) {
+              if (res.network) {
+                failStudio("Backend not connected",
+                  "No response from " + apiBase + "/api/generate. Start the server, or fix the API base URL in Settings, then try again.",
+                  "Idempotency-Key: " + idemKey);
+                return;
+              }
+              if (!res.ok || !res.data || !res.data.id) {
+                var title = res.status === 402 ? "Not enough credits"
+                  : res.status === 429 ? "Rate limit reached"
+                  : res.status === 502 ? "Video provider unavailable"
+                  : res.status === 401 ? "Session expired"
+                  : "Generation rejected";
+                if (res.status === 401) signOut(true);
+                failStudio(title, errText(res, "The server rejected the job"),
+                  "HTTP " + res.status + " · Idempotency-Key: " + idemKey);
+                if (res.status === 402 || res.status === 429) loadMe();
+                return;
+              }
+              state.currentJobId = res.data.id;
+              state.lastStudioJob = { id: res.data.id, prompt: prompt };
+              if (res.data.credits_left !== undefined) setCredits(res.data.credits_left);
+              setStage("submit", "done");
+              setStage("render", "active");
+              setProgress(30, "Job " + res.data.id + " accepted (" + (res.data.status || "queued") + ") — polling every 4s…");
+              state.pollCount = 0;
+              state.pollTimer = setTimeout(pollTick, 2000);
+            });
+          }
+          // AI Auto (Phase D): plan first (free). No confirmation needed ->
+          // generate in the same tap. Confirmation needed -> show the panel.
+          var autoCfg = cfg && cfg.auto;
+          if (state.auto && (!autoCfg || autoCfg.enabled !== false)) {
+            var planBody = Object.assign({}, genBody);
+            if (!state.aspectExplicit) delete planBody.aspect_ratio;
+            var vpSel = $("#voiceProvider");
+            if (vpSel && vpSel.value) {
+              planBody.voice = { provider: vpSel.value,
+                voice: ($("#voiceVoice") && $("#voiceVoice").value) || undefined,
+                style: ($("#voiceStyle") ? $("#voiceStyle").value : undefined),
+                speed: ($("#voiceSpeed") ? $("#voiceSpeed").value : undefined) };
+            }
+            setProgress(12, "AI Auto is reading your prompt…");
+            api("/api/generate/plan", { method: "POST", body: planBody }).then(function (res) {
+              if (!state.generating) return; // user stopped watching meanwhile
+              if (res.network || !res.ok || !res.data || !res.data.plan) {
+                failStudio("AI Auto could not plan this video",
+                  errText(res, "The planning step failed — nothing was charged. Turn AI Auto off to generate with your manual settings."),
+                  "HTTP " + (res.status || "network"));
+                return;
+              }
+              var plan = res.data.plan;
+              if (!plan.needs_confirmation) { submitGenerate(plan); return; }
+              showAutoPlanPanel(plan, genBody, submitGenerate);
+            });
+            return;
+          }
+          submitGenerate(null);
+        }
+
+        /* ---------- AI Auto confirmation panel (Phase D) ---------- */
+        var pendingAuto = null;
+        var AUTO_CLASS_LABELS = { animal: "Animal", human: "Human", cartoon: "Cartoon / animation",
+          cinematic: "Cinematic scene", product: "Product", news: "News", music: "Music", general: "General scene" };
+        function showAutoPlanPanel(plan, genBody, submit) {
+          pendingAuto = { plan: plan, genBody: genBody, submit: submit };
+          var panel = $("#autoPlanPanel");
+          var summary = $("#autoPlanSummary");
+          summary.innerHTML = "";
+          var ul = document.createElement("ul");
+          function line(txt) { var li = document.createElement("li"); li.textContent = txt; ul.appendChild(li); }
+          var det = plan.detected || {};
+          line("Content: " + (AUTO_CLASS_LABELS[det.content_class] || det.content_class || "general"));
+          if (det.dialogue) line("Dialogue (" + det.dialogue.language + "): “" + det.dialogue.text + "”");
+          if (plan.apply && plan.apply.voice)
+            line("Voice: " + plan.apply.voice.kind + " — +" + plan.apply.voice.cost + " credits");
+          if (plan.apply && plan.apply.sound)
+            line("Sound: " + (SOUND_MODE_LABELS[plan.apply.sound.mode] || plan.apply.sound.mode) + " — +" + plan.apply.sound.cost + " credits");
+          if (plan.apply && plan.apply.aspect_ratio)
+            line("Format: " + plan.apply.aspect_ratio);
+          if (plan.engine && plan.engine.route)
+            line("Engine: " + plan.engine.route + (plan.engine.reason ? " — " + plan.engine.reason : ""));
+          summary.appendChild(ul);
+          var confBox = $("#autoPlanConflicts");
+          confBox.innerHTML = "";
+          (plan.conflicts || []).forEach(function (c, idx) {
+            var wrap = document.createElement("div");
+            wrap.className = "auto-conflict";
+            var q = document.createElement("p");
+            q.textContent = c.question || ("Conflict on " + c.field);
+            wrap.appendChild(q);
+            [["selected", "Keep my selected option (" + c.selected + ")"],
+             ["detected", "Follow the prompt (" + c.detected + ")"]].forEach(function (opt, oi) {
+              var lab = document.createElement("label");
+              lab.className = "check-row";
+              var inp = document.createElement("input");
+              inp.type = "radio";
+              inp.name = "auto-conflict-" + idx;
+              inp.value = opt[0];
+              if (oi === 0) inp.checked = true;
+              inp.setAttribute("data-field", c.field);
+              lab.appendChild(inp);
+              lab.appendChild(document.createTextNode(" " + opt[1]));
+              wrap.appendChild(lab);
+            });
+            confBox.appendChild(wrap);
+          });
+          $("#autoPlanCost").textContent = "Cost: base " + plan.base_cost + " + add-ons " + plan.addons_cost +
+            " = " + plan.total_cost + " credits";
+          $("#autoPlanNotes").textContent = (plan.notes || []).join(" ");
+          panel.hidden = false;
+          setGenerating(false);
+          setProgress(0, "AI Auto is waiting for your confirmation");
+          panel.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+        function resolveAutoConflicts() {
+          if (!pendingAuto) return null;
+          var plan = pendingAuto.plan, genBody = pendingAuto.genBody;
+          (plan.conflicts || []).forEach(function (c, idx) {
+            var chosen = document.querySelector('input[name="auto-conflict-' + idx + '"]:checked');
+            var promptWins = chosen && chosen.value === "detected";
+            if (!promptWins) {
+              if (c.field === "mode") plan.apply.style_suffix = "";
+              if (c.field === "aspect_ratio") plan.apply.aspect_ratio = c.selected;
               return;
             }
-            if (!res.ok || !res.data || !res.data.id) {
-              var title = res.status === 402 ? "Not enough credits"
-                : res.status === 429 ? "Rate limit reached"
-                : res.status === 502 ? "Video provider unavailable"
-                : res.status === 401 ? "Session expired"
-                : "Generation rejected";
-              if (res.status === 401) signOut(true);
-              failStudio(title, errText(res, "The server rejected the job"),
-                "HTTP " + res.status + " · Idempotency-Key: " + idemKey);
-              if (res.status === 402 || res.status === 429) loadMe();
-              return;
+            if (c.field === "mode") {
+              var newMode = c.detected === "cartoon" ? "cartoon" : "realistic";
+              plan.apply.mode = newMode;
+              genBody.mode = newMode;
+              genBody.style = (MODE_STYLES[newMode] || ["realistic"])[0];
+              state.mode = newMode; state.style = genBody.style;
+              renderControls(cfg || FALLBACK);
             }
-            state.currentJobId = res.data.id;
-            state.lastStudioJob = { id: res.data.id, prompt: prompt };
-            if (res.data.credits_left !== undefined) setCredits(res.data.credits_left);
-            setStage("submit", "done");
-            setStage("render", "active");
-            setProgress(30, "Job " + res.data.id + " accepted (" + (res.data.status || "queued") + ") — polling every 4s…");
-            state.pollCount = 0;
-            state.pollTimer = setTimeout(pollTick, 2000);
+            if (c.field === "aspect_ratio") {
+              plan.apply.aspect_ratio = c.detected;
+              genBody.aspect_ratio = c.detected;
+              state.aspect = c.detected; state.aspectExplicit = true;
+              renderControls(cfg || FALLBACK);
+            }
+          });
+          return plan;
+        }
+        $("#autoPlanConfirmBtn").addEventListener("click", function () {
+          if (!pendingAuto) return;
+          var plan = resolveAutoConflicts();
+          var submit = pendingAuto.submit;
+          pendingAuto = null;
+          $("#autoPlanPanel").hidden = true;
+          hidePlayer();
+          $("#previewEmpty").style.display = "none";
+          $("#previewProgress").classList.add("show");
+          resetStages(); setStage("submit", "active");
+          setProgress(8, "Submitting job…");
+          setGenerating(true);
+          submit(plan);
+        });
+        $("#autoPlanCancelBtn").addEventListener("click", function () {
+          if (!pendingAuto) return;
+          var submit = pendingAuto.submit;
+          pendingAuto = null;
+          $("#autoPlanPanel").hidden = true;
+          hidePlayer();
+          $("#previewEmpty").style.display = "none";
+          $("#previewProgress").classList.add("show");
+          resetStages(); setStage("submit", "active");
+          setProgress(8, "Submitting job with your manual settings…");
+          setGenerating(true);
+          submit(null);
+        });
+        var aiAutoToggle = $("#aiAutoToggle");
+        if (aiAutoToggle) {
+          aiAutoToggle.checked = state.auto;
+          aiAutoToggle.addEventListener("change", function () {
+            state.auto = aiAutoToggle.checked;
+            lsSet(LS_AUTO, state.auto ? "1" : "0");
+            toast(state.auto ? "AI Auto is ON — it will plan each video first (free)."
+                             : "AI Auto is OFF — your manual settings are used exactly as chosen.");
           });
         }
 
@@ -2145,6 +2333,10 @@
                 readyText += " Sound (" + (SOUND_MODE_LABELS[g.sound_mode] || g.sound_mode) + ") was applied.";
               if (g.sound_status === "failed_refunded")
                 readyText += " The sound step could not be completed, so its credits were refunded — the video itself is complete.";
+              if (g.auto_voice_status === "applied")
+                readyText += " The AI Auto voice step was applied.";
+              if (g.auto_voice_status === "failed_refunded")
+                readyText += " The AI Auto voice step could not be completed, so its credits were refunded — the video itself is complete.";
               var actions = showResult("ok", "Your video is ready",
                 readyText, "Job " + g.id + " · " + (g.style || state.style) + " · " + (g.aspect_ratio || state.aspect) + " · " + (g.duration || state.duration) + "s");
               actions.innerHTML = "";
@@ -2279,6 +2471,20 @@
               if (g.watermark_text) extras.push("watermark: " + (g.watermark_status || "pending"));
               modeLine.appendChild(document.createTextNode(extras.join(" · ")));
               main.appendChild(modeLine);
+              var autoPlanObj = g.auto_plan;
+              if (typeof autoPlanObj === "string") { try { autoPlanObj = JSON.parse(autoPlanObj); } catch (e) { autoPlanObj = null; } }
+              if (autoPlanObj) {
+                var apLine = document.createElement("p");
+                apLine.className = "job-meta";
+                var apDet = autoPlanObj.detected || {};
+                var apApply = autoPlanObj.apply || {};
+                apLine.textContent = "AI نے خود منتخب کیا: " + (apDet.content_class || "general") +
+                  (apApply.voice ? " · voice: " + apApply.voice.kind + " (" + apApply.voice.language + ")" : "") +
+                  (apApply.sound ? " · sound: " + apApply.sound.mode : "") +
+                  (autoPlanObj.engine && autoPlanObj.engine.route ? " · engine: " + autoPlanObj.engine.route : "") +
+                  (g.auto_voice_status ? " · voice step: " + g.auto_voice_status : "");
+                main.appendChild(apLine);
+              }
               if (g.prompt_language && g.prompt_language !== "en") {
                 var lg = document.createElement("p");
                 lg.className = "job-meta";
