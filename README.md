@@ -297,6 +297,71 @@ The test suite covers all of the above with stubbed providers only
 (`test-fal-stub.js`); the Azure path is code-complete but untested
 until the owner's key exists.
 
+## Sound system — auto sync sound, SFX & music (Phase B2, migration v11)
+
+Four fal-hosted engines (all schemas verified against fal.ai's own API
+docs on 2026-10-23; model ids are env-overridable):
+
+| Engine | Model (env) | Price (fal) | Add-on credits |
+|---|---|---|---|
+| Auto sync sound | `fal-ai/mmaudio-v2` (`SOUND_SYNC_MODEL`) | $0.001/s | **+10** |
+| Premium sync | `mirelo-ai/sfx2.0/video-to-audio` (`SOUND_SYNC_PREMIUM_MODEL`) | $0.010/s promo to 2026-12-13, then $0.015/s | **+25** (Pro / Extra Pro only) |
+| Sound effects | `fal-ai/elevenlabs/sound-effects/v2` (`SOUND_SFX_MODEL`) | $0.002/s | **+5** |
+| Music bed | `cassetteai/music-generator` (`SOUND_MUSIC_MODEL`) | $0.02/output min | **+5** |
+
+MMAudio takes the finished video's URL + a prompt and returns a
+finished MP4 whose audio track **is** the generated soundtrack (it
+replaces the original audio). Mirelo returns generated audio only —
+the server muxes it as the video's audio track; the model is designed
+to keep the video's existing speech (`preserve_speech: true`,
+`num_samples: 1`). ElevenLabs SFX takes the field literally named
+`text` plus `duration_seconds` and returns an MP3; CassetteAI takes
+`prompt` + `duration` and returns a WAV — the server appends
+"instrumental, no vocals" to every music prompt. Standalone audio
+lives under `data/sounds/` (env `SOUNDS_DIR`), served at
+`/files/sounds/`.
+
+**Three flows.** (1) Generate-time: `POST /api/generate` accepts an
+optional `sound: {mode: sync|sfx|music, prompt?, volume?}` — one
+combined atomic charge (video + add-on, daily cap and balance checked
+on the total); the video generates first, then the sound step runs
+before the completed video is shown. Sync is applied as returned
+(an ffmpeg gain pass runs only when volume ≠ 100); SFX/music are
+generated and ffmpeg-mixed **under** the video's original audio at the
+chosen volume (`amix`, normalize off) — if the video has no audio
+stream, the new track simply becomes its track. (2) Apply to an
+existing video: `POST /api/sound/apply` with
+`{generation_id, mode: sync|premium_sync|sfx|music, prompt?, volume?}`
+creates a new History entry (`kind: "sound"`, linked via
+`source_generation_id`); premium sync is gated to the Pro/Extra Pro
+plans. (3) Audio only: `POST /api/sound/generate` with
+`{kind: sfx|music, prompt, duration_seconds}` (SFX 1–22s, default 10;
+music 10–60s, default 30) returns a playable/downloadable audio file.
+
+**Money rules.** Sound prompts go through the same
+translate-to-English pipeline as video prompts (any of the 7 prompt
+languages) **before** charging — a translation failure charges
+nothing. If the sound step fails after the video succeeded, the video
+is still delivered as a normal completed generation, the add-on is
+refunded exactly once, and the row is honestly marked
+`sound_status: 'failed_refunded'` (its `cost_credits` drops back to
+the video-only price). Standalone sound jobs charge through the same
+charge/refund machinery as voice jobs and refund in full on failure.
+Fail-closed: with `SOUND_ENABLED=0` (or no `FAL_KEY`) the sound
+endpoints return `503 sound_not_configured` and charge nothing.
+
+**Honest limits (stated in the app copy too).** No engine accepts
+timestamped events ("brake at 3.2s") — synchronization is the model's
+own estimate from the picture, not a frame-accurate guarantee. Sound
+categories (laughter, animals, vehicles…) are not documented on any
+fal page; only example prompts exist. Urdu/Hindi sound prompts are
+unverified on the audio models, which is why they are translated to
+English first. Commercial licensing terms were **not** stated on the
+fal pages checked — verify each provider's terms before commercial
+launch. And per the owner's rule, sound quality is **unproven** until
+real samples are generated on a funded fal.ai balance and reviewed —
+the suite covers everything above with stubs only.
+
 ## Test results (backend, 2026-10-20)
 Run locally with `bash test.sh` — **19/19 tests passed** with a dummy key (no paid calls):
 - ✅ health + config endpoint exposes no secrets

@@ -179,6 +179,21 @@ const CONFIG = {
   // global daily guard so previews can't run up provider cost.
   voicePreviewDailyCap: Number(process.env.VOICE_PREVIEW_DAILY_CAP || 5),
   voicePreviewGlobalDailyCap: Number(process.env.VOICE_PREVIEW_GLOBAL_DAILY_CAP || 500),
+  // --- Sound system (Phase B2: auto sync sound, SFX, music) ----------------
+  // Standalone generated audio files live here, served from /files/sounds/.
+  soundsDir: process.env.SOUNDS_DIR || path.join(__dirname, 'data', 'sounds'),
+  // Sound engines on fal (schemas verified against fal's API docs
+  // 2026-10-23 — see the sound-system section below). All env-overridable.
+  soundSyncModel: (process.env.SOUND_SYNC_MODEL || 'fal-ai/mmaudio-v2').trim(),
+  soundSyncPremiumModel: (process.env.SOUND_SYNC_PREMIUM_MODEL || 'mirelo-ai/sfx2.0/video-to-audio').trim(),
+  soundSfxModel: (process.env.SOUND_SFX_MODEL || 'fal-ai/elevenlabs/sound-effects/v2').trim(),
+  soundMusicModel: (process.env.SOUND_MUSIC_MODEL || 'cassetteai/music-generator').trim(),
+  // Locked owner rates for the sound add-ons (credits).
+  soundCosts: { sync: 10, premium_sync: 25, sfx: 5, music: 5 },
+  // Master switch: SOUND_ENABLED=0 turns the whole sound system off (the
+  // endpoints then fail closed with 503 and charge nothing). The engines
+  // all ride the FAL_KEY, so no key also means not configured.
+  soundEnabled: process.env.SOUND_ENABLED !== '0',
 };
 
 // ---------- Prompt languages ----------
@@ -508,6 +523,24 @@ const MIGRATIONS = [
       error TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );` },
+  // v11 — sound system (Phase B2): generations gain the sound add-on
+  // bookkeeping. sound_mode is the engine the user picked ('sync' |
+  // 'premium_sync' | 'sfx' | 'music'; NULL when no sound was requested);
+  // sound_status tracks the honest outcome: 'none' (no sound) |
+  // 'pending' (video not finished yet — the sound step runs when it
+  // completes) | 'processing' (a standalone sound job is running) |
+  // 'applied' | 'failed_refunded' (the sound step failed, the video was
+  // still delivered and the add-on was refunded). sound_prompt is the
+  // English text actually sent to the sound engine, sound_volume the
+  // 10–100 level, and sound_cost the add-on credits charged for the step
+  // (kept separate from cost_credits so a failed sound step can refund
+  // exactly the add-on and nothing more).
+  { version: 11, up: `
+    ALTER TABLE generations ADD COLUMN sound_mode TEXT;
+    ALTER TABLE generations ADD COLUMN sound_status TEXT NOT NULL DEFAULT 'none';
+    ALTER TABLE generations ADD COLUMN sound_prompt TEXT;
+    ALTER TABLE generations ADD COLUMN sound_volume INTEGER;
+    ALTER TABLE generations ADD COLUMN sound_cost INTEGER NOT NULL DEFAULT 0;` },
 ];
 {
   const applied = new Set(db.prepare('SELECT version FROM schema_migrations').all().map(r => r.version));
@@ -775,6 +808,10 @@ const joinLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 10,
 const voiceLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 30,
   keyGenerator: (req) => String(req.user?.id || req.ip),
   message: { error: 'Rate limit: max 30 voice requests per hour.' } });
+// Sound endpoints call paid audio providers — limited per signed-in user.
+const soundLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 30,
+  keyGenerator: (req) => String(req.user?.id || req.ip),
+  message: { error: 'Rate limit: max 30 sound requests per hour.' } });
 
 function auth(req, res, next) {
   const token = (req.headers.authorization || '').replace('Bearer ', '');
@@ -841,6 +878,22 @@ app.get('/api/config', (req, res) => res.json({
     costs: { lipsync_credits: CONFIG.lipsyncCost, voiceover_credits: CONFIG.voiceoverCost },
     preview: { max_chars: VOICE_PREVIEW_MAX_CHARS, daily_cap: CONFIG.voicePreviewDailyCap },
     lipsync_models: { image: CONFIG.lipsyncImageModel, video: CONFIG.lipsyncVideoModel },
+  },
+  // Sound system (Phase B2): whether the sound engines are configured
+  // (booleans only, never keys), the locked credit costs of each sound
+  // mode, and which modes each flow offers. When not configured the app
+  // shows a notice instead of dead buttons and the endpoints answer 503.
+  sound: {
+    configured: soundConfigured(),
+    costs: { sync: CONFIG.soundCosts.sync, premium_sync: CONFIG.soundCosts.premium_sync,
+             sfx: CONFIG.soundCosts.sfx, music: CONFIG.soundCosts.music },
+    modes: ['sync', 'premium_sync', 'sfx', 'music'],
+    generate_modes: ['sync', 'sfx', 'music'],
+    apply_modes: ['sync', 'premium_sync', 'sfx', 'music'],
+    audio_only_kinds: ['sfx', 'music'],
+    default_volume: SOUND_DEFAULT_VOLUME,
+    models: { sync: CONFIG.soundSyncModel, premium_sync: CONFIG.soundSyncPremiumModel,
+              sfx: CONFIG.soundSfxModel, music: CONFIG.soundMusicModel },
   },
 }));
 app.get('/api/health', (req, res) => res.json({ ok: true, model: CONFIG.model }));
@@ -1023,6 +1076,38 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
     watermarkText = candidate;
     watermarkStatus = 'pending';
   }
+  // Optional sound add-on (Phase B2): { mode: 'sync' | 'sfx' | 'music',
+  // prompt?, volume? }. The sound step runs AFTER the video itself
+  // succeeds (see ensureSoundApplied): sync replaces the video's audio
+  // with an AI soundtrack generated from the finished video; sfx/music
+  // are mixed UNDER the video's original audio at the chosen volume.
+  // Validation, the configured check and prompt moderation all happen
+  // here, and translation below — always BEFORE any credit is charged.
+  let soundSpec = null;
+  if (req.body?.sound !== undefined && req.body?.sound !== null) {
+    const s = (typeof req.body.sound === 'object') ? req.body.sound : {};
+    const smode = String(s.mode || '').toLowerCase();
+    if (!SOUND_GENERATE_MODES.includes(smode))
+      return res.status(400).json({ error: `sound.mode must be one of: ${SOUND_GENERATE_MODES.join(', ')}` });
+    if (!soundConfigured())
+      return res.status(503).json({ error: 'sound_not_configured', message: SOUND_NOT_CONFIGURED_MSG });
+    let svol = SOUND_DEFAULT_VOLUME[smode];
+    if (s.volume !== undefined && s.volume !== null && s.volume !== '') {
+      svol = Number(s.volume);
+      if (!Number.isFinite(svol) || svol < 10 || svol > 100)
+        return res.status(400).json({ error: 'sound.volume must be between 10 and 100.' });
+      svol = Math.round(svol);
+    }
+    let sPromptRaw = null;
+    if (s.prompt !== undefined && s.prompt !== null && String(s.prompt).trim()) {
+      sPromptRaw = String(s.prompt).trim();
+      if (sPromptRaw.length > 500)
+        return res.status(400).json({ error: 'sound.prompt must be at most 500 characters.' });
+      if (moderated(sPromptRaw))
+        return res.status(400).json({ error: 'The sound description was blocked by content moderation. Please rephrase it.' });
+    }
+    soundSpec = { mode: smode, volume: svol, promptRaw: sPromptRaw, prompt: null };
+  }
   // Optional image-to-video: the source image must be one of THIS user's
   // uploads (see POST /api/uploads/image). It is sent to the verified H3
   // image-to-video endpoint in its documented `image_url` field as a
@@ -1059,6 +1144,25 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
     if (moderated(translatedPrompt))
       return res.status(400).json({ error: 'This prompt was blocked by content moderation. Please rephrase it.' });
     effectivePrompt = translatedPrompt;
+  }
+
+  // The sound description goes through the SAME translation step as the
+  // video prompt (the sound engines are documented with English prompts)
+  // — still before any charge, so a failed translation costs nothing.
+  // With no description of its own, the sound step reuses the video's
+  // effective (English) prompt.
+  if (soundSpec) {
+    if (soundSpec.promptRaw && TRANSLATED_LANGUAGES.has(languageCode)) {
+      try {
+        soundSpec.prompt = await translatePrompt(soundSpec.promptRaw, languageCode);
+      } catch {
+        return res.status(502).json({ error: 'We could not translate your sound description into English, so nothing was charged. Please try again.' });
+      }
+      if (moderated(soundSpec.prompt))
+        return res.status(400).json({ error: 'The sound description was blocked by content moderation. Please rephrase it.' });
+    } else {
+      soundSpec.prompt = soundSpec.promptRaw || effectivePrompt;
+    }
   }
 
   // --- Plan routing -------------------------------------------------------
@@ -1098,6 +1202,12 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
   // Rate card (v9): the credit cost comes from the ROUTED quality's own
   // row — 768P 10/20, 2K 15/30, native 4K 40/80 for 5s/10s.
   const cost = generationCost(resolution, Number(duration));
+  // The sound add-on is charged together with the video in the same
+  // atomic transaction (exactly once). If the video fails, the whole
+  // amount is refunded by failAndRefund; if only the sound step fails,
+  // just the add-on is refunded (see ensureSoundApplied).
+  const soundCost = soundSpec ? CONFIG.soundCosts[soundSpec.mode] : 0;
+  const totalCost = cost + soundCost;
 
   // Duplicate-request protection: same idempotency key returns the existing
   // job — no second charge, no second fal.ai submission.
@@ -1115,12 +1225,14 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
       const spentToday = db.prepare(
         `SELECT COALESCE(SUM(cost_credits),0) AS s FROM generations
          WHERE user_id = ? AND date(created_at) = date('now') AND status != 'failed'`).get(user.id).s;
-      if (spentToday + cost > CONFIG.maxDailyCredits) throw Object.assign(new Error('DAILY_LIMIT'), { status: 429 });
-      if (creditBuckets(user).total < cost) throw Object.assign(new Error('NO_CREDITS'), { status: 402 });
-      spendBuckets(user, cost); // plan credits first, then free credits
+      if (spentToday + totalCost > CONFIG.maxDailyCredits) throw Object.assign(new Error('DAILY_LIMIT'), { status: 429 });
+      if (creditBuckets(user).total < totalCost) throw Object.assign(new Error('NO_CREDITS'), { status: 402 });
+      spendBuckets(user, totalCost); // plan credits first, then free credits
       const info = db.prepare(
-        `INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, cost_credits, idempotency_key, resolution, model, prompt_language, translated_prompt, mode, source_image_path, watermark_text, watermark_status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(user.id, prompt.trim(), aspect_ratio, Number(duration), style, cost, idemKey, resolution, model, languageCode, translatedPrompt, mode, sourceImagePath, watermarkText, watermarkStatus);
+        `INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, cost_credits, idempotency_key, resolution, model, prompt_language, translated_prompt, mode, source_image_path, watermark_text, watermark_status, sound_mode, sound_status, sound_prompt, sound_volume, sound_cost)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(user.id, prompt.trim(), aspect_ratio, Number(duration), style, totalCost, idemKey, resolution, model, languageCode, translatedPrompt, mode, sourceImagePath, watermarkText, watermarkStatus,
+           soundSpec ? soundSpec.mode : null, soundSpec ? 'pending' : 'none',
+           soundSpec ? soundSpec.prompt : null, soundSpec ? soundSpec.volume : null, soundCost);
       return Number(info.lastInsertRowid);
     });
   } catch (e) {
@@ -1168,9 +1280,11 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
                 updated_at = datetime('now') WHERE id = ?`).run(data.request_id, jobId);
     const me = db.prepare('SELECT credits FROM users WHERE id = ?').get(req.user.id);
     res.json({ id: jobId, status: 'in_progress', credits_left: me.credits,
-               cost_credits: cost, resolution, model, prompt_language: languageCode,
+               cost_credits: totalCost, resolution, model, prompt_language: languageCode,
                mode, source_image_path: sourceImagePath,
                watermark_status: watermarkStatus,
+               ...(soundSpec ? { sound_mode: soundSpec.mode, sound_status: 'pending',
+                                 sound_cost_credits: soundCost } : {}),
                ...(translatedPrompt ? { translated_prompt: translatedPrompt } : {}),
                ...(fallbackNote ? { note: fallbackNote } : {}) });
   } catch (e) {
@@ -1275,7 +1389,13 @@ app.get('/api/generations/:id', auth, async (req, res) => {
   const job = db.prepare('SELECT * FROM generations WHERE id = ? AND user_id = ?')
     .get(req.params.id, req.user.id);
   if (!job) return res.status(404).json({ error: 'Generation not found.' });
-  if (job.status === 'completed') return res.json(await ensureWatermarkApplied(job));
+  if (job.status === 'completed') {
+    // A pending sound step (e.g. the completing poll was interrupted)
+    // still runs — before the watermark, so both can apply to one video.
+    if (job.sound_status === 'pending')
+      await ensureSoundApplied(job, CONFIG.publicBaseUrl || `${req.protocol}://${req.get('host')}`);
+    return res.json(await ensureWatermarkApplied(job));
+  }
   if (job.status === 'failed' || !job.fal_request_id)
     return res.json(job);
   const jobModel = job.model || CONFIG.model; // jobs remember their routed model
@@ -1293,6 +1413,12 @@ app.get('/api/generations/:id', auth, async (req, res) => {
           db.prepare(`UPDATE generations SET status = 'completed', video_url = ?,
                       updated_at = datetime('now') WHERE id = ?`).run(url, job.id);
           job.status = 'completed'; job.video_url = url;
+          // If this job asked for sound, run the sound step BEFORE the
+          // client sees the completed video: applied, or honestly marked
+          // failed_refunded with the video still delivered (the add-on
+          // is refunded inside ensureSoundApplied).
+          if (job.sound_status === 'pending')
+            await ensureSoundApplied(job, CONFIG.publicBaseUrl || `${req.protocol}://${req.get('host')}`);
           // If this job asked for a watermark, post-process BEFORE the
           // client sees the completed video (applied or honestly failed).
           if (job.watermark_text && job.watermark_status === 'pending')
@@ -2156,6 +2282,422 @@ app.post('/api/voice/voiceover', auth, voiceLimiter, async (req, res) => {
   }
 });
 
+// ==========================================================================
+// Sound system (Phase B2) — auto sync sound, sound effects, music beds
+// ==========================================================================
+// Engines (all on fal, all server-side; schemas verified against fal's
+// own API docs / llms.txt on 2026-10-23):
+//   sync (MMAudio V2, fal-ai/mmaudio-v2, $0.001/s) — video-to-video:
+//     inputs video_url + prompt (both required), duration (float 1–30);
+//     returns { video: { url } } — a finished MP4 whose audio track IS
+//     the generated soundtrack (it REPLACES the video's original audio).
+//   premium_sync (Mirelo SFX 2.0, mirelo-ai/sfx2.0/video-to-audio,
+//     $0.010/s promo until 2026-12-13, then $0.015/s) — inputs video_url
+//     (required), text_prompt (optional), preserve_speech (bool, default
+//     true — the existing speech is kept inside the model's output),
+//     num_samples (pinned to 1; each sample is billed), duration (1–600);
+//     returns { audio: [{ url }] } — audio only, muxed here as the
+//     video's audio track. Pro / Extra Pro plans only.
+//   sfx (ElevenLabs Sound Effects v2, fal-ai/elevenlabs/sound-effects/v2,
+//     $0.002/s) — inputs text (required; the field is literally `text`),
+//     duration_seconds (0.5–22), loop, prompt_influence; returns
+//     { audio: { url } } (MP3).
+//   music (CassetteAI Music Generator, cassetteai/music-generator,
+//     $0.02 per output minute) — inputs prompt + duration (int 10–180);
+//     returns { audio_file: { url } } (WAV). The prompt is suffixed with
+//     "instrumental, no vocals" server-side: beds must not sing over the
+//     user's video.
+// HONEST LIMITS: no engine accepts a timestamped event list, so event
+// timing is the model's own estimate — never guaranteed. Sync modes
+// replace the original audio (premium preserves speech by design); sfx
+// and music are mixed UNDER the original audio at the chosen volume.
+// Commercial licensing terms are not stated on fal's model pages.
+// FAIL CLOSED: with no FAL_KEY (or SOUND_ENABLED=0) the sound endpoints
+// answer 503 (sound_not_configured) and charge nothing.
+const SOUND_GENERATE_MODES = ['sync', 'sfx', 'music'];
+const SOUND_APPLY_MODES = ['sync', 'premium_sync', 'sfx', 'music'];
+const SOUND_DEFAULT_VOLUME = { sync: 100, premium_sync: 100, sfx: 60, music: 30 };
+const SOUND_NOT_CONFIGURED_MSG =
+  'Sound features are not configured on this server yet — the sound engines are unavailable, so nothing was charged.';
+
+function soundConfigured() {
+  return !!FAL_KEY && CONFIG.soundEnabled;
+}
+
+// Test hook: with TEST_RECORD_FAL_BODY=1 every outgoing sync-API sound
+// request (SFX / music) is recorded here so test.sh can assert the exact
+// shapes without a real provider call. Queue-based engines (sync /
+// premium sync) are recorded by runFalQueueJob into the voice-call log,
+// exactly like the lip-sync jobs.
+const soundCallLog = [];
+function recordSoundCall(entry) {
+  if (process.env.TEST_RECORD_FAL_BODY === '1') soundCallLog.push(entry);
+}
+if (process.env.TEST_RECORD_FAL_BODY === '1') {
+  app.get('/api/_test/sound-calls', (req, res) => res.json({ calls: soundCallLog }));
+}
+
+// Generate ONE sound audio file with the SFX or music engine (sync fal
+// API, like the TTS providers) and return its URL.
+async function generateSoundAudioUrl(kind, prompt, durationSeconds) {
+  let model, body;
+  if (kind === 'sfx') {
+    model = CONFIG.soundSfxModel;
+    body = { text: prompt, duration_seconds: durationSeconds, loop: false };
+  } else {
+    model = CONFIG.soundMusicModel;
+    body = { prompt: `${prompt} — instrumental, no vocals`,
+             duration: Math.round(durationSeconds) };
+  }
+  recordSoundCall({ kind: 'sound', engine: kind, model, body });
+  const r = await fetch(`${CONFIG.falApiBase}/${model}`, {
+    method: 'POST',
+    headers: { 'Authorization': `Key ${FAL_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body), signal: AbortSignal.timeout(120000),
+  });
+  if (!r.ok) throw new Error(`Sound provider returned ${r.status}`);
+  const data = await r.json();
+  const url = kind === 'sfx' ? data?.audio?.url : data?.audio_file?.url;
+  if (!url) throw new Error('Sound provider returned no audio');
+  return url;
+}
+
+async function downloadAudioToFile(url, dest) {
+  const r = await fetch(url, { signal: AbortSignal.timeout(60000) });
+  if (!r.ok) throw new Error('Could not download the generated audio');
+  const buf = Buffer.from(await r.arrayBuffer());
+  if (buf.length === 0) throw new Error('The generated audio was empty');
+  fs.writeFileSync(dest, buf);
+}
+
+// fal fetches media itself, so engine inputs must be absolute URLs: fal
+// CDN URLs pass through; our own /files/... paths get the public base.
+function absoluteMediaUrl(url, baseUrl) {
+  if (/^https?:\/\//i.test(url)) return url;
+  return `${baseUrl}${url.startsWith('/') ? '' : '/'}${url}`;
+}
+
+// Run the sound step for one video and return { videoUrl } of the
+// sounded version. Throws on any failure — callers decide the refund.
+//   sync / premium_sync REPLACE the audio track (see the header notes);
+//   sfx / music mix the generated audio UNDER the original track.
+async function produceSoundedVideo({ sourceUrl, duration, mode, prompt, volume, baseUrl }) {
+  const vol = Math.min(100, Math.max(10, Number(volume) || 100));
+  const vf = String(vol / 100);
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ajk-sound-'));
+  try {
+    if (mode === 'sync') {
+      const result = await runFalQueueJob(CONFIG.soundSyncModel, {
+        video_url: absoluteMediaUrl(sourceUrl, baseUrl),
+        prompt, duration: Math.min(30, Math.max(1, Number(duration) || 5)),
+      });
+      const outUrl = result?.video?.url || result?.data?.video?.url || null;
+      if (!outUrl) throw new Error('Sync sound provider returned no video');
+      if (vol === 100) return { videoUrl: outUrl };
+      // Below full volume the soundtrack gets an ffmpeg gain pass.
+      const inFile = path.join(work, 'sync-in.mp4');
+      await downloadClip(outUrl, inFile, { left: JOIN_MAX_BYTES });
+      const probe = await probeMedia(inFile);
+      if (!probe.hasAudio) return { videoUrl: outUrl }; // nothing to attenuate
+      fs.mkdirSync(CONFIG.generatedDir, { recursive: true });
+      const name = `${randomUUID()}.mp4`;
+      const outFile = path.join(CONFIG.generatedDir, name);
+      try {
+        await runFfmpeg(['-y', '-i', inFile, '-map', '0:v:0', '-map', '0:a:0',
+                         '-c:v', 'copy', '-af', `volume=${vf}`, '-c:a', 'aac', outFile]);
+      } catch { // stream copy can fail on exotic codecs — re-encode
+        await runFfmpeg(['-y', '-i', inFile, '-map', '0:v:0', '-map', '0:a:0',
+                         '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
+                         '-af', `volume=${vf}`, '-c:a', 'aac', outFile]);
+      }
+      return { videoUrl: `/files/generated/${name}` };
+    }
+    if (mode === 'premium_sync') {
+      const body = { video_url: absoluteMediaUrl(sourceUrl, baseUrl),
+                     preserve_speech: true, num_samples: 1,
+                     duration: Math.min(600, Math.max(1, Number(duration) || 10)) };
+      if (prompt) body.text_prompt = prompt;
+      const result = await runFalQueueJob(CONFIG.soundSyncPremiumModel, body);
+      const audioUrl = result?.audio?.[0]?.url || result?.data?.audio?.[0]?.url || null;
+      if (!audioUrl) throw new Error('Premium sync provider returned no audio');
+      const srcFile = path.join(work, 'source.mp4');
+      await downloadClip(sourceUrl, srcFile, { left: JOIN_MAX_BYTES });
+      const audFile = path.join(work, 'premium-audio');
+      await downloadAudioToFile(audioUrl, audFile);
+      fs.mkdirSync(CONFIG.generatedDir, { recursive: true });
+      const name = `${randomUUID()}.mp4`;
+      const outFile = path.join(CONFIG.generatedDir, name);
+      const gain = vol !== 100 ? ['-af', `volume=${vf}`] : [];
+      try {
+        await runFfmpeg(['-y', '-i', srcFile, '-i', audFile,
+                         '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy',
+                         ...gain, '-c:a', 'aac', '-shortest', outFile]);
+      } catch {
+        await runFfmpeg(['-y', '-i', srcFile, '-i', audFile,
+                         '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'libx264',
+                         '-preset', 'veryfast', '-crf', '20',
+                         ...gain, '-c:a', 'aac', '-shortest', outFile]);
+      }
+      const probe = await probeMedia(outFile);
+      if (!probe.hasAudio) throw new Error('Premium sync render produced no audio track');
+      return { videoUrl: `/files/generated/${name}` };
+    }
+    // sfx | music — mix under the original audio.
+    const reqDur = mode === 'sfx'
+      ? Math.min(22, Math.max(0.5, Number(duration) || 10))
+      : Math.min(180, Math.max(10, Math.round(Number(duration) || 10)));
+    const audioUrl = await generateSoundAudioUrl(mode, prompt, reqDur);
+    const srcFile = path.join(work, 'source.mp4');
+    await downloadClip(sourceUrl, srcFile, { left: JOIN_MAX_BYTES });
+    const audFile = path.join(work, mode === 'sfx' ? 'sfx.mp3' : 'music.wav');
+    await downloadAudioToFile(audioUrl, audFile);
+    const probe = await probeMedia(srcFile);
+    const dur = probe.duration;
+    // The generated track is gained to the chosen volume, padded/trimmed
+    // to the video's length, and (when the video has a track) mixed under
+    // the original at full level — amix normalize=0 keeps the original
+    // untouched. A silent video (e.g. the native-4K route) simply gains
+    // the new track as its audio.
+    const mixFilter = probe.hasAudio
+      ? `[0:a]volume=1[a0];[1:a]volume=${vf},apad,atrim=0:${dur}[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]`
+      : `[1:a]volume=${vf},apad,atrim=0:${dur}[aout]`;
+    fs.mkdirSync(CONFIG.generatedDir, { recursive: true });
+    const name = `${randomUUID()}.mp4`;
+    const outFile = path.join(CONFIG.generatedDir, name);
+    try {
+      await runFfmpeg(['-y', '-i', srcFile, '-i', audFile,
+                       '-filter_complex', mixFilter,
+                       '-map', '0:v:0', '-map', '[aout]', '-c:v', 'copy', '-c:a', 'aac', outFile]);
+    } catch {
+      await runFfmpeg(['-y', '-i', srcFile, '-i', audFile,
+                       '-filter_complex', mixFilter,
+                       '-map', '0:v:0', '-map', '[aout]', '-c:v', 'libx264',
+                       '-preset', 'veryfast', '-crf', '20', '-c:a', 'aac', outFile]);
+    }
+    const outProbe = await probeMedia(outFile);
+    if (!outProbe.hasAudio) throw new Error('Sound mix produced no audio track');
+    return { videoUrl: `/files/generated/${name}` };
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+}
+
+// ---------- Generate-time sound post-processing ---------------------------
+// Mirrors ensureWatermarkApplied: when a generation that asked for sound
+// completes, the sound step runs before the client sees the video. If
+// the step fails, the VIDEO IS STILL DELIVERED exactly as generated —
+// only the sound add-on is refunded (exactly once: the refund happens
+// only in the UPDATE that flips sound_status away from 'pending') and
+// the row is honestly marked sound_status='failed_refunded'.
+const soundInFlight = new Set();
+async function ensureSoundApplied(job, baseUrl) {
+  if (!job || job.status !== 'completed' || !job.video_url) return job;
+  if (job.sound_status !== 'pending' || !job.sound_mode) return job;
+  if (soundInFlight.has(job.id)) return job;
+  soundInFlight.add(job.id);
+  try {
+    const out = await produceSoundedVideo({
+      sourceUrl: job.video_url, duration: job.duration, mode: job.sound_mode,
+      prompt: job.sound_prompt || job.translated_prompt || job.prompt,
+      volume: job.sound_volume ?? SOUND_DEFAULT_VOLUME[job.sound_mode] ?? 100,
+      baseUrl,
+    });
+    db.prepare(`UPDATE generations SET video_url = ?, sound_status = 'applied',
+                updated_at = datetime('now') WHERE id = ? AND sound_status = 'pending'`)
+      .run(out.videoUrl, job.id);
+  } catch (e) {
+    console.error(`sound step failed for generation ${job.id}:`, e.message);
+    const sc = Number(job.sound_cost) || 0;
+    const changed = db.prepare(`UPDATE generations SET sound_status = 'failed_refunded',
+                  cost_credits = cost_credits - ?, updated_at = datetime('now')
+                  WHERE id = ? AND sound_status = 'pending'`).run(sc, job.id);
+    if (Number(changed.changes) === 1 && sc > 0)
+      tx(() => refundBuckets(job.user_id, sc));
+  } finally {
+    soundInFlight.delete(job.id);
+  }
+  const fresh = db.prepare('SELECT * FROM generations WHERE id = ?').get(job.id);
+  if (fresh) Object.assign(job, fresh);
+  return job;
+}
+
+// ---------- Shared request parsing for the sound endpoints ----------------
+function parseSoundVolume(value, mode) {
+  if (value === undefined || value === null || value === '')
+    return SOUND_DEFAULT_VOLUME[mode] ?? 100;
+  const v = Number(value);
+  if (!Number.isFinite(v) || v < 10 || v > 100)
+    throw Object.assign(new Error('volume must be between 10 and 100.'), { status: 400 });
+  return Math.round(v);
+}
+// Validate + (when needed) translate a sound description BEFORE charging,
+// exactly like generation prompts: the description may be written in any
+// of the 7 prompt languages; the engines are fed English. `fallback` is
+// used when no description was given (may itself be null for premium
+// sync, whose text guidance is optional). Throws { status, error }.
+async function resolveSoundPrompt({ rawPrompt, language, fallback }) {
+  const languageCode = String(language || 'en').toLowerCase();
+  if (!PROMPT_LANGUAGES.some(l => l.code === languageCode))
+    throw Object.assign(new Error(`language must be one of: ${PROMPT_LANGUAGES.map(l => l.code).join(', ')}`), { status: 400 });
+  const raw = rawPrompt !== undefined && rawPrompt !== null && String(rawPrompt).trim()
+    ? String(rawPrompt).trim() : null;
+  if (raw && raw.length > 500)
+    throw Object.assign(new Error('The sound description must be at most 500 characters.'), { status: 400 });
+  if (raw && moderated(raw))
+    throw Object.assign(new Error('The sound description was blocked by content moderation. Please rephrase it.'), { status: 400 });
+  if (!raw) return { prompt: fallback || null, translated: null, languageCode, raw: null };
+  if (TRANSLATED_LANGUAGES.has(languageCode)) {
+    let translated;
+    try { translated = await translatePrompt(raw, languageCode); }
+    catch { throw Object.assign(new Error('We could not translate your sound description into English, so nothing was charged. Please try again.'), { status: 502 }); }
+    if (moderated(translated))
+      throw Object.assign(new Error('The sound description was blocked by content moderation. Please rephrase it.'), { status: 400 });
+    return { prompt: translated, translated, languageCode, raw };
+  }
+  return { prompt: raw, translated: null, languageCode, raw };
+}
+function soundEngineModel(mode) {
+  return mode === 'sync' ? CONFIG.soundSyncModel
+    : mode === 'premium_sync' ? CONFIG.soundSyncPremiumModel
+    : mode === 'sfx' ? CONFIG.soundSfxModel : CONFIG.soundMusicModel;
+}
+
+// ---------- Apply sound to a finished video -------------------------------
+// Same engines/mixing as generate-time sound. sync and premium_sync
+// REPLACE the video's audio track (premium keeps the dialogue inside
+// the model output); sfx/music mix under it. The result is a NEW
+// History entry (kind 'sound') linked to the source generation.
+app.post('/api/sound/apply', auth, soundLimiter, async (req, res) => {
+  const b = req.body || {};
+  if (!soundConfigured())
+    return res.status(503).json({ error: 'sound_not_configured', message: SOUND_NOT_CONFIGURED_MSG });
+  const sourceGen = db.prepare('SELECT * FROM generations WHERE id = ? AND user_id = ?')
+    .get(Number(b.generation_id), req.user.id);
+  if (!sourceGen) return res.status(404).json({ error: 'Generation not found.' });
+  if (sourceGen.status !== 'completed' || !sourceGen.video_url)
+    return res.status(400).json({ error: 'Only a completed video can get sound.' });
+  if (sourceGen.kind === 'sound' && !sourceGen.source_generation_id)
+    return res.status(400).json({ error: 'That history entry is an audio file, not a video — sound can only be applied to a video.' });
+  const mode = String(b.mode || '').toLowerCase();
+  if (!SOUND_APPLY_MODES.includes(mode))
+    return res.status(400).json({ error: `mode must be one of: ${SOUND_APPLY_MODES.join(', ')}` });
+  if (mode === 'premium_sync') {
+    refreshSubscriptionState(req.user.id);
+    const sub = currentSubscription(req.user.id);
+    const plan = sub ? getPlan(sub.plan_id) : null;
+    if (!plan || !['pro', 'extrapro'].includes(plan.id))
+      return res.status(403).json({ error: 'Premium sync sound needs the Pro or Extra Pro plan. Upgrade your plan to keep the dialogue and add a premium soundtrack.' });
+  }
+  let volume, resolved;
+  try {
+    volume = parseSoundVolume(b.volume, mode);
+    resolved = await resolveSoundPrompt({
+      rawPrompt: b.prompt, language: b.language,
+      fallback: mode === 'sync' ? (sourceGen.translated_prompt || sourceGen.prompt) : null,
+    });
+  } catch (e) { return res.status(e.status || 400).json({ error: e.message }); }
+  // sfx/music always need a description: fall back to the source prompt.
+  const effectivePrompt = resolved.prompt || sourceGen.translated_prompt || sourceGen.prompt;
+  const cost = CONFIG.soundCosts[mode];
+  let jobId;
+  try {
+    jobId = chargeVoiceGeneration(req.user.id, {
+      cost,
+      prompt: `Sound (${mode}): ${resolved.raw || effectivePrompt}`.slice(0, 500),
+      aspectRatio: sourceGen.aspect_ratio, duration: sourceGen.duration,
+      style: sourceGen.style, model: soundEngineModel(mode), kind: 'sound',
+      sourceGenerationId: sourceGen.id,
+      promptLanguage: resolved.languageCode,
+      translatedPrompt: resolved.translated,
+    });
+  } catch (e) { return res.status(e.status || 500).json({ error: e.message }); }
+  db.prepare(`UPDATE generations SET sound_mode = ?, sound_prompt = ?, sound_volume = ?,
+              sound_status = 'processing', sound_cost = ? WHERE id = ?`)
+    .run(mode, effectivePrompt, volume, cost, jobId);
+  try {
+    const base = CONFIG.publicBaseUrl || `${req.protocol}://${req.get('host')}`;
+    const out = await produceSoundedVideo({
+      sourceUrl: sourceGen.video_url, duration: sourceGen.duration, mode,
+      // Premium sync's text guidance is optional: pass only what was given.
+      prompt: mode === 'premium_sync' ? resolved.prompt : effectivePrompt,
+      volume, baseUrl: base,
+    });
+    db.prepare(`UPDATE generations SET status = 'completed', video_url = ?,
+                sound_status = 'applied', updated_at = datetime('now') WHERE id = ?`)
+      .run(out.videoUrl, jobId);
+    const row = db.prepare('SELECT * FROM generations WHERE id = ?').get(jobId);
+    const me = db.prepare('SELECT credits FROM users WHERE id = ?').get(req.user.id);
+    res.status(201).json({ generation: row, credits_left: me.credits, cost_credits: cost });
+  } catch (e) {
+    failAndRefund(jobId, `Sound failed (${e.message})`);
+    db.prepare('UPDATE generations SET sound_status = ? WHERE id = ?').run('failed_refunded', jobId);
+    res.status(502).json({ error: `Sound failed (${e.message}). Your ${cost} credits were refunded.` });
+  }
+});
+
+// ---------- Audio only: generate a sound file, no video -------------------
+// kind 'sfx' (1–22s) or 'music' (10–60s). The audio file is stored under
+// data/sounds/ and served at /files/sounds/; the History entry is a
+// kind 'sound' generation with no source video, rendered by the app as
+// an audio player with a download.
+app.post('/api/sound/generate', auth, soundLimiter, async (req, res) => {
+  const b = req.body || {};
+  if (!soundConfigured())
+    return res.status(503).json({ error: 'sound_not_configured', message: SOUND_NOT_CONFIGURED_MSG });
+  const kind = String(b.kind || '').toLowerCase();
+  if (!['sfx', 'music'].includes(kind))
+    return res.status(400).json({ error: 'kind must be one of: sfx, music' });
+  const rawPromptInput = b.prompt !== undefined && b.prompt !== null ? String(b.prompt).trim() : '';
+  if (rawPromptInput.length < 3 || rawPromptInput.length > 500)
+    return res.status(400).json({ error: 'Please describe the sound in 3–500 characters.' });
+  let durationSeconds = kind === 'sfx' ? 10 : 30;
+  if (b.duration_seconds !== undefined && b.duration_seconds !== null && b.duration_seconds !== '') {
+    durationSeconds = Number(b.duration_seconds);
+    if (!Number.isFinite(durationSeconds))
+      return res.status(400).json({ error: 'duration_seconds must be a number.' });
+    if (kind === 'sfx' && (durationSeconds < 1 || durationSeconds > 22))
+      return res.status(400).json({ error: 'duration_seconds for sfx must be between 1 and 22.' });
+    if (kind === 'music' && (durationSeconds < 10 || durationSeconds > 60))
+      return res.status(400).json({ error: 'duration_seconds for music must be between 10 and 60.' });
+  }
+  let resolved;
+  try {
+    resolved = await resolveSoundPrompt({ rawPrompt: rawPromptInput, language: b.language, fallback: null });
+  } catch (e) { return res.status(e.status || 400).json({ error: e.message }); }
+  const cost = CONFIG.soundCosts[kind];
+  let jobId;
+  try {
+    jobId = chargeVoiceGeneration(req.user.id, {
+      cost, prompt: rawPromptInput, aspectRatio: '16:9',
+      duration: Math.round(durationSeconds), style: 'realistic',
+      model: soundEngineModel(kind), kind: 'sound', sourceGenerationId: null,
+      promptLanguage: resolved.languageCode,
+      translatedPrompt: resolved.translated,
+    });
+  } catch (e) { return res.status(e.status || 500).json({ error: e.message }); }
+  db.prepare(`UPDATE generations SET sound_mode = ?, sound_prompt = ?,
+              sound_status = 'processing', sound_cost = ? WHERE id = ?`)
+    .run(kind, resolved.prompt, cost, jobId);
+  try {
+    const audioUrl = await generateSoundAudioUrl(kind, resolved.prompt, durationSeconds);
+    fs.mkdirSync(CONFIG.soundsDir, { recursive: true });
+    const name = `${randomUUID()}${kind === 'sfx' ? '.mp3' : '.wav'}`;
+    await downloadAudioToFile(audioUrl, path.join(CONFIG.soundsDir, name));
+    const publicPath = `/files/sounds/${name}`;
+    db.prepare(`UPDATE generations SET status = 'completed', video_url = ?,
+                sound_status = 'applied', updated_at = datetime('now') WHERE id = ?`)
+      .run(publicPath, jobId);
+    const row = db.prepare('SELECT * FROM generations WHERE id = ?').get(jobId);
+    const me = db.prepare('SELECT credits FROM users WHERE id = ?').get(req.user.id);
+    res.status(201).json({ generation: row, audio_url: publicPath,
+                           credits_left: me.credits, cost_credits: cost });
+  } catch (e) {
+    failAndRefund(jobId, `Sound generation failed (${e.message})`);
+    db.prepare('UPDATE generations SET sound_status = ? WHERE id = ?').run('failed_refunded', jobId);
+    res.status(502).json({ error: `Sound generation failed (${e.message}). Your ${cost} credits were refunded.` });
+  }
+});
+
 // ---------- Report inappropriate content ----------
 app.post('/api/report', auth, (req, res) => {
   const { generation_id, reason } = req.body || {};
@@ -3005,9 +3547,11 @@ app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'adm
 fs.mkdirSync(CONFIG.joinedDir, { recursive: true });
 fs.mkdirSync(CONFIG.generatedDir, { recursive: true });
 fs.mkdirSync(CONFIG.voiceDir, { recursive: true });
+fs.mkdirSync(CONFIG.soundsDir, { recursive: true });
 app.use('/files/joined', express.static(CONFIG.joinedDir));
 app.use('/files/generated', express.static(CONFIG.generatedDir));
 app.use('/files/voice', express.static(CONFIG.voiceDir));
+app.use('/files/sounds', express.static(CONFIG.soundsDir));
 app.use(express.static(path.join(__dirname, 'public')));
 app.get(/^\/(?!api\/).*/, (req, res) =>
   res.sendFile(path.join(__dirname, 'public', 'index.html')));

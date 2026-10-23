@@ -37,6 +37,12 @@
 # endpoints and the lip-sync queue — no real provider calls. An eighth
 # instance (port 18089) runs with TTS_PROVIDERS=none to prove the voice
 # endpoints fail closed (503, no charges) when no provider is configured.
+# The sound-system tests (Phase B2) use a ninth instance (port 18087,
+# own DB) with the fal bases pointed at a stub (port 18088) extended
+# with the four sound engines (MMAudio + Mirelo queue models, ElevenLabs
+# SFX + CassetteAI music sync endpoints) plus a translate stub (port
+# 18086) for the Urdu sound-prompt check. A tenth instance (port 18084)
+# runs with SOUND_ENABLED=0 to prove the sound endpoints fail closed.
 # Outgoing provider request shapes are asserted via the TEST_RECORD-style
 # hook GET /api/_test/voice-calls.
 # e.g.  ADMIN_EMAIL=admin@example.com FAL_MODEL_4K=test-4k-model TEST_RECORD_FAL_BODY=1 TRANSLATE_API_BASE=http://127.0.0.1:18099 npm start
@@ -833,6 +839,13 @@ check "voice: default provider is gemini" "gemini" "$(echo $CV | python3 -c 'imp
 check "voice: catalog lists Kore as a female gemini voice" "female" "$(echo $CV | python3 -c 'import sys,json;d=json.load(sys.stdin);g=[x for x in d["voice"]["voices"] if x["provider"]=="gemini"][0];print([v for v in g["voices"] if v["id"]=="Kore"][0]["gender"])')"
 check "voice: add-on costs lipsync 30 / voiceover 10" "30/10" "$(echo $CV | python3 -c 'import sys,json;d=json.load(sys.stdin)["voice"]["costs"];print(str(d["lipsync_credits"])+"/"+str(d["voiceover_credits"]))')"
 
+echo "--- sound system: config on the main server ---"
+CS=$(curl -s $B/api/config)
+check "sound: configured (fal key present)" "True" "$(echo $CS | python3 -c 'import sys,json;print(json.load(sys.stdin)["sound"]["configured"])')"
+check "sound: add-on costs sync 10 / premium 25 / sfx 5 / music 5" "10/25/5/5" "$(echo $CS | python3 -c 'import sys,json;c=json.load(sys.stdin)["sound"]["costs"];print(str(c["sync"])+"/"+str(c["premium_sync"])+"/"+str(c["sfx"])+"/"+str(c["music"]))')"
+check "sound: modes list" "music,premium_sync,sfx,sync" "$(echo $CS | python3 -c 'import sys,json;print(",".join(sorted(json.load(sys.stdin)["sound"]["modes"])))')"
+check "sound: sync engine is mmaudio-v2" "fal-ai/mmaudio-v2" "$(echo $CS | python3 -c 'import sys,json;print(json.load(sys.stdin)["sound"]["models"]["sync"])')"
+
 echo "--- voice system: NO provider configured -> fail closed (own instance) ---"
 B8=http://127.0.0.1:18089
 rm -f /tmp/myvideoai-voice-none-test.db
@@ -997,6 +1010,244 @@ CHUNK_AUDIO=$(echo $VOLB | python3 -c 'import sys,json;print(json.load(sys.stdin
 curl -s -o /tmp/chunk-audio.mp3 $B7$CHUNK_AUDIO
 check "chunking: concatenated audio is ~4s (2 parts in order)" "ok" "$("$FFBIN7" -i /tmp/chunk-audio.mp3 2>&1 | python3 -c 'import sys,re; m=re.search(r"Duration: (\d+):(\d+):([\d.]+)", sys.stdin.read()); d=int(m.group(1))*3600+int(m.group(2))*60+float(m.group(3)) if m else -1; print("ok" if 3.4 <= d <= 4.8 else "bad")')"
 kill $SRV7_PID $FALSTUB_PID 2>/dev/null
+
+echo "--- sound system: sound disabled -> fail closed (own instance) ---"
+B10=http://127.0.0.1:18084
+rm -f /tmp/myvideoai-sound-none-test.db
+SOUND_NONE_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-sound-none-test.db PORT=18084 FAL_KEY=dummy_test_key "$SOUND_NONE_JWT_NAME=sound-none-dummy-value" SOUND_ENABLED=0 node "$(dirname "$0")/server.js" > /tmp/myvideoai-sound-none-test.log 2>&1 &
+SRV10_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B10/api/health && break || sleep 0.25; done
+CFG10=$(curl -s $B10/api/config)
+check "sound disabled: configured is false" "False" "$(echo $CFG10 | python3 -c 'import sys,json;print(json.load(sys.stdin)["sound"]["configured"])')"
+UR10=$(curl -s -X POST $B10/api/auth/register -H 'Content-Type: application/json' -d '{"email":"soundnone@example.com","password":"password123"}')
+UT10=$(echo $UR10 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+UID10=$(curl -s $B10/api/me -H "Authorization: Bearer $UT10" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+SG10=$(curl -s -w '\n%{http_code}' -X POST $B10/api/sound/generate -H "Authorization: Bearer $UT10" -H 'Content-Type: application/json' -d '{"kind":"sfx","prompt":"dog barking in the rain"}')
+check "sound disabled: audio-only generate -> 503" "503" "$(echo "$SG10" | tail -1)"
+check "sound disabled: error is sound_not_configured" "sound_not_configured" "$(echo "$SG10" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+SEED10=$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-sound-none-test.db');
+console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($UID10, 'seed sound source', '16:9', 5, 'realistic', 'completed', 'http://127.0.0.1:18088/media/clip.mp4', 10).lastInsertRowid));
+")
+check "sound disabled: apply -> 503" "503" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B10/api/sound/apply -H "Authorization: Bearer $UT10" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEED10,\"mode\":\"sync\"}")"
+check "sound disabled: generate with sound -> 503" "503" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B10/api/generate -H "Authorization: Bearer $UT10" -H 'Content-Type: application/json' -d '{"prompt":"a calm lake at dawn","duration":5,"sound":{"mode":"sync"}}')"
+check "sound disabled: nothing charged (balance 100)" "100" "$(curl -s $B10/api/me -H "Authorization: Bearer $UT10" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "sound disabled: only the seeded row exists (503s created none)" "1" "$(curl -s $B10/api/history -H "Authorization: Bearer $UT10" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["generations"]))')"
+kill $SRV10_PID 2>/dev/null
+
+echo "--- sound system: generate-time sound, apply, audio-only (fal stub) ---"
+SOUND_STUB_PORT=18088
+SOUND_TSTUB_PORT=18086
+B9=http://127.0.0.1:18087
+rm -f /tmp/myvideoai-sound-test.db; rm -rf /tmp/soundgen /tmp/soundout; mkdir -p /tmp/soundgen /tmp/soundout
+FAL_STUB_PORT=$SOUND_STUB_PORT node "$(dirname "$0")/test-fal-stub.js" > /tmp/fal-stub-sound.log 2>&1 &
+FALSTUB9_PID=$!
+TRANSLATE_STUB_PORT=$SOUND_TSTUB_PORT node "$(dirname "$0")/test-translate-stub.js" > /tmp/translate-stub-sound.log 2>&1 &
+TSTUB9_PID=$!
+for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:$SOUND_STUB_PORT/__calls && break || sleep 0.25; done
+for i in $(seq 1 40); do curl -s -o /dev/null http://127.0.0.1:$SOUND_TSTUB_PORT/__count && break || sleep 0.25; done
+SOUND_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-sound-test.db PORT=18087 FAL_KEY=dummy_test_key "$SOUND_JWT_NAME=sound-instance-dummy-value" \
+  ADMIN_EMAIL=soundadmin@example.com TEST_RECORD_FAL_BODY=1 \
+  FAL_API_BASE_URL=http://127.0.0.1:$SOUND_STUB_PORT FAL_QUEUE_BASE_URL=http://127.0.0.1:$SOUND_STUB_PORT \
+  FAL_POLL_INTERVAL_MS=100 TRANSLATE_API_BASE=http://127.0.0.1:$SOUND_TSTUB_PORT \
+  GENERATED_DIR=/tmp/soundgen SOUNDS_DIR=/tmp/soundout \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-sound-test.log 2>&1 &
+SRV9_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B9/api/health && break || sleep 0.25; done
+AR9=$(curl -s -X POST $B9/api/auth/register -H 'Content-Type: application/json' -d '{"email":"soundadmin@example.com","password":"password123"}')
+AT9=$(echo $AR9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+FFBIN9=$(node --input-type=module -e "import f from 'ffmpeg-static'; console.log(f)" 2>/dev/null)
+
+# -- generate with auto sync sound: one combined charge, applied once --
+RA9=$(curl -s -X POST $B9/api/auth/register -H 'Content-Type: application/json' -d '{"email":"syncgen@example.com","password":"password123"}')
+TA9=$(echo $RA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+GA9=$(curl -s -X POST $B9/api/generate -H "Authorization: Bearer $TA9" -H 'Content-Type: application/json' -d '{"prompt":"a red car speeding down a wet road","aspect_ratio":"16:9","duration":5,"sound":{"mode":"sync","prompt":"rain and thunder over the city"}}')
+check "gen+sync: total cost 20 (10 video + 10 sync)" "20" "$(echo $GA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_credits"])')"
+check "gen+sync: sound add-on reported as 10" "10" "$(echo $GA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["sound_cost_credits"])')"
+check "gen+sync: balance 80 after submit (charged exactly once)" "80" "$(echo $GA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
+JOBA9=$(echo $GA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+POLLA9=$(curl -s $B9/api/generations/$JOBA9 -H "Authorization: Bearer $TA9")
+check "gen+sync: job completed" "completed" "$(echo $POLLA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])')"
+check "gen+sync: sound_status applied" "applied" "$(echo $POLLA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["sound_status"])')"
+check "gen+sync: sound_mode recorded" "sync" "$(echo $POLLA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["sound_mode"])')"
+check "gen+sync: video_url is the sounded (mmaudio) version" "http://127.0.0.1:$SOUND_STUB_PORT/media/clip.mp4" "$(echo $POLLA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["video_url"])')"
+check "gen+sync: still 80 after completion (no second charge)" "80" "$(curl -s $B9/api/me -H "Authorization: Bearer $TA9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+VC9=$(curl -s $B9/api/_test/voice-calls)
+check "gen+sync: mmaudio body has video_url + prompt + duration" "ok" "$(echo $VC9 | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x.get("model")=="fal-ai/mmaudio-v2"][-1];b=c["body"];print("ok" if b.get("video_url","").endswith("/media/clip.mp4") and b.get("prompt")=="rain and thunder over the city" and b.get("duration")==5 else "bad")')"
+check "gen+sync: unknown sound mode -> 400, no charge" "400/80" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B9/api/generate -H "Authorization: Bearer $TA9" -H 'Content-Type: application/json' -d '{"prompt":"a calm lake","duration":5,"sound":{"mode":"bogus"}}')/$(curl -s $B9/api/me -H "Authorization: Bearer $TA9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+
+# -- generate with sync sound, engine fails: video delivered, add-on refunded --
+RB9=$(curl -s -X POST $B9/api/auth/register -H 'Content-Type: application/json' -d '{"email":"soundfail@example.com","password":"password123"}')
+TB9=$(echo $RB9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+GB9=$(curl -s -X POST $B9/api/generate -H "Authorization: Bearer $TB9" -H 'Content-Type: application/json' -d '{"prompt":"a quiet beach at sunset","aspect_ratio":"16:9","duration":5,"sound":{"mode":"sync","prompt":"FAILME waves crashing"}}')
+check "gen+sync fail: balance 80 after submit" "80" "$(echo $GB9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
+JOBB9=$(echo $GB9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+POLLB9=$(curl -s $B9/api/generations/$JOBB9 -H "Authorization: Bearer $TB9")
+check "gen+sync fail: video still completed" "completed" "$(echo $POLLB9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])')"
+check "gen+sync fail: sound_status failed_refunded" "failed_refunded" "$(echo $POLLB9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["sound_status"])')"
+check "gen+sync fail: add-on refunded (balance 90)" "90" "$(curl -s $B9/api/me -H "Authorization: Bearer $TB9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "gen+sync fail: row cost reduced to the video-only 10" "10" "$(echo $POLLB9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_credits"])')"
+
+# -- generate with sound effects: mixed under the original audio --
+RC9=$(curl -s -X POST $B9/api/auth/register -H 'Content-Type: application/json' -d '{"email":"sfxgen@example.com","password":"password123"}')
+TC9=$(echo $RC9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+GC9=$(curl -s -X POST $B9/api/generate -H "Authorization: Bearer $TC9" -H 'Content-Type: application/json' -d '{"prompt":"a dog playing in a park","aspect_ratio":"16:9","duration":5,"sound":{"mode":"sfx","prompt":"dog barking and birds","volume":40}}')
+check "gen+sfx: total cost 15 (10 video + 5 sfx)" "15" "$(echo $GC9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_credits"])')"
+check "gen+sfx: balance 85 after submit" "85" "$(echo $GC9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
+JOBC9=$(echo $GC9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+POLLC9=$(curl -s $B9/api/generations/$JOBC9 -H "Authorization: Bearer $TC9")
+check "gen+sfx: completed with sound applied" "completed/applied" "$(echo $POLLC9 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["sound_status"])')"
+check "gen+sfx: mixed video stored locally" "yes" "$(echo $POLLC9 | python3 -c 'import sys,json;u=json.load(sys.stdin)["video_url"];print("yes" if u.startswith("/files/generated/") else "no")')"
+SFXURL=$(echo $POLLC9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["video_url"])')
+curl -s -o /tmp/sfx-mixed.mp4 $B9$SFXURL
+check "gen+sfx: mixed output HAS an audio stream" "yes" "$("$FFBIN9" -i /tmp/sfx-mixed.mp4 2>&1 | python3 -c 'import sys;print("yes" if "Audio:" in sys.stdin.read() else "no")')"
+check "gen+sfx: mixed output keeps the video stream" "yes" "$("$FFBIN9" -i /tmp/sfx-mixed.mp4 2>&1 | python3 -c 'import sys;print("yes" if "Video:" in sys.stdin.read() else "no")')"
+SC9=$(curl -s $B9/api/_test/sound-calls)
+check "gen+sfx: sfx engine body has text + duration_seconds" "ok" "$(echo $SC9 | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x.get("engine")=="sfx"][-1];b=c["body"];print("ok" if b.get("text")=="dog barking and birds" and b.get("duration_seconds")==5 else "bad")')"
+
+# -- Urdu sound prompt: translated to English BEFORE the engine call --
+UR_VID_PROMPT='ایک سرخ گاڑی سڑک پر جا رہی ہے'
+UR_SND_PROMPT='تیز بارش کی آواز'
+RH9=$(curl -s -X POST $B9/api/auth/register -H 'Content-Type: application/json' -d '{"email":"urdusnd@example.com","password":"password123"}')
+TH9=$(echo $RH9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+GH9=$(curl -s -X POST $B9/api/generate -H "Authorization: Bearer $TH9" -H 'Content-Type: application/json' -d "{\"prompt\":\"$UR_VID_PROMPT\",\"language\":\"ur\",\"duration\":5,\"sound\":{\"mode\":\"sync\",\"prompt\":\"$UR_SND_PROMPT\"}}")
+JOBH9=$(echo $GH9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+POLLH9=$(curl -s $B9/api/generations/$JOBH9 -H "Authorization: Bearer $TH9")
+check "urdu sound: job completed with sound applied" "completed/applied" "$(echo $POLLH9 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["sound_status"])')"
+VC9H=$(curl -s $B9/api/_test/voice-calls)
+check "urdu sound: mmaudio received the ENGLISH translation" "ok" "$(echo $VC9H | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x.get("model")=="fal-ai/mmaudio-v2"][-1];print("ok" if c["body"].get("prompt","").startswith("TRANSLATED:") else "bad")')"
+check "urdu sound: charged once (balance 80)" "80" "$(curl -s $B9/api/me -H "Authorization: Bearer $TH9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+
+# -- apply sound to an existing video: sync, premium gate, music, failure --
+RD9=$(curl -s -X POST $B9/api/auth/register -H 'Content-Type: application/json' -d '{"email":"apply@example.com","password":"password123"}')
+TD9=$(echo $RD9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+DID9=$(curl -s $B9/api/me -H "Authorization: Bearer $TD9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+SEEDD9=$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-sound-test.db');
+console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($DID9, 'seed apply source', '16:9', 5, 'realistic', 'completed', 'http://127.0.0.1:$SOUND_STUB_PORT/media/clip.mp4', 10).lastInsertRowid));
+")
+AP19=$(curl -s -w '\n%{http_code}' -X POST $B9/api/sound/apply -H "Authorization: Bearer $TD9" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDD9,\"mode\":\"sync\",\"prompt\":\"city traffic and rain\"}")
+check "apply sync: -> 201" "201" "$(echo "$AP19" | tail -1)"
+AP1B=$(echo "$AP19" | sed '$d')
+check "apply sync: new history entry kind is sound" "sound" "$(echo $AP1B | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["kind"])')"
+check "apply sync: linked to the source generation" "$SEEDD9" "$(echo $AP1B | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["source_generation_id"])')"
+check "apply sync: cost 10, credits_left 90" "10/90" "$(echo $AP1B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "apply sync: sound_status applied on the new entry" "applied" "$(echo $AP1B | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["sound_status"])')"
+check "apply: another user's video -> 404" "404" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B9/api/sound/apply -H "Authorization: Bearer $TA9" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDD9,\"mode\":\"sync\"}")"
+AP29=$(curl -s -w '\n%{http_code}' -X POST $B9/api/sound/apply -H "Authorization: Bearer $TD9" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDD9,\"mode\":\"premium_sync\"}")
+check "apply premium (no plan): -> 403" "403" "$(echo "$AP29" | tail -1)"
+check "apply premium 403: error names the Pro plan" "yes" "$(echo "$AP29" | sed '$d' | python3 -c 'import sys,json;print("yes" if "Pro" in json.load(sys.stdin)["error"] else "no")')"
+check "apply premium 403: credits untouched (90)" "90" "$(curl -s $B9/api/me -H "Authorization: Bearer $TD9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+AP39=$(curl -s -w '\n%{http_code}' -X POST $B9/api/sound/apply -H "Authorization: Bearer $TD9" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDD9,\"mode\":\"music\",\"prompt\":\"soft piano bed\",\"volume\":100}")
+check "apply music: -> 201" "201" "$(echo "$AP39" | tail -1)"
+AP3B=$(echo "$AP39" | sed '$d')
+check "apply music: cost 5, credits_left 85" "5/85" "$(echo $AP3B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+MUSURL=$(echo $AP3B | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["video_url"])')
+curl -s -o /tmp/music-mixed.mp4 $B9$MUSURL
+check "apply music: mixed output HAS an audio stream" "yes" "$("$FFBIN9" -i /tmp/music-mixed.mp4 2>&1 | python3 -c 'import sys;print("yes" if "Audio:" in sys.stdin.read() else "no")')"
+SC9B=$(curl -s $B9/api/_test/sound-calls)
+check "apply music: engine body asks for instrumental, duration 10" "ok" "$(echo $SC9B | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x.get("engine")=="music"][-1];b=c["body"];print("ok" if "instrumental, no vocals" in b.get("prompt","") and b.get("duration")==10 else "bad")')"
+check "apply sfx (engine fails): -> 502" "502" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B9/api/sound/apply -H "Authorization: Bearer $TD9" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDD9,\"mode\":\"sfx\",\"prompt\":\"FAILME dog\"}")"
+check "apply sfx failure: full refund (still 85)" "85" "$(curl -s $B9/api/me -H "Authorization: Bearer $TD9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "apply sfx failure: job row marked failed" "failed" "$(curl -s $B9/api/history -H "Authorization: Bearer $TD9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["status"])')"
+
+# -- volume: sync at 50% measurably lowers the soundtrack level --
+RE9=$(curl -s -X POST $B9/api/auth/register -H 'Content-Type: application/json' -d '{"email":"vol@example.com","password":"password123"}')
+TE9=$(echo $RE9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+EID9=$(curl -s $B9/api/me -H "Authorization: Bearer $TE9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+SEEDE9=$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-sound-test.db');
+console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($EID9, 'seed volume source', '16:9', 5, 'realistic', 'completed', 'http://127.0.0.1:$SOUND_STUB_PORT/media/clip.mp4', 10).lastInsertRowid));
+")
+curl -s -o /tmp/vol-source.mp4 http://127.0.0.1:$SOUND_STUB_PORT/media/clip.mp4
+# mean_volume is the robust measure here: AAC re-encoding reshapes the
+# single peak sample, but the mean level tracks the gain exactly.
+SRCMAX=$("$FFBIN9" -i /tmp/vol-source.mp4 -af volumedetect -f null - 2>&1 | python3 -c 'import sys,re; m=re.search(r"mean_volume: (-?[\d.]+) dB", sys.stdin.read()); print(m.group(1) if m else "nan")')
+APV9=$(curl -s -X POST $B9/api/sound/apply -H "Authorization: Bearer $TE9" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDE9,\"mode\":\"sync\",\"volume\":50}")
+check "apply sync volume 50: gain pass stored locally" "yes" "$(echo $APV9 | python3 -c 'import sys,json;u=json.load(sys.stdin)["generation"]["video_url"];print("yes" if u.startswith("/files/generated/") else "no")')"
+VOLURL=$(echo $APV9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["video_url"])')
+curl -s -o /tmp/vol-out.mp4 $B9$VOLURL
+OUTMAX=$("$FFBIN9" -i /tmp/vol-out.mp4 -af volumedetect -f null - 2>&1 | python3 -c 'import sys,re; m=re.search(r"mean_volume: (-?[\d.]+) dB", sys.stdin.read()); print(m.group(1) if m else "nan")')
+check "apply sync volume 50: output is ~6 dB quieter than the source" "ok" "$(python3 -c "s=float('$SRCMAX'); o=float('$OUTMAX'); print('ok' if 4.0 <= (s - o) <= 8.0 else 'bad')")"
+
+# -- premium sync succeeds for a Pro user (+25, speech preserved by design) --
+RF9=$(curl -s -X POST $B9/api/auth/register -H 'Content-Type: application/json' -d '{"email":"soundpro@example.com","password":"password123"}')
+TF9=$(echo $RF9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+FID9=$(curl -s $B9/api/me -H "Authorization: Bearer $TF9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+curl -s -o /dev/null -X POST $B9/api/admin/users/$FID9/activate -H "Authorization: Bearer $AT9" -H 'Content-Type: application/json' -d '{"plan_id":"pro","period":"monthly"}'
+check "sound pro balance after activation (100 free + 500 plan)" "600" "$(curl -s $B9/api/me -H "Authorization: Bearer $TF9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+SEEDF9=$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-sound-test.db');
+console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($FID9, 'seed premium source', '16:9', 5, 'realistic', 'completed', 'http://127.0.0.1:$SOUND_STUB_PORT/media/clip.mp4', 10).lastInsertRowid));
+")
+APP9=$(curl -s -w '\n%{http_code}' -X POST $B9/api/sound/apply -H "Authorization: Bearer $TF9" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDF9,\"mode\":\"premium_sync\",\"prompt\":\"distant sirens\"}")
+check "apply premium (Pro): -> 201" "201" "$(echo "$APP9" | tail -1)"
+APPB=$(echo "$APP9" | sed '$d')
+check "apply premium (Pro): cost 25, credits_left 575" "25/575" "$(echo $APPB | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+PREMURL=$(echo $APPB | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["video_url"])')
+curl -s -o /tmp/premium-out.mp4 $B9$PREMURL
+check "apply premium: muxed output HAS an audio stream" "yes" "$("$FFBIN9" -i /tmp/premium-out.mp4 2>&1 | python3 -c 'import sys;print("yes" if "Audio:" in sys.stdin.read() else "no")')"
+VC9P=$(curl -s $B9/api/_test/voice-calls)
+check "apply premium: mirelo body has preserve_speech + num_samples 1" "ok" "$(echo $VC9P | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x.get("model")=="mirelo-ai/sfx2.0/video-to-audio"][-1];b=c["body"];print("ok" if b.get("preserve_speech")==True and b.get("num_samples")==1 and b.get("text_prompt")=="distant sirens" and b.get("video_url","").endswith("/media/clip.mp4") else "bad")')"
+
+# -- audio-only: sfx + music files, served, with request-shape checks --
+RG9=$(curl -s -X POST $B9/api/auth/register -H 'Content-Type: application/json' -d '{"email":"audioonly@example.com","password":"password123"}')
+TG9=$(echo $RG9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+SGA9=$(curl -s -w '\n%{http_code}' -X POST $B9/api/sound/generate -H "Authorization: Bearer $TG9" -H 'Content-Type: application/json' -d '{"kind":"sfx","prompt":"dog barking in the rain","duration_seconds":10}')
+check "audio-only sfx: -> 201" "201" "$(echo "$SGA9" | tail -1)"
+SGAB=$(echo "$SGA9" | sed '$d')
+check "audio-only sfx: kind sound, cost 5, credits_left 95" "sound/5/95" "$(echo $SGAB | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["generation"]["kind"]+"/"+str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "audio-only sfx: file under /files/sounds/ (.mp3)" "yes" "$(echo $SGAB | python3 -c 'import sys,json;u=json.load(sys.stdin)["audio_url"];print("yes" if u.startswith("/files/sounds/") and u.endswith(".mp3") else "no")')"
+SFXAURL=$(echo $SGAB | python3 -c 'import sys,json;print(json.load(sys.stdin)["audio_url"])')
+check "audio-only sfx: file is served (200)" "200" "$(curl -s -o /dev/null -w '%{http_code}' $B9$SFXAURL)"
+SC9C=$(curl -s $B9/api/_test/sound-calls)
+check "audio-only sfx: engine body has text + duration_seconds 10" "ok" "$(echo $SC9C | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x.get("engine")=="sfx"][-1];b=c["body"];print("ok" if b.get("text")=="dog barking in the rain" and b.get("duration_seconds")==10 else "bad")')"
+SMA9=$(curl -s -w '\n%{http_code}' -X POST $B9/api/sound/generate -H "Authorization: Bearer $TG9" -H 'Content-Type: application/json' -d '{"kind":"music","prompt":"calm piano for a rainy evening","duration_seconds":30}')
+check "audio-only music: -> 201" "201" "$(echo "$SMA9" | tail -1)"
+SMAB=$(echo "$SMA9" | sed '$d')
+check "audio-only music: credits_left 90" "90" "$(echo $SMAB | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
+check "audio-only music: file under /files/sounds/ (.wav)" "yes" "$(echo $SMAB | python3 -c 'import sys,json;u=json.load(sys.stdin)["audio_url"];print("yes" if u.startswith("/files/sounds/") and u.endswith(".wav") else "no")')"
+MUSAURL=$(echo $SMAB | python3 -c 'import sys,json;print(json.load(sys.stdin)["audio_url"])')
+check "audio-only music: file is served (200)" "200" "$(curl -s -o /dev/null -w '%{http_code}' $B9$MUSAURL)"
+SC9D=$(curl -s $B9/api/_test/sound-calls)
+check "audio-only music: engine body asks for instrumental, duration 30" "ok" "$(echo $SC9D | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x.get("engine")=="music"][-1];b=c["body"];print("ok" if "instrumental, no vocals" in b.get("prompt","") and b.get("duration")==30 else "bad")')"
+check "audio-only: engine failure -> 502" "502" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B9/api/sound/generate -H "Authorization: Bearer $TG9" -H 'Content-Type: application/json' -d '{"kind":"sfx","prompt":"FAILME thunder"}')"
+check "audio-only failure: full refund (still 90)" "90" "$(curl -s $B9/api/me -H "Authorization: Bearer $TG9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "audio-only: unknown kind -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B9/api/sound/generate -H "Authorization: Bearer $TG9" -H 'Content-Type: application/json' -d '{"kind":"bogus","prompt":"rain sounds"}')"
+check "audio-only: sfx duration over 22 -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B9/api/sound/generate -H "Authorization: Bearer $TG9" -H 'Content-Type: application/json' -d '{"kind":"sfx","prompt":"rain sounds","duration_seconds":30}')"
+
+# -- migration v11: delete its record + drop its columns, restart re-applies --
+kill $SRV9_PID 2>/dev/null; sleep 0.5
+node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-sound-test.db');
+db.exec('DELETE FROM schema_migrations WHERE version = 11');
+for (const col of ['sound_mode','sound_status','sound_prompt','sound_volume','sound_cost'])
+  db.exec('ALTER TABLE generations DROP COLUMN ' + col);
+console.log('rolled back migration v11');
+"
+env DB_PATH=/tmp/myvideoai-sound-test.db PORT=18087 FAL_KEY=dummy_test_key "$SOUND_JWT_NAME=sound-instance-dummy-value" \
+  ADMIN_EMAIL=soundadmin@example.com TEST_RECORD_FAL_BODY=1 \
+  FAL_API_BASE_URL=http://127.0.0.1:$SOUND_STUB_PORT FAL_QUEUE_BASE_URL=http://127.0.0.1:$SOUND_STUB_PORT \
+  FAL_POLL_INTERVAL_MS=100 TRANSLATE_API_BASE=http://127.0.0.1:$SOUND_TSTUB_PORT \
+  GENERATED_DIR=/tmp/soundgen SOUNDS_DIR=/tmp/soundout \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-sound-test2.log 2>&1 &
+SRV9_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B9/api/health && break || sleep 0.25; done
+check "migration v11 re-applies on boot (sound columns restored)" "ok" "$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-sound-test.db');
+const cols = db.prepare(\"SELECT name FROM pragma_table_info('generations') WHERE name LIKE 'sound_%'\").all().map(r => r.name).sort().join(',');
+const mig = db.prepare('SELECT COUNT(*) AS c FROM schema_migrations WHERE version = 11').get().c;
+console.log(cols === 'sound_cost,sound_mode,sound_prompt,sound_status,sound_volume' && Number(mig) === 1 ? 'ok' : 'bad');
+")"
+kill $SRV9_PID $FALSTUB9_PID $TSTUB9_PID 2>/dev/null
 
 echo "--- rate limit: burst until 429 ---"
 FOUND429="no"

@@ -163,6 +163,19 @@ CREATE TABLE IF NOT EXISTS pack_purchases (
 --                     voice_audio_path (the synthesized voice track a
 --                     job used, /files/voice/<file>), source_generation_id
 --                     (the finished video a lipsync/voiceover derived from).
+--
+-- === Sound system (migration v11, applied automatically by server.js) ===
+-- generations gains:  sound_mode ('sync' | 'premium_sync' | 'sfx' |
+--                     'music'; NULL when no sound was requested),
+--                     sound_status ('none' | 'pending' | 'processing' |
+--                     'applied' | 'failed_refunded'), sound_prompt (the
+--                     English text sent to the sound engine),
+--                     sound_volume (10–100), sound_cost (the add-on
+--                     credits charged for the sound step — refunded on
+--                     its own when only that step fails). Standalone
+--                     sound jobs are generations rows with kind='sound';
+--                     audio-only jobs keep their /files/sounds/ path in
+--                     video_url and have no source_generation_id.
 CREATE TABLE IF NOT EXISTS voice_jobs (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id       INTEGER NOT NULL REFERENCES users(id),

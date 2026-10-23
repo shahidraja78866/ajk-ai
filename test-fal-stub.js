@@ -5,19 +5,30 @@
 //   POST /fal-ai/gemini-3.1-flash-tts          -> { audio: { url: <tone.mp3> } }
 //   POST /fal-ai/elevenlabs/tts/eleven-v3      -> { audio: { url: <tone.mp3> } }
 //        (a prompt/text containing "FAILME" gets an HTTP 500 instead)
+//   POST /fal-ai/elevenlabs/sound-effects/v2   -> { audio: { url: <tone.mp3> } }
+//        (a `text` containing "FAILME" gets an HTTP 500 instead)
+//   POST /cassetteai/music-generator           -> { audio_file: { url: <music.wav> } }
+//        (a `prompt` containing "FAILME" gets an HTTP 500 instead)
 //   POST /minimax/h3-max/lip-sync/image-to-video  (queue submit)
 //   POST /fal-ai/latentsync                       (queue submit)
+//   POST /fal-ai/mmaudio-v2                       (queue submit; a `prompt`
+//        containing "FAILME" gets an HTTP 500 — sound-step failure tests)
+//   POST /mirelo-ai/sfx2.0/video-to-audio         (queue submit)
+//   POST <any other path>                         (queue submit — covers
+//        the video models on instances that complete generations here)
 //        -> { request_id: "stub-req-1" }
 //   GET  /<model>/requests/stub-req-1/status   -> { status: "COMPLETED" }
 //   GET  /<model>/requests/stub-req-1          -> { video: { url: <clip.mp4> }, duration: 2 }
+//        (paths containing "mirelo" instead return
+//         { audio: [{ url: <tone.mp3> }], model: "sfx-2.0" })
 //   GET  /media/<file>                         -> the generated media files
 //   GET  /__calls                              -> every POST received
 //        ({ calls: [{ path, body }] }) so tests can assert request shapes
 //
 // The media files are generated at boot with the pinned ffmpeg-static
-// binary: tone.mp3 is a 2-second sine tone; clip.mp4 is a 2-second
-// 320x240 video WITH an audio track (used as a lip-sync result and as a
-// voiceover source video).
+// binary: tone.mp3 is a 2-second sine tone; music.wav is a 2-second sine
+// tone in WAV form; clip.mp4 is a 2-second 320x240 video WITH an audio
+// track (used as a lip-sync result and as a voiceover source video).
 //
 // Run:  node test-fal-stub.js   (port: FAL_STUB_PORT, default 18090)
 import http from 'node:http';
@@ -33,13 +44,19 @@ execFileSync(ffmpegStatic, ['-y', '-v', 'error', '-f', 'lavfi',
   '-i', 'sine=frequency=660:duration=2', '-c:a', 'libmp3lame',
   path.join(mediaDir, 'tone.mp3')]);
 execFileSync(ffmpegStatic, ['-y', '-v', 'error', '-f', 'lavfi',
+  '-i', 'sine=frequency=220:duration=2', '-c:a', 'pcm_s16le',
+  path.join(mediaDir, 'music.wav')]);
+execFileSync(ffmpegStatic, ['-y', '-v', 'error', '-f', 'lavfi',
   '-i', 'color=c=green:size=320x240:rate=24:duration=2', '-f', 'lavfi',
   '-i', 'sine=frequency=440:duration=2', '-c:v', 'libx264', '-pix_fmt',
   'yuv420p', '-c:a', 'aac', '-shortest', path.join(mediaDir, 'clip.mp4')]);
 
 const calls = [];
 const TTS_PATHS = new Set(['/fal-ai/gemini-3.1-flash-tts', '/fal-ai/elevenlabs/tts/eleven-v3']);
-const QUEUE_PATHS = new Set(['/minimax/h3-max/lip-sync/image-to-video', '/fal-ai/latentsync']);
+const SFX_PATH = '/fal-ai/elevenlabs/sound-effects/v2';
+const MUSIC_PATH = '/cassetteai/music-generator';
+const QUEUE_PATHS = new Set(['/minimax/h3-max/lip-sync/image-to-video', '/fal-ai/latentsync',
+                             '/fal-ai/mmaudio-v2', '/mirelo-ai/sfx2.0/video-to-audio']);
 
 http.createServer((req, res) => {
   const u = new URL(req.url, 'http://127.0.0.1');
@@ -51,13 +68,20 @@ http.createServer((req, res) => {
   if (req.method === 'GET' && u.pathname.startsWith('/media/')) {
     const file = path.join(mediaDir, path.basename(u.pathname));
     if (!fs.existsSync(file)) { res.writeHead(404); return res.end('not found'); }
-    res.writeHead(200, { 'Content-Type': u.pathname.endsWith('.mp3') ? 'audio/mpeg' : 'video/mp4' });
+    const ct = u.pathname.endsWith('.mp3') ? 'audio/mpeg'
+      : u.pathname.endsWith('.wav') ? 'audio/wav' : 'video/mp4';
+    res.writeHead(200, { 'Content-Type': ct });
     return fs.createReadStream(file).pipe(res);
   }
   if (req.method === 'GET' && /\/requests\/stub-req-1\/status$/.test(u.pathname))
     return send(200, { status: 'COMPLETED' });
-  if (req.method === 'GET' && /\/requests\/stub-req-1$/.test(u.pathname))
+  if (req.method === 'GET' && /\/requests\/stub-req-1$/.test(u.pathname)) {
+    if (u.pathname.includes('mirelo'))
+      return send(200, { audio: [{ url: `http://127.0.0.1:${port}/media/tone.mp3`,
+                                   content_type: 'audio/mpeg', file_name: 'sound.mp3' }],
+                         model: 'sfx-2.0' });
     return send(200, { video: { url: `http://127.0.0.1:${port}/media/clip.mp4` }, duration: 2 });
+  }
   if (req.method === 'POST') {
     let raw = '';
     req.on('data', c => { raw += c; });
@@ -70,9 +94,23 @@ http.createServer((req, res) => {
         if (text.includes('FAILME')) { res.writeHead(500); return res.end('stub TTS failure'); }
         return send(200, { audio: { url: `http://127.0.0.1:${port}/media/tone.mp3` } });
       }
+      if (u.pathname === SFX_PATH) {
+        if (String(body?.text || '').includes('FAILME')) { res.writeHead(500); return res.end('stub SFX failure'); }
+        return send(200, { audio: { url: `http://127.0.0.1:${port}/media/tone.mp3` } });
+      }
+      if (u.pathname === MUSIC_PATH) {
+        if (String(body?.prompt || '').includes('FAILME')) { res.writeHead(500); return res.end('stub music failure'); }
+        return send(200, { audio_file: { url: `http://127.0.0.1:${port}/media/music.wav` } });
+      }
+      if (u.pathname === '/fal-ai/mmaudio-v2' &&
+          String(body?.prompt || '').includes('FAILME')) {
+        res.writeHead(500);
+        return res.end('stub mmaudio failure');
+      }
       if (QUEUE_PATHS.has(u.pathname)) return send(200, { request_id: 'stub-req-1' });
-      res.writeHead(404);
-      res.end('not found');
+      // Any other POST is a queue submit (e.g. the video models on the
+      // sound-test instance, whose generations must be able to complete).
+      return send(200, { request_id: 'stub-req-1' });
     });
     return;
   }
