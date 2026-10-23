@@ -251,6 +251,14 @@ const CONFIG = {
   adsEnabled: process.env.ADS_ENABLED === '1',
   admobPublisherId: (process.env.ADMOB_PUBLISHER_ID || '').trim(),
   admobAppAdsTxt: (process.env.ADMOB_APP_ADS_TXT || '').trim(),
+  // --- AI Auto Director (Phase D) -----------------------------------------
+  // Deterministic, rule-based prompt analysis (NO external LLM call). The
+  // plan endpoint is free and never creates a generation; /api/generate
+  // only applies a confirmed plan after re-running the same analyzer and
+  // recomputing every cost server-side. AUTO_DIRECTOR_ENABLED=0 turns the
+  // config flag off; the analyzer itself remains available for the Studio.
+  autoDirectorEnabled: process.env.AUTO_DIRECTOR_ENABLED !== '0',
+  autoDirectorVersion: 1,
 };
 
 // ---------- Prompt languages ----------
@@ -627,6 +635,17 @@ const MIGRATIONS = [
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     ALTER TABLE generations ADD COLUMN character_id INTEGER;` },
+  // v14 — AI Auto Director (Phase D): generations gain the confirmed
+  // auto-plan summary (JSON text; NULL when Auto was not used), plus the
+  // bookkeeping for a generate-time voice route chosen by that plan.
+  // auto_voice_status mirrors the sound bookkeeping: 'none' | 'pending' |
+  // 'applied' | 'failed_refunded' (the video is still delivered and only
+  // the voice add-on is refunded). auto_voice_cost keeps the voice portion
+  // separate inside cost_credits so it can be refunded exactly once.
+  { version: 14, up: `
+    ALTER TABLE generations ADD COLUMN auto_plan TEXT;
+    ALTER TABLE generations ADD COLUMN auto_voice_status TEXT NOT NULL DEFAULT 'none';
+    ALTER TABLE generations ADD COLUMN auto_voice_cost INTEGER NOT NULL DEFAULT 0;` },
 ];
 {
   const applied = new Set(db.prepare('SELECT version FROM schema_migrations').all().map(r => r.version));
@@ -1025,6 +1044,10 @@ app.get('/api/config', (req, res) => res.json({
     max_per_user: CHARACTER_MAX_PER_USER,
     model: CONFIG.modelRef,
   },
+  // AI Auto Director (Phase D): the Studio's AI Auto toggle reads this
+  // flag. The plan endpoint is free; confirmed plans are re-analyzed and
+  // repriced server-side inside /api/generate before anything is charged.
+  auto: { enabled: CONFIG.autoDirectorEnabled, version: CONFIG.autoDirectorVersion },
   // Advertising preparation (AdMob groundwork): flags and placement names
   // only — the publisher id itself is never exposed here. `enabled` is
   // true ONLY when ADS_ENABLED=1 and a valid publisher id are both set;
@@ -1317,10 +1340,536 @@ app.delete('/api/characters/:id', auth, (req, res) => {
   res.json({ ok: true });
 });
 
+// ==========================================================================
+// AI Auto Director (Phase D) — deterministic, rule-based prompt analysis
+// ==========================================================================
+// The analyzer is deliberately RULE-BASED v1: keyword/regex detection over
+// the (already translated) English prompt plus script detection on the
+// user's original text. It makes NO external LLM call, so planning is fast,
+// free and predictable. It only ever proposes settings that already exist
+// in this codebase (modes, aspect ratios, the sound add-ons, the voice
+// routes and the generation engines below) — anything unavailable is
+// reported in `notes`, never silently promised.
+//
+// POST /api/generate/plan is FREE: it never charges and never creates a
+// generation row. /api/generate accepts a confirmed plan, RE-RUNS this
+// analyzer on the real request, and applies only the effects that match
+// the fresh analysis — every cost is recomputed from the rate card, so a
+// tampered plan cannot invent a discount or a free add-on.
+
+function parseStoredAutoPlan(value) {
+  if (!value) return null;
+  if (typeof value === 'object') return value;
+  try { return JSON.parse(value); } catch { return null; }
+}
+function publicGenerationRow(row) {
+  if (!row) return row;
+  return { ...row, auto_plan: parseStoredAutoPlan(row.auto_plan) };
+}
+
+// The plan a user is currently entitled to (null on the free tier).
+function autoUserPlan(userId) {
+  refreshSubscriptionState(userId);
+  const sub = currentSubscription(userId);
+  return sub ? getPlan(sub.plan_id) : null;
+}
+// Mirror of the /api/generate routing ladder for ONE aspect ratio: the
+// plan's quality ceiling, an explicit lower resolution when allowed, the
+// native-4K aspect fallback (4K -> 2K outside 16:9/9:16/1:1) and the flat
+// draft rate. Used by the analyzer so plan totals equal generate totals.
+function autoRoutedQuality(userId, { wantedResolution = null, aspectRatio = '16:9', duration = 5, isDraft = false } = {}) {
+  const plan = autoUserPlan(userId);
+  const planResolution = plan ? plan.resolution : CONFIG.resolution;
+  let resolution = planResolution;
+  if (wantedResolution && RESOLUTIONS.includes(wantedResolution) &&
+      RESOLUTIONS.indexOf(wantedResolution) <= RESOLUTIONS.indexOf(planResolution))
+    resolution = wantedResolution;
+  if (resolution === '4K' && !FOUR_K_ASPECTS.includes(aspectRatio)) resolution = '2K';
+  if (isDraft) resolution = '480P';
+  const cost = isDraft ? (CONFIG.draftCost[Number(duration)] ?? 7)
+                       : generationCost(resolution, Number(duration));
+  return { plan, resolution, cost };
+}
+
+// Engine/route selection — ONLY routes already integrated in this codebase.
+// `route` is the base generation route; when the plan's voice route is
+// lip-sync, `voice_route` names the existing lip-sync endpoint that runs
+// on the finished video. Server-side routing in /api/generate always wins:
+// the applied plan records the route the server actually used.
+function autoEngineRoute({ character = null, hasSourceImage = false, resolution = '768P', plan = null, voice = null } = {}) {
+  let route, model, reason;
+  if (character) {
+    route = 'h3_reference_to_video'; model = CONFIG.modelRef;
+    reason = 'Character selected → reference-to-video route for character consistency.';
+  } else if (hasSourceImage) {
+    route = 'h3_image_to_video'; model = CONFIG.modelI2V;
+    reason = 'Starting image attached → image-to-video route animates that image.';
+  } else if (resolution === '4K' && plan && plan.resolution === '4K') {
+    route = 'kling_o3_4k'; model = CONFIG.model4k;
+    reason = 'Native 4K quality on an entitled plan → Kling O3 4K route.';
+  } else {
+    route = 'h3_text_to_video'; model = CONFIG.model;
+    reason = 'Standard prompt → H3 text-to-video route.';
+  }
+  const engine = { route, model, reason };
+  if (voice && voice.kind === 'lipsync') {
+    engine.voice_route = 'latentsync_video';
+    engine.voice_model = CONFIG.lipsyncVideoModel;
+    engine.reason += ' Dialogue will be lip-synced to the finished video with the existing video lip-sync endpoint.';
+  }
+  return engine;
+}
+
+const AUTO_ARABIC_RE = /[\u0600-\u06FF]/;
+const AUTO_DEVANAGARI_RE = /[\u0900-\u097F]/;
+function autoCleanDialogue(text) {
+  return String(text || '').trim()
+    .replace(/^[\s"'“”«»「『:：,.\-]+/, '')
+    .replace(/[\s"'“”«»」』]+$/, '')
+    .slice(0, 300).trim();
+}
+function autoQuotedText(text) {
+  const t = String(text || '');
+  const pairs = [['“', '”'], ['"', '"'], ['«', '»'], ['「', '」'], ["'", "'"]];
+  for (const [open, close] of pairs) {
+    const i = t.indexOf(open);
+    if (i < 0) continue;
+    const j = t.indexOf(close, i + 1);
+    if (j <= i + 1) continue;
+    const inner = autoCleanDialogue(t.slice(i + 1, j));
+    // A quoted fragment counts as speech when it is a phrase (has a
+    // space or non-Latin script) — a single quoted word is usually a title.
+    if (inner.length >= 2 && (/\s/.test(inner) || /[^\x00-\x7F]/.test(inner))) return inner;
+  }
+  return null;
+}
+function autoSpeechRemainder(text) {
+  const t = String(text || '');
+  const patterns = [
+    /(?:\bsays\b|\bsaid\b|\basks\b|\basked\b|\bshouts\b|\bshouted\b|\bwhispers\b|\bwhispered\b|\breplies\b|\breplied\b)\s*(?::|,|that)?\s+(.+)$/i,
+    /(?:کہتا ہے|کہتی ہے|بولتا ہے|بولتی ہے|کہا|پوچھتا ہے|پوچھتی ہے)\s*[:：]?\s*(.+)$/u,
+    /(?:कहता है|कहती है|बोलता है|बोलती है|पूछता है)\s*[:：]?\s*(.+)$/u,
+  ];
+  for (const re of patterns) {
+    const m = t.match(re);
+    if (m && m[1]) {
+      const out = autoCleanDialogue(m[1]);
+      if (out.length >= 2) return out;
+    }
+  }
+  return null;
+}
+// Extract the spoken line, preferring the ORIGINAL text (the translation
+// may lose the exact words — and for Urdu/Hindi the voice must speak the
+// original script, never the English translation).
+function autoDetectDialogue(originalPrompt, effectivePrompt, promptLanguage) {
+  let text = null, fromOriginal = false;
+  text = autoQuotedText(originalPrompt);
+  if (text) fromOriginal = true;
+  if (!text) { text = autoSpeechRemainder(originalPrompt); if (text) fromOriginal = true; }
+  if (!text) text = autoQuotedText(effectivePrompt);
+  if (!text) text = autoSpeechRemainder(effectivePrompt);
+  if (!text) return null;
+  let language = 'en', scriptMode = 'native';
+  if (AUTO_DEVANAGARI_RE.test(text)) language = 'hi';
+  else if (AUTO_ARABIC_RE.test(text)) language = promptLanguage === 'ar' ? 'ar' : 'ur';
+  else if (['ur', 'hi'].includes(promptLanguage)) {
+    language = promptLanguage;
+    scriptMode = fromOriginal && /[A-Za-z]/.test(text) ? 'roman' : 'native';
+    // Words recovered only from the English translation cannot be spoken
+    // as Urdu/Hindi — flag them so the analyzer stays honest (no charge).
+    if (!fromOriginal) return { text, language, scriptMode, from_translation: true };
+  }
+  return { text, language, script_mode: scriptMode };
+}
+
+const AUTO_SFX_RULES = [
+  ['rain',       /\brain(ing|fall)?\b|بارش/, 'rain'],
+  ['thunder',    /\bthunder|lightning\b|گرج/, 'thunder'],
+  ['car',        /\bcars?\b|گاڑی/, 'car engine'],
+  ['brake',      /\bbrak(e|es|ing)\b|\bscreech/, 'braking'],
+  ['traffic',    /\btraffic\b/, 'traffic'],
+  ['crowd',      /\bcrowd|cheering|applause\b/, 'crowd'],
+  ['ocean',      /\bocean|sea\b|سمندر/, 'ocean'],
+  ['waves',      /\bwaves?\b|لہریں/, 'waves'],
+  ['birds',      /\bbirds?\b|chirping/, 'birds'],
+  ['explosion',  /\bexplosion|exploding|blast\b/, 'explosion'],
+  ['footsteps',  /\bfootsteps?|walking|running\b/, 'footsteps'],
+  ['door',       /\bdoor (opens|closes|slams|creaks)\b|\bdoorbell\b/, 'door'],
+  ['wind',       /\bwind(y)?\b|ہوا/, 'wind'],
+  ['city',       /\bcity|street|market|bazaar\b/, 'city ambience'],
+];
+function autoDetectSfx(text) {
+  const events = [], labels = [];
+  for (const [id, re, label] of AUTO_SFX_RULES) {
+    if (re.test(text)) { events.push(id); labels.push(label); }
+  }
+  return { events, labels };
+}
+
+// The pure analyzer. Callers supply the translated prompt, the validated
+// selections and a costForAspect(aspect) closure (server-side routing).
+function analyzeAutoDirector(opts) {
+  const {
+    userId, originalPrompt, effectivePrompt, languageCode = 'en',
+    selectedMode = 'realistic', selectedStyle = 'realistic',
+    selectedAspect = '16:9', aspectExplicit = false,
+    duration = 5, isDraft = false, character = null, hasSourceImage = false,
+    existingSound = null, voiceSelection = null, voicePreferences = null,
+    costForAspect,
+  } = opts;
+  const text = String(effectivePrompt || '').toLowerCase();
+  const original = String(originalPrompt || '');
+  const combined = `${original} ${effectivePrompt || ''}`;
+  const notes = ['AI Auto Director is rule-based v1: it reads keywords and patterns in your prompt — it is not a large language model.'];
+  const conflicts = [];
+
+  // --- content class ------------------------------------------------------
+  const cartoonCues = /\bcartoon|animation|animated|anime|kids story|children'?s story|pixar\b/.test(text) ||
+    /کارٹون|اینیمیشن|بچوں/.test(combined);
+  const animalMatch = combined.match(/\b(lion|tiger|leopard|cheetah|jaguar|cat|dog|bird|horse|elephant|monkey|bear|deer|rabbit|fox|wolf|zebra|giraffe|cow|goat|sheep|duck|chicken|fish|whale|shark|panda|kangaroo|snake|frog|butterfly|bee|ant|spider|camel|donkey|buffalo|parrot|eagle|owl|penguin|dolphin|turtle|crocodile|hippo|rhino|koala|raccoon|squirrel|mouse|rat|pig|hen|rooster|turkey|ostrich)s?\b/i) ||
+    /(شیر|بلی|کتا|پرندہ|گھوڑا|ہاتھی|بندر)/.test(combined);
+  const productCues = /\bproduct|advertisement|commercial|brand|logo|perfume|smartphone|handbag|cosmetics|sneakers?\b/.test(text);
+  const newsCues = /\bbreaking news|news presenter|news anchor|news studio|reporter|broadcast|headline\b/.test(text) ||
+    /(خبریں|رپورٹر|اینکر|نشریات)/.test(combined);
+  const musicPerfCues = /\bsinger|singing|music video|concert|musician|guitar|piano|violin|rapper|band performs\b/.test(text);
+  const cinematicCues = /\bcinematic|film scene|movie scene|trailer|action scene|dramatic|drama\b/.test(text);
+  const humanCues = /\bman|woman|person|people|human|boy|girl|lady|actor|actress|presenter|reporter|doctor|teacher|farmer|driver|singer|dancer|someone\b/.test(text) ||
+    /(آدمی|انسان|شخص|لڑکا|لڑکی|عورت|مرد|اداکار|استاد|کسان|ڈرائیور|خاتون)/.test(combined);
+  const realisticCues = /\bphotoreal(istic)?|real person|real human|realistic human|lifelike\b/.test(text) ||
+    /حقیقی انسان|اصلی انسان/.test(combined);
+  const realWildlifeCues = /\breal|wildlife|documentary|natural habitat\b/.test(text);
+  let contentClass = 'general';
+  if (cartoonCues) contentClass = 'cartoon';
+  else if (animalMatch) contentClass = 'animal';
+  else if (productCues) contentClass = 'product';
+  else if (newsCues) contentClass = 'news';
+  else if (musicPerfCues) contentClass = 'music';
+  else if (cinematicCues) contentClass = 'cinematic';
+  else if (humanCues) contentClass = 'human';
+
+  // --- style enrichment ---------------------------------------------------
+  const suffixParts = [];
+  if (contentClass === 'animal') suffixParts.push('natural animal movement, realistic wildlife documentary feel, species-accurate behaviour');
+  if (contentClass === 'cartoon') suffixParts.push('bright cartoon animation, expressive characters, playful movement');
+  if (cinematicCues || contentClass === 'cinematic') suffixParts.push('cinematic lighting, dynamic camera movement, film-like composition');
+  if (contentClass === 'human') suffixParts.push('natural human movement and expressions, realistic gestures');
+  if (contentClass === 'product') suffixParts.push('clean commercial product presentation, polished studio lighting');
+  if (contentClass === 'news') suffixParts.push('professional broadcast news presentation, studio lighting');
+  if (contentClass === 'music') suffixParts.push('rhythmic music-video energy, performance-focused camera movement');
+  const styleSuffix = [...new Set(suffixParts)].join('; ');
+
+  // --- mode conflicts -------------------------------------------------------
+  if (cartoonCues && selectedMode === 'realistic')
+    conflicts.push({ field: 'mode', selected: selectedMode, detected: 'cartoon',
+      question: 'Your prompt sounds like a cartoon/animation, but Realistic mode is selected. Which should win?' });
+  else if (realisticCues && selectedMode === 'cartoon')
+    conflicts.push({ field: 'mode', selected: selectedMode, detected: 'realistic',
+      question: 'Your prompt asks for a real/photorealistic person, but Cartoon mode is selected. Which should win?' });
+  else if (contentClass === 'animal' && selectedMode === 'cartoon' && realWildlifeCues)
+    conflicts.push({ field: 'mode', selected: selectedMode, detected: 'realistic',
+      question: 'Your prompt describes a real/wildlife animal, but Cartoon mode is selected. Which should win?' });
+
+  // --- orientation ----------------------------------------------------------
+  let orientationHint = null;
+  if (/\bshorts?\b|\breels?\b|tiktok|vertical|portrait video/.test(text) || /عمودی/.test(combined))
+    orientationHint = '9:16';
+  else if (/\bwidescreen|landscape|cinematic\b/.test(text) || /افقی/.test(combined))
+    orientationHint = '16:9';
+  let finalAspect = selectedAspect;
+  if (orientationHint && orientationHint !== selectedAspect) {
+    if (aspectExplicit) {
+      conflicts.push({ field: 'aspect_ratio', selected: selectedAspect, detected: orientationHint,
+        question: `Your prompt suggests a ${orientationHint} video, but ${selectedAspect} is selected. Which should win?` });
+    } else finalAspect = orientationHint;
+  }
+
+  // --- dialogue + voice route ----------------------------------------------
+  const dialogue = autoDetectDialogue(original, effectivePrompt, languageCode);
+  const routedHere = costForAspect(finalAspect);
+  const canLipsync = !!(routedHere.plan && routedHere.plan.can_lipsync);
+  let voice = null;
+  if (dialogue) {
+    if (dialogue.from_translation) {
+      notes.push('Dialogue was detected, but the exact original words could not be isolated, so no voice add-on was proposed — quote the spoken line in your prompt to use the voice route.');
+    } else if (!['ur', 'hi', 'en'].includes(dialogue.language)) {
+      notes.push(`Dialogue in "${dialogue.language}" cannot use the voice route — the voice catalog covers Urdu, Hindi and English only — so no voice add-on was proposed.`);
+    } else if (isDraft) {
+      notes.push('Drafts cannot take voice add-ons, so the detected dialogue was not routed to a voice. Upgrade the draft to full quality to add it.');
+    } else if (voiceSelection && voiceSelection.kind) {
+      const kind = voiceSelection.kind === 'lipsync' ? 'lipsync' : 'voiceover';
+      voice = { kind, language: dialogue.language,
+        cost: kind === 'lipsync' ? CONFIG.lipsyncCost : CONFIG.voiceoverCost,
+        text: dialogue.text, script_mode: dialogue.script_mode || 'native' };
+    } else if (!defaultVoiceProvider()) {
+      notes.push('Dialogue was detected, but no voice provider is configured on this server, so no voice add-on was proposed.');
+    } else {
+      const hasFace = !!character || contentClass === 'human';
+      const kind = hasFace && canLipsync ? 'lipsync' : 'voiceover';
+      voice = { kind, language: dialogue.language,
+        cost: kind === 'lipsync' ? CONFIG.lipsyncCost : CONFIG.voiceoverCost,
+        text: dialogue.text, script_mode: dialogue.script_mode || 'native' };
+      if (voicePreferences && typeof voicePreferences === 'object') {
+        for (const k of ['provider', 'voice', 'style', 'speed'])
+          if (voicePreferences[k]) voice[k] = String(voicePreferences[k]);
+      }
+      if (hasFace && !canLipsync)
+        notes.push('Lip-sync needs the Pro or Extra Pro plan, so the dialogue uses the voiceover route instead.');
+      if (dialogue.language === 'ur')
+        notes.push('Urdu dialogue uses the separate Urdu voice route (voiceover or lip-sync): the video model\'s own built-in audio language is not guaranteed, and Urdu speech is not officially documented for it.');
+      else
+        notes.push('Dialogue uses the separate voice route: the video model\'s own built-in audio language is not guaranteed.');
+      notes.push(kind === 'lipsync'
+        ? 'Lip-sync is best-effort — the mouth match must be judged on the real generated sample, never assumed perfect.'
+        : 'The voiceover replaces the generated video\'s original audio track with the synthesized voice.');
+    }
+  } else if (contentClass === 'animal') {
+    notes.push('No human dialogue was detected, so no voice add-on is proposed.');
+  }
+
+  // --- sound: SFX events + music --------------------------------------------
+  const { events: sfxEvents, labels: sfxLabels } = autoDetectSfx(combined.toLowerCase());
+  const musicAsk = /\bbackground music|music|song|soundtrack|melody\b/.test(text) || /موسیقی|گانا/.test(combined);
+  let sound = null;
+  if (existingSound && existingSound.mode) {
+    const mode = existingSound.mode;
+    let prompt = existingSound.prompt || String(effectivePrompt || '');
+    if (sfxLabels.length && !sfxLabels.some(l => prompt.toLowerCase().includes(l)))
+      prompt = `${prompt} — sound events: ${sfxLabels.join(', ')}`.slice(0, 500);
+    sound = { mode, prompt, cost: CONFIG.soundCosts[mode] || 0,
+              volume: existingSound.volume ?? SOUND_DEFAULT_VOLUME[mode] ?? 100 };
+    if (musicAsk && mode !== 'music')
+      notes.push('Music was mentioned, but the sound mode you already selected is kept — only one generate-time sound mode is applied.');
+  } else if (isDraft) {
+    if (sfxEvents.length || musicAsk)
+      notes.push('Drafts cannot take sound add-ons, so the detected sounds were not added. Upgrade the draft to full quality to add them.');
+  } else if (!soundConfigured()) {
+    if (sfxEvents.length || musicAsk)
+      notes.push('Sounds were detected, but the sound engines are not configured on this server, so no sound add-on was proposed.');
+  } else if (sfxEvents.length) {
+    sound = { mode: 'sync',
+      prompt: `${String(effectivePrompt || '').slice(0, 300)} — natural synchronized sounds: ${sfxLabels.join(', ')}`.slice(0, 500),
+      cost: CONFIG.soundCosts.sync, volume: SOUND_DEFAULT_VOLUME.sync };
+    if (musicAsk)
+      notes.push('Music was also mentioned, but auto sync sound was chosen — only one generate-time sound mode can be applied, so the separate music add-on was skipped.');
+  } else if (musicAsk) {
+    sound = { mode: 'music',
+      prompt: `${String(effectivePrompt || '').slice(0, 300)} — instrumental background music matching the scene`.slice(0, 500),
+      cost: CONFIG.soundCosts.music, volume: SOUND_DEFAULT_VOLUME.music };
+  }
+
+  // --- costs + engine ---------------------------------------------------------
+  const routed = costForAspect(finalAspect);
+  const baseCost = routed.cost;
+  const addonsCost = (sound ? sound.cost : 0) + (voice ? voice.cost : 0);
+  const engine = autoEngineRoute({ character, hasSourceImage, resolution: routed.resolution, plan: routed.plan, voice });
+  const needsConfirmation = conflicts.length > 0 ||
+    finalAspect !== selectedAspect ||
+    (!!sound && !existingSound) || (!!voice && !(voiceSelection && voiceSelection.kind));
+
+  return {
+    detected: {
+      content_class: contentClass,
+      dialogue: dialogue && !dialogue.from_translation
+        ? { text: dialogue.text, language: dialogue.language } : (dialogue ? { text: dialogue.text, language: dialogue.language } : null),
+      sfx_events: sfxEvents,
+      music: musicAsk,
+      orientation_hint: orientationHint,
+    },
+    apply: {
+      mode: selectedMode,
+      style_suffix: styleSuffix,
+      aspect_ratio: finalAspect,
+      sound, voice,
+    },
+    engine,
+    conflicts,
+    base_cost: baseCost,
+    addons_cost: addonsCost,
+    total_cost: baseCost + addonsCost,
+    notes,
+    needs_confirmation: needsConfirmation,
+    meta: {
+      aspect_explicit: !!aspectExplicit,
+      selected_aspect_ratio: selectedAspect,
+      selected_mode: selectedMode,
+      selected_style: selectedStyle,
+      resolution: routed.resolution,
+    },
+  };
+}
+
+// Canonicalize a confirmed plan against a FRESH analysis: only effects the
+// echoed plan actually contains AND that match the fresh analysis are
+// applied; every cost is recomputed from the rate card / routing ladder.
+function canonicalizeAutoPlan(fresh, echo, { character = null, hasSourceImage = false, costForAspect } = {}) {
+  if (!echo || typeof echo !== 'object' || !echo.apply || typeof echo.apply !== 'object') return null;
+  const e = echo.apply;
+  const selectedAspect = fresh.meta.selected_aspect_ratio;
+  const selectedMode = fresh.meta.selected_mode;
+  let aspect = selectedAspect;
+  if (CONFIG.aspectRatios.includes(e.aspect_ratio)) {
+    if (e.aspect_ratio === fresh.apply.aspect_ratio) aspect = e.aspect_ratio;
+    else {
+      const c = fresh.conflicts.find(x => x.field === 'aspect_ratio');
+      if (c && e.aspect_ratio === c.detected) aspect = e.aspect_ratio;
+    }
+  }
+  let mode = selectedMode;
+  if (e.mode && Object.hasOwn(VIDEO_MODES, e.mode)) {
+    if (e.mode === fresh.apply.mode) mode = e.mode;
+    else {
+      const c = fresh.conflicts.find(x => x.field === 'mode');
+      if (c && e.mode === c.detected) mode = e.mode;
+    }
+  }
+  const suffix = (typeof e.style_suffix === 'string' && e.style_suffix === fresh.apply.style_suffix)
+    ? e.style_suffix : '';
+  let sound = null;
+  if (e.sound && fresh.apply.sound && e.sound.mode === fresh.apply.sound.mode &&
+      e.sound.prompt === fresh.apply.sound.prompt)
+    sound = { ...fresh.apply.sound, cost: CONFIG.soundCosts[fresh.apply.sound.mode] || 0 };
+  let voice = null;
+  if (e.voice && fresh.apply.voice && e.voice.kind === fresh.apply.voice.kind &&
+      e.voice.language === fresh.apply.voice.language && e.voice.text === fresh.apply.voice.text)
+    voice = { ...fresh.apply.voice,
+      cost: fresh.apply.voice.kind === 'lipsync' ? CONFIG.lipsyncCost : CONFIG.voiceoverCost };
+  const routed = costForAspect(aspect);
+  const addonsCost = (sound ? sound.cost : 0) + (voice ? voice.cost : 0);
+  const engine = autoEngineRoute({ character, hasSourceImage, resolution: routed.resolution, plan: routed.plan, voice });
+  return {
+    ...fresh,
+    apply: { mode, style_suffix: suffix, aspect_ratio: aspect, sound, voice },
+    engine,
+    base_cost: routed.cost,
+    addons_cost: addonsCost,
+    total_cost: routed.cost + addonsCost,
+    confirmed: true,
+  };
+}
+
+// ---------- AI Auto Director: free plan endpoint ---------------------------
+// Same validation family as /api/generate (auth + the generate rate-limit
+// family), but it NEVER charges and NEVER creates a generation row.
+app.post('/api/generate/plan', auth, generateLimiter, async (req, res) => {
+  const b = req.body || {};
+  const prompt = b.prompt;
+  const languageCode = String(b.prompt_language || b.language || 'en').toLowerCase();
+  const mode = String(b.mode || 'realistic').toLowerCase();
+  const style = b.style === undefined ? 'realistic' : b.style;
+  const duration = b.duration === undefined ? 5 : b.duration;
+  const aspectExplicit = b.aspect_ratio !== undefined && b.aspect_ratio !== null && b.aspect_ratio !== '';
+  const selectedAspect = aspectExplicit ? String(b.aspect_ratio) : '16:9';
+  if (!prompt || typeof prompt !== 'string' || prompt.trim().length < 3 || prompt.length > 500)
+    return res.status(400).json({ error: 'Please describe your video in 3–500 characters.' });
+  if (!CONFIG.aspectRatios.includes(selectedAspect))
+    return res.status(400).json({ error: `aspect_ratio must be one of: ${CONFIG.aspectRatios.join(', ')}` });
+  if (!CONFIG.durations.includes(Number(duration)))
+    return res.status(400).json({ error: `duration must be one of: ${CONFIG.durations.join(', ')} seconds` });
+  if (!CONFIG.styles.includes(style))
+    return res.status(400).json({ error: `style must be one of: ${CONFIG.styles.join(', ')}` });
+  if (!Object.hasOwn(VIDEO_MODES, mode))
+    return res.status(400).json({ error: `mode must be one of: ${Object.keys(VIDEO_MODES).join(', ')}` });
+  if (!VIDEO_MODES[mode].includes(style))
+    return res.status(400).json({ error: `style "${style}" is not available in ${mode} mode — use one of: ${VIDEO_MODES[mode].join(', ')}` });
+  if (!PROMPT_LANGUAGES.some(l => l.code === languageCode))
+    return res.status(400).json({ error: `language must be one of: ${PROMPT_LANGUAGES.map(l => l.code).join(', ')}` });
+  const isDraft = String(b.quality || '').toLowerCase() === 'draft';
+  let wantedResolution = null;
+  const wantedRaw = b.resolution !== undefined && b.resolution !== null && b.resolution !== ''
+    ? String(b.resolution).toUpperCase()
+    : (['768P', '2K', '4K'].includes(String(b.quality || '').toUpperCase()) ? String(b.quality).toUpperCase() : null);
+  if (wantedRaw) {
+    if (!RESOLUTIONS.includes(wantedRaw))
+      return res.status(400).json({ error: `resolution must be one of: ${RESOLUTIONS.join(', ')}` });
+    wantedResolution = wantedRaw;
+  }
+  let character = null;
+  if (b.character_id !== undefined && b.character_id !== null && b.character_id !== '') {
+    character = getOwnCharacter(req.user.id, b.character_id);
+    if (!character) return res.status(404).json({ error: 'Character not found.' });
+  }
+  let hasSourceImage = false;
+  if (character) hasSourceImage = false; // the character route wins, as in /api/generate
+  else if (b.image_path !== undefined && b.image_path !== null && b.image_path !== '') {
+    if (!resolveOwnedUpload(req.user.id, b.image_path))
+      return res.status(400).json({ error: 'image_path must be an image you uploaded (POST /api/uploads/image).' });
+    hasSourceImage = true;
+  }
+  // Current sound selection (if any) — validated exactly like /api/generate.
+  let existingSound = null;
+  if (b.sound !== undefined && b.sound !== null) {
+    const s = (typeof b.sound === 'object') ? b.sound : {};
+    const smode = String(s.mode || '').toLowerCase();
+    if (!SOUND_GENERATE_MODES.includes(smode))
+      return res.status(400).json({ error: `sound.mode must be one of: ${SOUND_GENERATE_MODES.join(', ')}` });
+    if (!soundConfigured())
+      return res.status(503).json({ error: 'sound_not_configured', message: SOUND_NOT_CONFIGURED_MSG });
+    let svol = SOUND_DEFAULT_VOLUME[smode];
+    if (s.volume !== undefined && s.volume !== null && s.volume !== '') {
+      svol = Number(s.volume);
+      if (!Number.isFinite(svol) || svol < 10 || svol > 100)
+        return res.status(400).json({ error: 'sound.volume must be between 10 and 100.' });
+      svol = Math.round(svol);
+    }
+    let sPromptRaw = null;
+    if (s.prompt !== undefined && s.prompt !== null && String(s.prompt).trim()) {
+      sPromptRaw = String(s.prompt).trim();
+      if (sPromptRaw.length > 500)
+        return res.status(400).json({ error: 'sound.prompt must be at most 500 characters.' });
+      if (moderated(sPromptRaw))
+        return res.status(400).json({ error: 'The sound description was blocked by content moderation. Please rephrase it.' });
+    }
+    existingSound = { mode: smode, volume: svol, promptRaw: sPromptRaw, prompt: null };
+  }
+  if (isDraft && existingSound)
+    return res.status(400).json({ error: 'Drafts cannot take sound add-ons. Generate the draft first, then upgrade it to full quality and add sound to that version.' });
+  if (moderated(prompt))
+    return res.status(400).json({ error: 'This prompt was blocked by content moderation. Please rephrase it.' });
+  // Translation first (same step, same honest failure as /api/generate) —
+  // still no charge and no generation row, whatever happens.
+  let effectivePrompt = prompt.trim();
+  if (TRANSLATED_LANGUAGES.has(languageCode)) {
+    let translated;
+    try { translated = await translatePrompt(prompt.trim(), languageCode); }
+    catch { return res.status(502).json({ error: 'We could not translate your prompt into English, so nothing was charged. Please try again.' }); }
+    if (moderated(translated))
+      return res.status(400).json({ error: 'This prompt was blocked by content moderation. Please rephrase it.' });
+    effectivePrompt = translated;
+  }
+  if (existingSound) {
+    if (existingSound.promptRaw && TRANSLATED_LANGUAGES.has(languageCode)) {
+      try { existingSound.prompt = await translatePrompt(existingSound.promptRaw, languageCode); }
+      catch { return res.status(502).json({ error: 'We could not translate your sound description into English, so nothing was charged. Please try again.' }); }
+      if (moderated(existingSound.prompt))
+        return res.status(400).json({ error: 'The sound description was blocked by content moderation. Please rephrase it.' });
+    } else {
+      existingSound.prompt = existingSound.promptRaw || effectivePrompt;
+    }
+  }
+  const costForAspect = (aspect) => autoRoutedQuality(req.user.id, {
+    wantedResolution, aspectRatio: aspect, duration: Number(duration), isDraft });
+  const voiceSelection = (b.voice && typeof b.voice === 'object' && b.voice.kind) ? b.voice : null;
+  const characterPrefs = character && character.voice_provider
+    ? { provider: character.voice_provider, voice: character.voice_id, style: character.voice_style } : {};
+  const voicePreferences = { ...characterPrefs,
+    ...((b.voice && typeof b.voice === 'object' && !b.voice.kind) ? b.voice : {}) };
+  const plan = analyzeAutoDirector({
+    userId: req.user.id, originalPrompt: prompt, effectivePrompt, languageCode,
+    selectedMode: mode, selectedStyle: style, selectedAspect, aspectExplicit,
+    duration: Number(duration), isDraft, character, hasSourceImage,
+    existingSound, voiceSelection, voicePreferences, costForAspect,
+  });
+  res.json({ plan });
+});
+
+
 // ---------- Generation (idempotent + atomic charge) ----------
 app.post('/api/generate', auth, generateLimiter, async (req, res) => {
-  const { prompt, aspect_ratio = '16:9', duration = 5, style = 'realistic', language = 'en' } = req.body || {};
-  const mode = String(req.body?.mode || 'realistic').toLowerCase();
+  const { prompt, duration = 5, language = 'en' } = req.body || {};
+  let aspect_ratio = req.body?.aspect_ratio || '16:9';
+  let style = req.body?.style === undefined ? 'realistic' : req.body.style;
+  let mode = String(req.body?.mode || 'realistic').toLowerCase();
   const idemKey = String(req.headers['idempotency-key'] || req.body?.idempotency_key || '').slice(0, 80) || null;
 
   if (!prompt || prompt.trim().length < 3 || prompt.length > 500)
@@ -1458,6 +2007,75 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
     }
   }
 
+  // --- AI Auto Director (Phase D): apply a confirmed plan ------------------
+  // The client echoes the plan it showed the user plus auto_confirmed:true.
+  // The server RE-RUNS the analyzer on this exact request and applies only
+  // the effects that match the fresh analysis (canonicalizeAutoPlan) — all
+  // costs are recomputed from the rate card, so a tampered plan cannot
+  // invent discounts, free add-ons or an unentitled engine route. When
+  // auto is not used, nothing below runs and behaviour is unchanged.
+  let autoPlanToStore = null;
+  let autoVoiceSpec = null;
+  let autoVoiceCost = 0;
+  if (req.body?.auto_confirmed === true && req.body?.auto_plan &&
+      typeof req.body.auto_plan === 'object') {
+    if (req.body.resolution !== undefined) {
+      const wantedCheck = String(req.body.resolution).toUpperCase();
+      if (!RESOLUTIONS.includes(wantedCheck))
+        return res.status(400).json({ error: `resolution must be one of: ${RESOLUTIONS.join(', ')}` });
+    }
+    const echo = req.body.auto_plan;
+    const aspectExplicit = echo?.meta?.aspect_explicit !== undefined
+      ? !!echo.meta.aspect_explicit
+      : (req.body?.aspect_ratio !== undefined && req.body?.aspect_ratio !== null && req.body?.aspect_ratio !== '');
+    const wantedResolution = req.body.resolution !== undefined
+      ? String(req.body.resolution).toUpperCase()
+      : (['768P', '2K', '4K'].includes(String(req.body?.quality || '').toUpperCase())
+          ? String(req.body.quality).toUpperCase() : null);
+    const autoCostForAspect = (aspect) => autoRoutedQuality(req.user.id, {
+      wantedResolution, aspectRatio: aspect, duration: Number(duration), isDraft });
+    const characterPrefs = character && character.voice_provider
+      ? { provider: character.voice_provider, voice: character.voice_id, style: character.voice_style } : {};
+    const voicePreferences = { ...characterPrefs,
+      ...((req.body?.voice && typeof req.body.voice === 'object' && !req.body.voice.kind) ? req.body.voice : {}) };
+    const freshPlan = analyzeAutoDirector({
+      userId: req.user.id, originalPrompt: prompt, effectivePrompt, languageCode,
+      selectedMode: mode, selectedStyle: style, selectedAspect: aspect_ratio, aspectExplicit,
+      duration: Number(duration), isDraft, character, hasSourceImage: !!sourceImagePath,
+      existingSound: soundSpec ? { mode: soundSpec.mode, prompt: soundSpec.prompt, volume: soundSpec.volume } : null,
+      voiceSelection: (req.body?.voice && typeof req.body.voice === 'object' && req.body.voice.kind) ? req.body.voice : null,
+      voicePreferences, costForAspect: autoCostForAspect,
+    });
+    const appliedPlan = canonicalizeAutoPlan(freshPlan, echo, {
+      character, hasSourceImage: !!sourceImagePath, costForAspect: autoCostForAspect });
+    if (appliedPlan) {
+      autoPlanToStore = appliedPlan;
+      if (appliedPlan.apply.mode && appliedPlan.apply.mode !== mode) {
+        mode = appliedPlan.apply.mode;
+        if (!VIDEO_MODES[mode].includes(style)) style = VIDEO_MODES[mode][0];
+      }
+      if (appliedPlan.apply.aspect_ratio) aspect_ratio = appliedPlan.apply.aspect_ratio;
+      if (appliedPlan.apply.style_suffix) {
+        const suffix = appliedPlan.apply.style_suffix;
+        if (!effectivePrompt.includes(suffix)) effectivePrompt = `${effectivePrompt} — ${suffix}`;
+      }
+      if (appliedPlan.apply.sound) {
+        const as = appliedPlan.apply.sound;
+        soundSpec = { mode: as.mode,
+          volume: as.volume ?? (soundSpec ? soundSpec.volume : undefined) ?? SOUND_DEFAULT_VOLUME[as.mode] ?? 100,
+          promptRaw: soundSpec ? soundSpec.promptRaw : null, prompt: as.prompt };
+      } else if (soundSpec) {
+        // Auto was confirmed but the echoed plan does not include the
+        // manual sound selection — only what the plan contains applies.
+        soundSpec = null;
+      }
+      if (appliedPlan.apply.voice) {
+        autoVoiceSpec = appliedPlan.apply.voice;
+        autoVoiceCost = Number(autoVoiceSpec.cost) || 0;
+      }
+    }
+  }
+
   // --- Plan routing -------------------------------------------------------
   // The user's current plan sets the maximum quality (resolution + model).
   // A lower resolution may be requested explicitly; a higher one is capped
@@ -1517,14 +2135,26 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
   // amount is refunded by failAndRefund; if only the sound step fails,
   // just the add-on is refunded (see ensureSoundApplied).
   const soundCost = soundSpec ? CONFIG.soundCosts[soundSpec.mode] : 0;
-  const totalCost = cost + soundCost;
+  const totalCost = cost + soundCost + autoVoiceCost;
+  // The applied plan records the route the server ACTUALLY used — server
+  // routing always wins over whatever the echoed plan claimed (e.g. a
+  // plan claiming the Kling 4K route for a non-entitled user records the
+  // H3 route the server really took).
+  if (autoPlanToStore) {
+    const actualEngine = autoEngineRoute({ character, hasSourceImage: !!sourceImagePath,
+      resolution, plan, voice: autoVoiceSpec });
+    if (actualEngine.route !== autoPlanToStore.engine?.route ||
+        actualEngine.voice_route !== autoPlanToStore.engine?.voice_route)
+      autoPlanToStore = { ...autoPlanToStore, engine: actualEngine };
+  }
 
   // Duplicate-request protection: same idempotency key returns the existing
   // job — no second charge, no second fal.ai submission.
   if (idemKey) {
     const existing = db.prepare('SELECT * FROM generations WHERE user_id = ? AND idempotency_key = ?')
       .get(req.user.id, idemKey);
-    if (existing) return res.json({ id: existing.id, status: existing.status, duplicate: true });
+    if (existing) return res.json({ id: existing.id, status: existing.status, duplicate: true,
+      ...(existing.auto_plan ? { auto_plan: parseStoredAutoPlan(existing.auto_plan) } : {}) });
   }
 
   // Atomic: daily-limit check + balance check + deduct + insert in one transaction.
@@ -1539,11 +2169,13 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
       if (creditBuckets(user).total < totalCost) throw Object.assign(new Error('NO_CREDITS'), { status: 402 });
       spendBuckets(user, totalCost); // plan credits first, then free credits
       const info = db.prepare(
-        `INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, cost_credits, idempotency_key, resolution, model, prompt_language, translated_prompt, mode, source_image_path, watermark_text, watermark_status, sound_mode, sound_status, sound_prompt, sound_volume, sound_cost, stage, character_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(user.id, prompt.trim(), aspect_ratio, Number(duration), style, totalCost, idemKey, resolution, model, languageCode, translatedPrompt, mode, sourceImagePath, watermarkText, watermarkStatus,
+        `INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, cost_credits, idempotency_key, resolution, model, prompt_language, translated_prompt, mode, source_image_path, watermark_text, watermark_status, sound_mode, sound_status, sound_prompt, sound_volume, sound_cost, stage, character_id, auto_plan, auto_voice_status, auto_voice_cost)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(user.id, prompt.trim(), aspect_ratio, Number(duration), style, totalCost, idemKey, resolution, model, languageCode, translatedPrompt, mode, sourceImagePath, watermarkText, watermarkStatus,
            soundSpec ? soundSpec.mode : null, soundSpec ? 'pending' : 'none',
            soundSpec ? soundSpec.prompt : null, soundSpec ? soundSpec.volume : null, soundCost,
-           isDraft ? 'draft' : 'final', character ? character.id : null);
+           isDraft ? 'draft' : 'final', character ? character.id : null,
+           autoPlanToStore ? JSON.stringify(autoPlanToStore) : null,
+           autoVoiceSpec ? 'pending' : 'none', autoVoiceCost);
       return Number(info.lastInsertRowid);
     });
   } catch (e) {
@@ -1552,7 +2184,8 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
     if (String(e.message).includes('UNIQUE')) { // race on idempotency key
       const existing = db.prepare('SELECT * FROM generations WHERE user_id = ? AND idempotency_key = ?')
         .get(req.user.id, idemKey);
-      if (existing) return res.json({ id: existing.id, status: existing.status, duplicate: true });
+      if (existing) return res.json({ id: existing.id, status: existing.status, duplicate: true,
+        ...(existing.auto_plan ? { auto_plan: parseStoredAutoPlan(existing.auto_plan) } : {}) });
     }
     throw e;
   }
@@ -1609,6 +2242,11 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
                ...(soundSpec ? { sound_mode: soundSpec.mode, sound_status: 'pending',
                                  sound_cost_credits: soundCost } : {}),
                ...(translatedPrompt ? { translated_prompt: translatedPrompt } : {}),
+               ...(autoPlanToStore ? { auto_plan: autoPlanToStore,
+                                       auto_voice_status: autoVoiceSpec ? 'pending' : 'none',
+                                       auto_voice_cost: autoVoiceCost } : {}),
+               ...(autoVoiceSpec ? { voice_mode: autoVoiceSpec.kind,
+                                     voice_cost_credits: autoVoiceCost } : {}),
                ...(fallbackNote ? { note: fallbackNote } : {}) });
   } catch (e) {
     failAndRefund(jobId, `Provider submission failed (${e.message})`);
@@ -1634,6 +2272,144 @@ function failAndRefund(jobId, message) {
     tx(() => refundBuckets(job.user_id, job.cost_credits));
   }
 }
+
+// ---------- Generate-time auto voice post-processing (Phase D) ------------
+// Mirrors ensureSoundApplied: when a generation whose confirmed auto plan
+// routed its dialogue to a voice completes, the voice step runs before the
+// client sees the video. voiceover synthesizes the dialogue and muxes it
+// over the video (replacing the model's own audio; when an auto sound
+// soundtrack was applied first, the voice is mixed OVER it so neither is
+// silently lost). lipsync synthesizes the dialogue and runs the existing
+// video lip-sync endpoint (LatentSync) on the finished video; an applied
+// soundtrack is then mixed back under the synced voice. If the voice step
+// fails, the VIDEO IS STILL DELIVERED — only the voice add-on is refunded
+// (exactly once: the refund happens only in the UPDATE that flips
+// auto_voice_status away from 'pending') and the row is honestly marked
+// auto_voice_status='failed_refunded'.
+const autoVoiceInFlight = new Set();
+
+async function renderAutoVoiceover(job, audioAbs) {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ajk-auto-vo-'));
+  try {
+    const srcFile = path.join(work, 'source.mp4');
+    await downloadClip(job.video_url, srcFile, { left: JOIN_MAX_BYTES });
+    const probe = await probeMedia(srcFile);
+    fs.mkdirSync(CONFIG.generatedDir, { recursive: true });
+    const name = `${randomUUID()}.mp4`;
+    const output = path.join(CONFIG.generatedDir, name);
+    const duckBed = probe.hasAudio && job.sound_status === 'applied' && job.sound_mode;
+    const args = duckBed
+      ? ['-y', '-i', srcFile, '-i', audioAbs, '-filter_complex',
+         '[0:a]volume=0.3[a0];[1:a]volume=1[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]',
+         '-map', '0:v:0', '-map', '[aout]', '-c:v', 'copy', '-c:a', 'aac', '-shortest', output]
+      : ['-y', '-i', srcFile, '-i', audioAbs, '-map', '0:v:0', '-map', '1:a:0',
+         '-c:v', 'copy', '-c:a', 'aac', '-shortest', output];
+    try { await runFfmpeg(args); }
+    catch {
+      await runFfmpeg(args.map(a => a === 'copy' ? 'libx264' : a)
+        .filter((a, i, arr) => !(a === 'libx264' && arr[i - 1] === 'libx264')));
+    }
+    const outProbe = await probeMedia(output);
+    if (!outProbe.hasAudio) throw new Error('Auto voiceover render produced no audio track');
+    return `/files/generated/${name}`;
+  } finally { fs.rmSync(work, { recursive: true, force: true }); }
+}
+
+// Mix an existing soundtrack (the video at bedUrl) UNDER the audio of the
+// main video at mainUrl — used to keep an applied auto soundtrack audible
+// beneath a lip-synced voice. Returns a local /files/generated/ URL.
+async function mixSoundtrackUnderMain(bedUrl, mainUrl) {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ajk-auto-mix-'));
+  try {
+    const bedFile = path.join(work, 'bed.mp4');
+    const mainFile = path.join(work, 'main.mp4');
+    await downloadClip(bedUrl, bedFile, { left: JOIN_MAX_BYTES });
+    await downloadClip(mainUrl, mainFile, { left: JOIN_MAX_BYTES });
+    const bedProbe = await probeMedia(bedFile);
+    const mainProbe = await probeMedia(mainFile);
+    if (!bedProbe.hasAudio || !mainProbe.hasAudio) return mainUrl;
+    fs.mkdirSync(CONFIG.generatedDir, { recursive: true });
+    const name = `${randomUUID()}.mp4`;
+    const output = path.join(CONFIG.generatedDir, name);
+    await runFfmpeg(['-y', '-i', bedFile, '-i', mainFile, '-filter_complex',
+      '[0:a]volume=0.3[a0];[1:a]volume=1[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]',
+      '-map', '1:v:0', '-map', '[aout]', '-c:v', 'copy', '-c:a', 'aac', '-shortest', output]);
+    const outProbe = await probeMedia(output);
+    if (!outProbe.hasAudio) throw new Error('Soundtrack mix produced no audio track');
+    return `/files/generated/${name}`;
+  } finally { fs.rmSync(work, { recursive: true, force: true }); }
+}
+
+async function ensureAutoVoiceApplied(job, baseUrl) {
+  if (!job || job.status !== 'completed' || !job.video_url) return job;
+  if (job.auto_voice_status !== 'pending') return job;
+  const plan = parseStoredAutoPlan(job.auto_plan);
+  const spec = plan?.apply?.voice || null;
+  if (!spec || !spec.text) {
+    db.prepare(`UPDATE generations SET auto_voice_status = 'none', auto_voice_cost = 0,
+                updated_at = datetime('now') WHERE id = ? AND auto_voice_status = 'pending'`)
+      .run(job.id);
+    const fresh0 = db.prepare('SELECT * FROM generations WHERE id = ?').get(job.id);
+    if (fresh0) Object.assign(job, fresh0);
+    return job;
+  }
+  if (autoVoiceInFlight.has(job.id)) return job;
+  autoVoiceInFlight.add(job.id);
+  let voiceJobId = null;
+  try {
+    let settings;
+    const wantedBody = { script: spec.text, spoken_language: spec.language,
+      script_mode: spec.script_mode || 'native',
+      provider: spec.provider, voice: spec.voice, style: spec.style, speed: spec.speed };
+    try { settings = parseVoiceSettings(wantedBody); }
+    catch { settings = parseVoiceSettings({ script: spec.text, spoken_language: spec.language,
+      script_mode: spec.script_mode || 'native' }); }
+    if (!settings.provider) throw new Error('voice_not_configured');
+    if (moderated(settings.rawScript)) throw new Error('The dialogue was blocked by content moderation.');
+    voiceJobId = recordVoiceJob({ userId: job.user_id,
+      kind: spec.kind === 'lipsync' ? 'lipsync' : 'voiceover',
+      settings, text: settings.text, status: 'processing', generationId: job.id });
+    const out = await synthesizeScript(settings, settings.text);
+    db.prepare('UPDATE generations SET voice_audio_path = ? WHERE id = ?').run(out.audioPath, job.id);
+    let finalUrl;
+    if (spec.kind === 'lipsync') {
+      const result = await runFalQueueJob(CONFIG.lipsyncVideoModel, {
+        video_url: absoluteMediaUrl(job.video_url, baseUrl),
+        audio_url: `${baseUrl}${out.audioPath}`,
+        enable_safety_checker: true,
+      });
+      finalUrl = result?.video?.url || result?.data?.video?.url || null;
+      if (!finalUrl) throw new Error('Lip-sync provider returned no video');
+      if (job.sound_status === 'applied' && job.sound_mode)
+        finalUrl = await mixSoundtrackUnderMain(job.video_url, finalUrl);
+    } else {
+      finalUrl = await renderAutoVoiceover(job, out.absPath);
+    }
+    db.prepare(`UPDATE generations SET video_url = ?, auto_voice_status = 'applied',
+                updated_at = datetime('now') WHERE id = ? AND auto_voice_status = 'pending'`)
+      .run(finalUrl, job.id);
+    if (voiceJobId)
+      db.prepare(`UPDATE voice_jobs SET status = 'completed', audio_path = ? WHERE id = ?`)
+        .run(out.audioPath, voiceJobId);
+  } catch (e) {
+    console.error(`auto voice step failed for generation ${job.id}:`, e.message);
+    const vc = Number(job.auto_voice_cost) || Number(spec.cost) || 0;
+    const changed = db.prepare(`UPDATE generations SET auto_voice_status = 'failed_refunded',
+                  cost_credits = cost_credits - ?, updated_at = datetime('now')
+                  WHERE id = ? AND auto_voice_status = 'pending'`).run(vc, job.id);
+    if (Number(changed.changes) === 1 && vc > 0)
+      tx(() => refundBuckets(job.user_id, vc));
+    if (voiceJobId)
+      db.prepare(`UPDATE voice_jobs SET status = 'failed', error = ? WHERE id = ?`)
+        .run(e.message, voiceJobId);
+  } finally {
+    autoVoiceInFlight.delete(job.id);
+  }
+  const fresh = db.prepare('SELECT * FROM generations WHERE id = ?').get(job.id);
+  if (fresh) Object.assign(job, fresh);
+  return job;
+}
+
 
 // ---------- Watermark post-processing ----------
 // NOTE on the renderer: the pinned ffmpeg-static 5.3.0 binary has NO
@@ -1716,14 +2492,18 @@ app.get('/api/generations/:id', auth, async (req, res) => {
     .get(req.params.id, req.user.id);
   if (!job) return res.status(404).json({ error: 'Generation not found.' });
   if (job.status === 'completed') {
-    // A pending sound step (e.g. the completing poll was interrupted)
-    // still runs — before the watermark, so both can apply to one video.
+    // Pending post steps (e.g. the completing poll was interrupted) still
+    // run — sound first, then the auto voice route, then the watermark, so
+    // all three can apply to one video.
+    const base = CONFIG.publicBaseUrl || `${req.protocol}://${req.get('host')}`;
     if (job.sound_status === 'pending')
-      await ensureSoundApplied(job, CONFIG.publicBaseUrl || `${req.protocol}://${req.get('host')}`);
-    return res.json(await ensureWatermarkApplied(job));
+      await ensureSoundApplied(job, base);
+    if (job.auto_voice_status === 'pending')
+      await ensureAutoVoiceApplied(job, base);
+    return res.json(publicGenerationRow(await ensureWatermarkApplied(job)));
   }
   if (job.status === 'failed' || !job.fal_request_id)
-    return res.json(job);
+    return res.json(publicGenerationRow(job));
   const jobModel = job.model || CONFIG.model; // jobs remember their routed model
   try {
     const sr = await fetch(`${CONFIG.falQueueBase}/${jobModel}/requests/${job.fal_request_id}/status`,
@@ -1743,19 +2523,30 @@ app.get('/api/generations/:id', auth, async (req, res) => {
           // client sees the completed video: applied, or honestly marked
           // failed_refunded with the video still delivered (the add-on
           // is refunded inside ensureSoundApplied).
+          const base = CONFIG.publicBaseUrl || `${req.protocol}://${req.get('host')}`;
           if (job.sound_status === 'pending')
-            await ensureSoundApplied(job, CONFIG.publicBaseUrl || `${req.protocol}://${req.get('host')}`);
+            await ensureSoundApplied(job, base);
+          // If the confirmed auto plan routed dialogue to a voice, run
+          // that step now (applied, or honestly marked failed_refunded
+          // with the video still delivered and the add-on refunded).
+          if (job.auto_voice_status === 'pending')
+            await ensureAutoVoiceApplied(job, base);
           // If this job asked for a watermark, post-process BEFORE the
           // client sees the completed video (applied or honestly failed).
           if (job.watermark_text && job.watermark_status === 'pending')
-            return res.json(await ensureWatermarkApplied(job));
+            return res.json(publicGenerationRow(await ensureWatermarkApplied(job)));
+          const fresh = db.prepare(
+            `SELECT g.*, c.name AS character_name FROM generations g
+             LEFT JOIN characters c ON c.id = g.character_id WHERE g.id = ?`)
+            .get(job.id);
+          return res.json(publicGenerationRow(fresh || job));
         }
       }
       // fal's queue reports failures via the result payload; a non-2xx status
       // check is handled below by leaving the job in progress for the next poll.
     }
   } catch { /* network hiccup — keep last known status; frontend polls again */ }
-  res.json(job);
+  res.json(publicGenerationRow(job));
 });
 
 app.get('/api/history', auth, (req, res) => {
@@ -1768,7 +2559,7 @@ app.get('/api/history', auth, (req, res) => {
      WHERE g.user_id = ? ORDER BY g.id DESC LIMIT 50`)
     .all(req.user.id);
   const me = db.prepare('SELECT credits FROM users WHERE id = ?').get(req.user.id);
-  res.json({ credits: me.credits, generations: rows });
+  res.json({ credits: me.credits, generations: rows.map(publicGenerationRow) });
 });
 
 // ---------- Clip joining (merge 2–6 of the user's own clips, free) ----------

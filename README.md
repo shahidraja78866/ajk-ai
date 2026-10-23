@@ -550,6 +550,109 @@ suite covers everything above with the local fal stub only. One
 reference image is used per character (the endpoint accepts up to 9,
 plus reference video/audio — out of scope here).
 
+## AI Auto Director — automatic, prompt-driven creation (Phase D, migration v14)
+
+The Studio has an **AI Auto** toggle (ON by default, remembered per
+browser). With it ON, pressing Generate first asks the server for a
+**plan** — free, and it never creates a generation or touches credits —
+and only asks the user when something would change the price or
+contradicts what they picked. With it OFF, the flow is exactly the
+manual one.
+
+**How it works.** The analyzer is deterministic and rule-based (v1) —
+keyword/regex rules over the prompt, no external LLM calls, so planning
+is instant and free. When the prompt language needs translation, the
+plan endpoint runs the same translation step as generation first
+(translation failure returns the same honest error, still no charge),
+then analyzes the English text together with the original script
+(Urdu/Devanagari detection happens on the original).
+
+**What it auto-selects**
+
+- **Content class** — animal, human, cartoon, cinematic, product,
+  news, music or general — with a matching prompt enrichment
+  (`style_suffix`, e.g. wildlife-documentary language for animals,
+  camera language for cinematic scenes). Enrichment is appended to the
+  user's prompt, never a replacement.
+- **Dialogue & voice** — quoted speech, "says:" constructions and Urdu
+  dialogue markers are extracted (language: Urdu script → `ur`,
+  Devanagari → `hi`, else `en`). When the job has a face (a selected
+  character or a human scene) and the plan includes lip-sync, the plan
+  proposes the **lip-sync route (+30)**; otherwise a **voiceover
+  (+10)**. A voice is never charged silently — any voice proposal
+  requires confirmation. The voice step runs after the base video
+  completes, through the existing TTS / lip-sync pipeline; if only the
+  voice step fails, its credits alone are refunded (exactly once) and
+  the video is still delivered.
+- **Sound** — detected events (rain, thunder, car/braking, traffic,
+  crowd, ocean/waves, birds, explosion, footsteps, door, wind, city)
+  propose the synchronized-sound add-on (+10); an explicit music ask
+  proposes the music add-on (+5). If both fire, sync wins and the plan
+  notes that music was skipped. A sound the user already selected is
+  enriched silently instead.
+- **Orientation** — "shorts / reel / vertical / عمودی" suggests 9:16;
+  "widescreen / landscape / افقی" suggests 16:9 — only when the user
+  did not explicitly choose an aspect ratio.
+- **Engine / route** — see the routing table below.
+
+**When it asks.** `needs_confirmation` is true when (a) the prompt
+clearly conflicts with a selected option (cartoon prompt + realistic
+mode, photoreal prompt + cartoon mode, real-wildlife animal prompt +
+cartoon mode, or an explicit aspect ratio that contradicts the
+prompt's orientation), (b) any chargeable add-on is proposed, or (c)
+an aspect change is proposed. The confirmation panel shows what was
+understood, each conflict as a two-choice question (my selection wins
+/ the prompt wins), the itemized cost (base + add-ons = total), and
+the honest notes. Confirming generates with the plan; cancelling
+generates with the user's manual settings and no plan.
+
+**Engine routing (only routes already integrated in this codebase)**
+
+| Situation | Engine route | Why |
+|---|---|---|
+| Character selected | H3 reference-to-video | Keeps the saved character consistent across scenes |
+| Source image attached | H3 image-to-video | Animates the user's own image |
+| Routed quality is native 4K on an entitled plan | Kling O3 4K | The only native-4K route; never forced on other plans |
+| Anything else | H3 text-to-video | Default generation route |
+| Plan voice is lip-sync | existing video lip-sync endpoint (voice step) | Syncs the generated voice to the finished video's face |
+
+The plan's engine is advisory: when a confirmed plan is applied,
+`/api/generate` re-runs the analyzer and the **server's own routing
+always wins** — a plan can never force an unentitled route (e.g.
+Kling 4K on a non-Extra-Pro plan), and the stored plan records the
+route actually used. Costs are likewise always recomputed server-side
+from the rate card; client-edited plan prices are ignored.
+
+**Plan endpoint contract**
+
+`POST /api/generate/plan` (auth; shares the generate rate-limit
+family; free). Body: the generate form's fields (`prompt`,
+`prompt_language`, `mode`, `style`, `aspect_ratio` optional,
+`duration`, `quality`, `character_id`, `image_path`, plus optional
+`sound` and `voice` selections). Response: `{ plan }` with
+`detected { content_class, dialogue, sfx_events, music,
+orientation_hint }`, `apply { mode, style_suffix, aspect_ratio,
+sound, voice }`, `engine { route, model, reason, voice_route?,
+voice_model? }`, `conflicts[]`, `base_cost`, `addons_cost`,
+`total_cost`, `notes[]`, `needs_confirmation`.
+`POST /api/generate` accepts `auto_plan` + `auto_confirmed: true`;
+the applied plan is stored on the generation row (migration v14,
+`generations.auto_plan`) and returned in the generate response and
+History, where the app shows an "AI نے خود منتخب کیا" summary line.
+
+**Honest limits.** Rule-based v1 understanding: it matches keywords
+and patterns, it does not truly "understand" a prompt, and unusual
+phrasing can be misread (the confirmation panel exists for exactly
+that). Urdu dialogue in a video model's own native audio is not
+guaranteed by any integrated model — Urdu speech is routed through
+the separate voice/lip-sync add-on, and lip-sync quality is
+best-effort. Whether any of this produces good *output* can only be
+judged from real generated samples on a funded fal.ai balance; the
+test suite verifies the planning, charging, routing and refund logic
+against local stubs only. `GET /api/config` exposes
+`auto: { enabled, version }`; set `AUTO_DIRECTOR_ENABLED=0` to turn
+the feature off server-side.
+
 ## Test results (backend, 2026-10-20)
 Run locally with `bash test.sh` — **19/19 tests passed** with a dummy key (no paid calls):
 - ✅ health + config endpoint exposes no secrets

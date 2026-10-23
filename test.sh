@@ -63,6 +63,16 @@
 # publisher id to prove both fail closed again, plus a fifteenth
 # instance (port 18076, own DB) proving the ADMOB_APP_ADS_TXT override
 # line is served verbatim. No ad-network calls anywhere.
+# The AI Auto Director tests (Phase D) use the main server for config +
+# one free plan call (the plan endpoint shares the generate rate-limit
+# family, so the main server gets exactly ONE extra call before the burst
+# test), a sixteenth instance (port 18075, fal stub 18074 + translate stub
+# 18073) making exactly 10 plan calls and no generations, a seventeenth
+# instance (port 18072, stubs 18071/18070) applying confirmed plans
+# (sound, voiceover, tamper-proofing, character + Kling engine routes —
+# exactly 10 plan/generate calls), and an eighteenth instance (port
+# 18069, stubs 18068/18067) for the failure refunds (provider submit,
+# voice step, sound step) and the migration-v14 re-apply check.
 # Outgoing provider request shapes are asserted via the TEST_RECORD-style
 # hook GET /api/_test/voice-calls.
 # e.g.  ADMIN_EMAIL=admin@example.com FAL_MODEL_4K=test-4k-model TEST_RECORD_FAL_BODY=1 TRANSLATE_API_BASE=http://127.0.0.1:18099 npm start
@@ -1633,6 +1643,240 @@ SRV15_PID=$!
 for i in $(seq 1 40); do curl -s -o /dev/null $B15/api/health && break || sleep 0.25; done
 check "ads override: /app-ads.txt serves the override line verbatim" "google.com, pub-9999999999999999, DIRECT, f08c47fec0942fa0" "$(curl -s $B15/app-ads.txt)"
 kill $SRV15_PID 2>/dev/null
+
+echo "--- AI Auto Director (Phase D): config + one free plan on the main server ---"
+CFGD=$(curl -s $B/api/config)
+check "auto: config enabled true + version 1" "True/1" "$(echo $CFGD | python3 -c 'import sys,json;a=json.load(sys.stdin)["auto"];print(str(a["enabled"])+"/"+str(a["version"]))')"
+check "auto: plan endpoint without a token -> 401" "401" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/generate/plan -H 'Content-Type: application/json' -d '{"prompt":"a cat in a garden"}')"
+PLANM=$(curl -s -X POST $B/api/generate/plan -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"prompt":"a cat chasing a butterfly in a sunny garden","mode":"realistic","style":"realistic","duration":5}')
+check "auto main plan: cat -> animal class" "animal" "$(echo $PLANM | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan"]["detected"]["content_class"])')"
+check "auto main plan: no voice, no confirmation, total 10" "None/False/10" "$(echo $PLANM | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(str(p["apply"]["voice"])+"/"+str(p["needs_confirmation"])+"/"+str(p["total_cost"]))')"
+check "auto main plan: engine is the H3 text route" "h3_text_to_video" "$(echo $PLANM | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan"]["engine"]["route"])')"
+check "auto main plan: charged nothing (balance still 100)" "100" "$(curl -s $B/api/me -H "Authorization: Bearer $TOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "auto main plan: created no generation row (history still 1)" "1" "$(curl -s $B/api/history -H "Authorization: Bearer $TOKEN" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["generations"]))')"
+HOMEPAGED=$(curl -s $B/)
+check "frontend: AI Auto toggle present" "yes" "$(echo "$HOMEPAGED" | grep -q 'id="aiAutoToggle"' && echo yes || echo no)"
+check "frontend: auto plan panel + Urdu buttons present" "yes" "$(echo "$HOMEPAGED" | grep -q 'id="autoPlanPanel"' && echo "$HOMEPAGED" | grep -q 'اسی طرح بنائیں' && echo "$HOMEPAGED" | grep -q 'منسوخ — ترتیبات خود رکھوں' && echo yes || echo no)"
+check "frontend: plan endpoint + History auto summary wired" "yes" "$(echo "$HOMEPAGED" | grep -q '/api/generate/plan' && echo "$HOMEPAGED" | grep -q 'AI نے خود منتخب کیا' && echo yes || echo no)"
+
+echo "--- AI Auto Director: plan analysis (dedicated stub instance, plans only) ---"
+AUTO1_STUB_PORT=18074
+AUTO1_TSTUB_PORT=18073
+B16=http://127.0.0.1:18075
+rm -f /tmp/myvideoai-autoplan-test.db; rm -rf /tmp/autogen1 /tmp/autovoice1; mkdir -p /tmp/autogen1 /tmp/autovoice1
+FAL_STUB_PORT=$AUTO1_STUB_PORT node "$(dirname "$0")/test-fal-stub.js" > /tmp/fal-stub-auto1.log 2>&1 &
+AUTO1STUB_PID=$!
+TRANSLATE_STUB_PORT=$AUTO1_TSTUB_PORT node "$(dirname "$0")/test-translate-stub.js" > /tmp/translate-stub-auto1.log 2>&1 &
+AUTO1TSTUB_PID=$!
+for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:$AUTO1_STUB_PORT/__calls && break || sleep 0.25; done
+for i in $(seq 1 40); do curl -s -o /dev/null http://127.0.0.1:$AUTO1_TSTUB_PORT/__count && break || sleep 0.25; done
+AUTO1_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-autoplan-test.db PORT=18075 FAL_KEY=dummy_test_key "$AUTO1_JWT_NAME=autoplan-instance-dummy-value" \
+  ADMIN_EMAIL=autoadmin@example.com TEST_RECORD_FAL_BODY=1 \
+  FAL_API_BASE_URL=http://127.0.0.1:$AUTO1_STUB_PORT FAL_QUEUE_BASE_URL=http://127.0.0.1:$AUTO1_STUB_PORT \
+  FAL_POLL_INTERVAL_MS=100 TRANSLATE_API_BASE=http://127.0.0.1:$AUTO1_TSTUB_PORT \
+  GENERATED_DIR=/tmp/autogen1 VOICE_DIR=/tmp/autovoice1 \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-autoplan-test.log 2>&1 &
+SRV16_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B16/api/health && break || sleep 0.25; done
+AR16=$(curl -s -X POST $B16/api/auth/register -H 'Content-Type: application/json' -d '{"email":"autoadmin@example.com","password":"password123"}')
+AT16=$(echo $AR16 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+FR16=$(curl -s -X POST $B16/api/auth/register -H 'Content-Type: application/json' -d '{"email":"autofree@example.com","password":"password123"}')
+FT16=$(echo $FR16 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+# NOTE: /api/generate/plan shares the generate rate-limit family (10/hour
+# per instance), so this instance makes EXACTLY 10 plan calls and nothing
+# else chargeable — keep it that way when extending this section.
+AP1=$(curl -s -X POST $B16/api/generate/plan -H "Authorization: Bearer $FT16" -H 'Content-Type: application/json' -d '{"prompt":"a cat chasing a butterfly in a sunny garden","mode":"realistic","style":"realistic","duration":5}')
+check "auto plan: cat -> animal, no voice, no confirmation" "animal/None/False" "$(echo $AP1 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["detected"]["content_class"]+"/"+str(p["apply"]["voice"])+"/"+str(p["needs_confirmation"]))')"
+URDU_DLG='ایک آدمی کہتا ہے: \"میرا نام احمد ہے\"'
+AP2=$(curl -s -X POST $B16/api/generate/plan -H "Authorization: Bearer $FT16" -H 'Content-Type: application/json' -d "{\"prompt\":\"$URDU_DLG\",\"prompt_language\":\"ur\",\"mode\":\"realistic\",\"style\":\"realistic\",\"duration\":5}")
+check "auto plan: urdu dialogue detected with language ur" "میرا نام احمد ہے/ur" "$(echo $AP2 | python3 -c 'import sys,json;d=json.load(sys.stdin)["plan"]["detected"]["dialogue"];print(d["text"]+"/"+d["language"])')"
+check "auto plan: urdu dialogue -> voiceover proposal +10, confirmation needed" "voiceover/10/True" "$(echo $AP2 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];v=p["apply"]["voice"];print(v["kind"]+"/"+str(v["cost"])+"/"+str(p["needs_confirmation"]))')"
+check "auto plan: urdu voice note is honest about the route" "yes" "$(echo $AP2 | python3 -c 'import sys,json;print("yes" if any("Urdu dialogue" in n for n in json.load(sys.stdin)["plan"]["notes"]) else "no")')"
+AP3=$(curl -s -X POST $B16/api/generate/plan -H "Authorization: Bearer $FT16" -H 'Content-Type: application/json' -d '{"prompt":"heavy rain and a car braking in city traffic","mode":"realistic","style":"realistic","duration":5}')
+check "auto plan: rain+car -> sfx events include rain and car" "True/True" "$(echo $AP3 | python3 -c 'import sys,json;e=json.load(sys.stdin)["plan"]["detected"]["sfx_events"];print(str("rain" in e)+"/"+str("car" in e))')"
+check "auto plan: sfx -> sync sound proposal +10, total 20" "sync/10/20" "$(echo $AP3 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["apply"]["sound"]["mode"]+"/"+str(p["apply"]["sound"]["cost"])+"/"+str(p["total_cost"]))')"
+AP4=$(curl -s -X POST $B16/api/generate/plan -H "Authorization: Bearer $FT16" -H 'Content-Type: application/json' -d '{"prompt":"a cartoon fox tells a kids story in a sunny forest","mode":"realistic","style":"realistic","duration":5}')
+check "auto plan: cartoon prompt + realistic mode -> mode conflict" "mode/realistic/cartoon" "$(echo $AP4 | python3 -c 'import sys,json;c=json.load(sys.stdin)["plan"]["conflicts"][0];print(c["field"]+"/"+c["selected"]+"/"+c["detected"])')"
+AP5=$(curl -s -X POST $B16/api/generate/plan -H "Authorization: Bearer $FT16" -H 'Content-Type: application/json' -d '{"prompt":"a vertical shorts clip of ocean waves at sunset","mode":"realistic","style":"realistic","duration":5,"aspect_ratio":"16:9"}')
+check "auto plan: explicit 16:9 + vertical shorts -> aspect conflict, aspect unchanged" "aspect_ratio/9:16/16:9" "$(echo $AP5 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];c=p["conflicts"][0];print(c["field"]+"/"+c["detected"]+"/"+p["apply"]["aspect_ratio"])')"
+AP6=$(curl -s -X POST $B16/api/generate/plan -H "Authorization: Bearer $FT16" -H 'Content-Type: application/json' -d '{"prompt":"a calm mountain lake at dawn","mode":"realistic","style":"realistic","duration":5}')
+check "auto plan: plain prompt -> H3 text route, no confirmation" "h3_text_to_video/False" "$(echo $AP6 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["engine"]["route"]+"/"+str(p["needs_confirmation"]))')"
+AP7=$(curl -s -X POST $B16/api/generate/plan -H "Authorization: Bearer $FT16" -H 'Content-Type: application/json' -d '{"prompt":"a calm valley scene with soft background music","mode":"realistic","style":"realistic","duration":5}')
+check "auto plan: explicit music ask -> music add-on +5 (no sync invented)" "music/5" "$(echo $AP7 | python3 -c 'import sys,json;s=json.load(sys.stdin)["plan"]["apply"]["sound"];print(s["mode"]+"/"+str(s["cost"]))')"
+PR16=$(curl -s -X POST $B16/api/auth/register -H 'Content-Type: application/json' -d '{"email":"autopro@example.com","password":"password123"}')
+PT16=$(echo $PR16 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+PID16=$(curl -s $B16/api/me -H "Authorization: Bearer $PT16" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+curl -s -o /dev/null -X POST $B16/api/admin/users/$PID16/activate -H "Authorization: Bearer $AT16" -H 'Content-Type: application/json' -d '{"plan_id":"pro","period":"monthly"}'
+AP8=$(curl -s -X POST $B16/api/generate/plan -H "Authorization: Bearer $PT16" -H 'Content-Type: application/json' -d "{\"prompt\":\"$URDU_DLG\",\"prompt_language\":\"ur\",\"mode\":\"realistic\",\"style\":\"realistic\",\"duration\":5}")
+check "auto plan (Pro): urdu dialogue on a human -> lipsync +30 via the video lip-sync route" "lipsync/30/latentsync_video/45" "$(echo $AP8 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["apply"]["voice"]["kind"]+"/"+str(p["apply"]["voice"]["cost"])+"/"+p["engine"]["voice_route"]+"/"+str(p["total_cost"]))')"
+CR16=$(curl -s -X POST $B16/api/auth/register -H 'Content-Type: application/json' -d '{"email":"autochar@example.com","password":"password123"}')
+CT16=$(echo $CR16 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+PNG_B64_A=$(python3 -c "import base64; print(base64.b64encode(bytes.fromhex('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c636000000000020001e221bc330000000049454e44ae426082')).decode())")
+UPA16=$(curl -s -X POST $B16/api/uploads/image -H "Authorization: Bearer $CT16" -H 'Content-Type: application/json' -d "{\"image_base64\":\"$PNG_B64_A\",\"content_type\":\"image/png\"}")
+IMGA16=$(echo $UPA16 | python3 -c 'import sys,json;print(json.load(sys.stdin)["image_path"])')
+CHA16=$(curl -s -X POST $B16/api/characters -H "Authorization: Bearer $CT16" -H 'Content-Type: application/json' -d "{\"name\":\"Captain Sara\",\"image_path\":\"$IMGA16\"}")
+CID16=$(echo $CHA16 | python3 -c 'import sys,json;print(json.load(sys.stdin)["character"]["id"])')
+AP9=$(curl -s -X POST $B16/api/generate/plan -H "Authorization: Bearer $CT16" -H 'Content-Type: application/json' -d "{\"prompt\":\"the captain walks through a rainy neon city\",\"mode\":\"realistic\",\"style\":\"realistic\",\"duration\":5,\"character_id\":$CID16}")
+check "auto plan: character selected -> reference-to-video engine" "h3_reference_to_video" "$(echo $AP9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan"]["engine"]["route"])')"
+XR16=$(curl -s -X POST $B16/api/auth/register -H 'Content-Type: application/json' -d '{"email":"autoxp@example.com","password":"password123"}')
+XT16=$(echo $XR16 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+XID16=$(curl -s $B16/api/me -H "Authorization: Bearer $XT16" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+curl -s -o /dev/null -X POST $B16/api/admin/users/$XID16/activate -H "Authorization: Bearer $AT16" -H 'Content-Type: application/json' -d '{"plan_id":"extrapro","period":"monthly"}'
+AP10=$(curl -s -X POST $B16/api/generate/plan -H "Authorization: Bearer $XT16" -H 'Content-Type: application/json' -d '{"prompt":"a calm mountain lake at dawn","mode":"realistic","style":"realistic","duration":5}')
+check "auto plan (Extra Pro): native 4K entitlement -> Kling O3 4K engine, base 40" "kling_o3_4k/40" "$(echo $AP10 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["engine"]["route"]+"/"+str(p["base_cost"]))')"
+check "auto plans: free user charged nothing across all plans" "100" "$(curl -s $B16/api/me -H "Authorization: Bearer $FT16" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "auto plans: no generation rows created by planning" "0" "$(curl -s $B16/api/history -H "Authorization: Bearer $FT16" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["generations"]))')"
+kill $SRV16_PID $AUTO1STUB_PID $AUTO1TSTUB_PID 2>/dev/null
+
+echo "--- AI Auto Director: confirmed plans applied in /api/generate (stub instance) ---"
+AUTO2_STUB_PORT=18071
+AUTO2_TSTUB_PORT=18070
+B17=http://127.0.0.1:18072
+rm -f /tmp/myvideoai-autogen-test.db; rm -rf /tmp/autogen2 /tmp/autovoice2; mkdir -p /tmp/autogen2 /tmp/autovoice2
+FAL_STUB_PORT=$AUTO2_STUB_PORT node "$(dirname "$0")/test-fal-stub.js" > /tmp/fal-stub-auto2.log 2>&1 &
+AUTO2STUB_PID=$!
+TRANSLATE_STUB_PORT=$AUTO2_TSTUB_PORT node "$(dirname "$0")/test-translate-stub.js" > /tmp/translate-stub-auto2.log 2>&1 &
+AUTO2TSTUB_PID=$!
+for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:$AUTO2_STUB_PORT/__calls && break || sleep 0.25; done
+for i in $(seq 1 40); do curl -s -o /dev/null http://127.0.0.1:$AUTO2_TSTUB_PORT/__count && break || sleep 0.25; done
+AUTO2_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-autogen-test.db PORT=18072 FAL_KEY=dummy_test_key "$AUTO2_JWT_NAME=autogen-instance-dummy-value" \
+  ADMIN_EMAIL=autoadmin2@example.com TEST_RECORD_FAL_BODY=1 \
+  FAL_API_BASE_URL=http://127.0.0.1:$AUTO2_STUB_PORT FAL_QUEUE_BASE_URL=http://127.0.0.1:$AUTO2_STUB_PORT \
+  FAL_POLL_INTERVAL_MS=100 TRANSLATE_API_BASE=http://127.0.0.1:$AUTO2_TSTUB_PORT \
+  GENERATED_DIR=/tmp/autogen2 VOICE_DIR=/tmp/autovoice2 \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-autogen-test.log 2>&1 &
+SRV17_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B17/api/health && break || sleep 0.25; done
+AR17=$(curl -s -X POST $B17/api/auth/register -H 'Content-Type: application/json' -d '{"email":"autoadmin2@example.com","password":"password123"}')
+AT17=$(echo $AR17 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+FR17=$(curl -s -X POST $B17/api/auth/register -H 'Content-Type: application/json' -d '{"email":"autogenfree@example.com","password":"password123"}')
+FT17=$(echo $FR17 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+poll17() { # jobId token -> echoes the final generation JSON
+  local st=""
+  for i in $(seq 1 40); do
+    st=$(curl -s $B17/api/generations/$1 -H "Authorization: Bearer $2")
+    [[ "$(echo "$st" | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])' 2>/dev/null)" == "completed" ]] && break || sleep 0.3
+  done
+  echo "$st"
+}
+# NOTE: exactly 10 plan/generate calls on this instance (shared limiter).
+GP1=$(curl -s -X POST $B17/api/generate/plan -H "Authorization: Bearer $FT17" -H 'Content-Type: application/json' -d '{"prompt":"heavy rain and a car braking in city traffic","mode":"realistic","style":"realistic","duration":5}')
+GEN1=$(curl -s -X POST $B17/api/generate -H "Authorization: Bearer $FT17" -H 'Content-Type: application/json' -d "$(echo $GP1 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(json.dumps({"prompt":"heavy rain and a car braking in city traffic","mode":"realistic","style":"realistic","duration":5,"auto_plan":p,"auto_confirmed":True}))')")
+check "auto gen+sync: charged the plan total 20 exactly" "20/80" "$(echo $GEN1 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+JOB1=$(echo $GEN1 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+POLL1=$(poll17 $JOB1 $FT17)
+check "auto gen+sync: completed with sound applied" "completed/applied" "$(echo $POLL1 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["sound_status"])')"
+check "auto gen+sync: row carries the auto plan (total 20)" "20" "$(echo $POLL1 | python3 -c 'import sys,json;print(json.load(sys.stdin)["auto_plan"]["total_cost"])')"
+GP2=$(curl -s -X POST $B17/api/generate/plan -H "Authorization: Bearer $FT17" -H 'Content-Type: application/json' -d "{\"prompt\":\"$URDU_DLG\",\"prompt_language\":\"ur\",\"mode\":\"realistic\",\"style\":\"realistic\",\"duration\":5}")
+GEN2=$(curl -s -X POST $B17/api/generate -H "Authorization: Bearer $FT17" -H 'Content-Type: application/json' -d "$(echo $GP2 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(json.dumps({"prompt":"ایک آدمی کہتا ہے: \"میرا نام احمد ہے\"","prompt_language":"ur","mode":"realistic","style":"realistic","duration":5,"auto_plan":p,"auto_confirmed":True}))')")
+check "auto gen+voiceover: charged the plan total 20 exactly" "20/60" "$(echo $GEN2 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+JOB2=$(echo $GEN2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+POLL2=$(poll17 $JOB2 $FT17)
+check "auto gen+voiceover: completed, voice step applied, cost stays 20" "completed/applied/20" "$(echo $POLL2 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["auto_voice_status"]+"/"+str(g["cost_credits"]))')"
+GP3=$(curl -s -X POST $B17/api/generate/plan -H "Authorization: Bearer $FT17" -H 'Content-Type: application/json' -d '{"prompt":"heavy rain and a car braking in city traffic","mode":"realistic","style":"realistic","duration":5}')
+TAMP3=$(echo $GP3 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];p["base_cost"]=0;p["total_cost"]=1;p["apply"]["sound"]["cost"]=0;p["engine"]={"route":"kling_o3_4k","model":"fal-ai/kling-video/o3/4k/text-to-video","reason":"forged"};print(json.dumps({"prompt":"heavy rain and a car braking in city traffic","mode":"realistic","style":"realistic","duration":5,"auto_plan":p,"auto_confirmed":True}))')
+GEN3=$(curl -s -X POST $B17/api/generate -H "Authorization: Bearer $FT17" -H 'Content-Type: application/json' -d "$TAMP3")
+check "auto tampered plan: server charges the recomputed rate-card total 20" "20/40" "$(echo $GEN3 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "auto tampered plan: forged Kling claim ignored — server routing (H3) recorded" "minimax/h3/text-to-video/h3_text_to_video" "$(echo $GEN3 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["model"]+"/"+g["auto_plan"]["engine"]["route"])')"
+CR17=$(curl -s -X POST $B17/api/auth/register -H 'Content-Type: application/json' -d '{"email":"autogenchar@example.com","password":"password123"}')
+CT17=$(echo $CR17 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+UPA17=$(curl -s -X POST $B17/api/uploads/image -H "Authorization: Bearer $CT17" -H 'Content-Type: application/json' -d "{\"image_base64\":\"$PNG_B64_A\",\"content_type\":\"image/png\"}")
+IMGA17=$(echo $UPA17 | python3 -c 'import sys,json;print(json.load(sys.stdin)["image_path"])')
+CHA17=$(curl -s -X POST $B17/api/characters -H "Authorization: Bearer $CT17" -H 'Content-Type: application/json' -d "{\"name\":\"Captain Sara\",\"image_path\":\"$IMGA17\"}")
+CID17=$(echo $CHA17 | python3 -c 'import sys,json;print(json.load(sys.stdin)["character"]["id"])')
+GP4=$(curl -s -X POST $B17/api/generate/plan -H "Authorization: Bearer $CT17" -H 'Content-Type: application/json' -d "{\"prompt\":\"the captain walks through a rainy neon city\",\"mode\":\"realistic\",\"style\":\"realistic\",\"duration\":5,\"character_id\":$CID17}")
+GEN4=$(curl -s -X POST $B17/api/generate -H "Authorization: Bearer $CT17" -H 'Content-Type: application/json' -d "$(echo $GP4 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(json.dumps({"prompt":"the captain walks through a rainy neon city","mode":"realistic","style":"realistic","duration":5,"character_id":'$CID17',"auto_plan":p,"auto_confirmed":True}))')")
+check "auto gen with character: applied generation uses the reference route" "minimax/h3/reference-to-video/h3_reference_to_video" "$(echo $GEN4 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["model"]+"/"+g["auto_plan"]["engine"]["route"])')"
+XR17=$(curl -s -X POST $B17/api/auth/register -H 'Content-Type: application/json' -d '{"email":"autogenxp@example.com","password":"password123"}')
+XT17=$(echo $XR17 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+XID17=$(curl -s $B17/api/me -H "Authorization: Bearer $XT17" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+curl -s -o /dev/null -X POST $B17/api/admin/users/$XID17/activate -H "Authorization: Bearer $AT17" -H 'Content-Type: application/json' -d '{"plan_id":"extrapro","period":"monthly"}'
+GP5=$(curl -s -X POST $B17/api/generate/plan -H "Authorization: Bearer $XT17" -H 'Content-Type: application/json' -d '{"prompt":"a calm mountain lake at dawn","mode":"realistic","style":"realistic","duration":5}')
+GEN5=$(curl -s -X POST $B17/api/generate -H "Authorization: Bearer $XT17" -H 'Content-Type: application/json' -d "$(echo $GP5 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(json.dumps({"prompt":"a calm mountain lake at dawn","mode":"realistic","style":"realistic","duration":5,"auto_plan":p,"auto_confirmed":True}))')")
+check "auto gen (Extra Pro): applied generation uses the Kling O3 4K route at 40" "fal-ai/kling-video/o3/4k/text-to-video/kling_o3_4k/40" "$(echo $GEN5 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["model"]+"/"+g["auto_plan"]["engine"]["route"]+"/"+str(g["cost_credits"]))')"
+kill $SRV17_PID $AUTO2STUB_PID $AUTO2TSTUB_PID 2>/dev/null
+
+echo "--- AI Auto Director: failure refunds exactly once (stub instance) ---"
+AUTO3_STUB_PORT=18068
+AUTO3_TSTUB_PORT=18067
+B18=http://127.0.0.1:18069
+rm -f /tmp/myvideoai-autofail-test.db; rm -rf /tmp/autogen3 /tmp/autovoice3; mkdir -p /tmp/autogen3 /tmp/autovoice3
+FAL_STUB_PORT=$AUTO3_STUB_PORT node "$(dirname "$0")/test-fal-stub.js" > /tmp/fal-stub-auto3.log 2>&1 &
+AUTO3STUB_PID=$!
+TRANSLATE_STUB_PORT=$AUTO3_TSTUB_PORT node "$(dirname "$0")/test-translate-stub.js" > /tmp/translate-stub-auto3.log 2>&1 &
+AUTO3TSTUB_PID=$!
+for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:$AUTO3_STUB_PORT/__calls && break || sleep 0.25; done
+for i in $(seq 1 40); do curl -s -o /dev/null http://127.0.0.1:$AUTO3_TSTUB_PORT/__count && break || sleep 0.25; done
+AUTO3_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-autofail-test.db PORT=18069 FAL_KEY=dummy_test_key "$AUTO3_JWT_NAME=autofail-instance-dummy-value" \
+  ADMIN_EMAIL=autoadmin3@example.com TEST_RECORD_FAL_BODY=1 \
+  FAL_API_BASE_URL=http://127.0.0.1:$AUTO3_STUB_PORT FAL_QUEUE_BASE_URL=http://127.0.0.1:$AUTO3_STUB_PORT \
+  FAL_POLL_INTERVAL_MS=100 TRANSLATE_API_BASE=http://127.0.0.1:$AUTO3_TSTUB_PORT \
+  GENERATED_DIR=/tmp/autogen3 VOICE_DIR=/tmp/autovoice3 \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-autofail-test.log 2>&1 &
+SRV18_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B18/api/health && break || sleep 0.25; done
+FR18=$(curl -s -X POST $B18/api/auth/register -H 'Content-Type: application/json' -d '{"email":"autofail@example.com","password":"password123"}')
+FT18=$(echo $FR18 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+poll18() { # jobId -> echoes the final generation JSON
+  local st=""
+  for i in $(seq 1 40); do
+    st=$(curl -s $B18/api/generations/$1 -H "Authorization: Bearer $FT18")
+    [[ "$(echo "$st" | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])' 2>/dev/null)" == "completed" ]] && break || sleep 0.3
+  done
+  echo "$st"
+}
+UPA18=$(curl -s -X POST $B18/api/uploads/image -H "Authorization: Bearer $FT18" -H 'Content-Type: application/json' -d "{\"image_base64\":\"$PNG_B64_A\",\"content_type\":\"image/png\"}")
+IMGA18=$(echo $UPA18 | python3 -c 'import sys,json;print(json.load(sys.stdin)["image_path"])')
+FP1=$(curl -s -X POST $B18/api/generate/plan -H "Authorization: Bearer $FT18" -H 'Content-Type: application/json' -d "{\"prompt\":\"FAILME heavy rain over a street\",\"mode\":\"realistic\",\"style\":\"realistic\",\"duration\":5,\"image_path\":\"$IMGA18\"}")
+FGEN1=$(curl -s -w '\n%{http_code}' -X POST $B18/api/generate -H "Authorization: Bearer $FT18" -H 'Content-Type: application/json' -d "$(echo $FP1 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(json.dumps({"prompt":"FAILME heavy rain over a street","mode":"realistic","style":"realistic","duration":5,"image_path":"'$IMGA18'","auto_plan":p,"auto_confirmed":True}))')")
+check "auto fail: provider submission failure -> 502" "502" "$(echo "$FGEN1" | tail -1)"
+check "auto fail: EVERYTHING refunded exactly once (balance back to 100)" "100" "$(curl -s $B18/api/me -H "Authorization: Bearer $FT18" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "auto fail: failed row carries the auto plan (total was 20)" "failed/20" "$(curl -s $B18/api/history -H "Authorization: Bearer $FT18" | python3 -c 'import sys,json;g=json.load(sys.stdin)["generations"][0];print(g["status"]+"/"+str(g["auto_plan"]["total_cost"]))')"
+FP2=$(curl -s -X POST $B18/api/generate/plan -H "Authorization: Bearer $FT18" -H 'Content-Type: application/json' -d '{"prompt":"a man says: \"FAILME hello friend\"","mode":"realistic","style":"realistic","duration":5}')
+FGEN2=$(curl -s -X POST $B18/api/generate -H "Authorization: Bearer $FT18" -H 'Content-Type: application/json' -d "$(echo $FP2 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(json.dumps({"prompt":"a man says: \"FAILME hello friend\"","mode":"realistic","style":"realistic","duration":5,"auto_plan":p,"auto_confirmed":True}))')")
+JOBF2=$(echo $FGEN2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+POLLF2=$(poll18 $JOBF2)
+check "auto voice fail: video still delivered, voice marked failed_refunded" "completed/failed_refunded" "$(echo $POLLF2 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["auto_voice_status"])')"
+check "auto voice fail: only the voice add-on refunded (row cost 10, balance 90)" "10/90" "$(echo $POLLF2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_credits"])')/$(curl -s $B18/api/me -H "Authorization: Bearer $FT18" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+FP3=$(curl -s -X POST $B18/api/generate/plan -H "Authorization: Bearer $FT18" -H 'Content-Type: application/json' -d '{"prompt":"FAILME rain over a street","mode":"realistic","style":"realistic","duration":5}')
+FGEN3=$(curl -s -X POST $B18/api/generate -H "Authorization: Bearer $FT18" -H 'Content-Type: application/json' -d "$(echo $FP3 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(json.dumps({"prompt":"FAILME rain over a street","mode":"realistic","style":"realistic","duration":5,"auto_plan":p,"auto_confirmed":True}))')")
+JOBF3=$(echo $FGEN3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+POLLF3=$(poll18 $JOBF3)
+check "auto sound fail: video delivered, sound failed_refunded, balance 80" "completed/failed_refunded/80" "$(echo $POLLF3 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["sound_status"])')/$(curl -s $B18/api/me -H "Authorization: Bearer $FT18" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+CHA18=$(curl -s -X POST $B18/api/characters -H "Authorization: Bearer $FT18" -H 'Content-Type: application/json' -d "{\"name\":\"Captain Sara\",\"image_path\":\"$IMGA18\"}")
+CID18=$(echo $CHA18 | python3 -c 'import sys,json;print(json.load(sys.stdin)["character"]["id"])')
+BR18=$(curl -s -X POST $B18/api/auth/register -H 'Content-Type: application/json' -d '{"email":"autofail-b@example.com","password":"password123"}')
+BT18=$(echo $BR18 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+check "auto plan: another user's character -> 404" "404" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B18/api/generate/plan -H "Authorization: Bearer $BT18" -H 'Content-Type: application/json' -d "{\"prompt\":\"the captain walks in the rain\",\"character_id\":$CID18}")"
+# -- migration v14: delete its record + drop its columns, restart re-applies --
+kill $SRV18_PID 2>/dev/null; sleep 0.5
+node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-autofail-test.db');
+db.exec('DELETE FROM schema_migrations WHERE version = 14');
+for (const col of ['auto_plan','auto_voice_status','auto_voice_cost'])
+  db.exec('ALTER TABLE generations DROP COLUMN ' + col);
+console.log('rolled back migration v14');
+"
+env DB_PATH=/tmp/myvideoai-autofail-test.db PORT=18069 FAL_KEY=dummy_test_key "$AUTO3_JWT_NAME=autofail-instance-dummy-value" \
+  ADMIN_EMAIL=autoadmin3@example.com TEST_RECORD_FAL_BODY=1 \
+  FAL_API_BASE_URL=http://127.0.0.1:$AUTO3_STUB_PORT FAL_QUEUE_BASE_URL=http://127.0.0.1:$AUTO3_STUB_PORT \
+  FAL_POLL_INTERVAL_MS=100 TRANSLATE_API_BASE=http://127.0.0.1:$AUTO3_TSTUB_PORT \
+  GENERATED_DIR=/tmp/autogen3 VOICE_DIR=/tmp/autovoice3 \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-autofail-test2.log 2>&1 &
+SRV18_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B18/api/health && break || sleep 0.25; done
+check "migration v14 re-applies on boot (auto columns restored)" "ok" "$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-autofail-test.db');
+const cols = db.prepare(\"SELECT name FROM pragma_table_info('generations') WHERE name LIKE 'auto_%'\").all().map(r => r.name).sort().join(',');
+const mig = db.prepare('SELECT COUNT(*) AS c FROM schema_migrations WHERE version = 14').get().c;
+console.log(cols === 'auto_plan,auto_voice_cost,auto_voice_status' && Number(mig) === 1 ? 'ok' : 'bad');
+")"
+kill $SRV18_PID $AUTO3STUB_PID $AUTO3TSTUB_PID 2>/dev/null
 
 echo "--- rate limit: burst until 429 ---"
 FOUND429="no"

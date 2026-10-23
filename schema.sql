@@ -225,3 +225,16 @@ CREATE TABLE IF NOT EXISTS characters (
   voice_style    TEXT,           -- narration | conversation | news | energetic | emotional
   created_at     TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- === AI Auto Director (migration v14, applied automatically by
+-- === server.js) ===
+-- generations gains three columns for the rule-based Auto Director:
+--   auto_plan         TEXT — the confirmed plan (JSON) the job ran
+--                      with, NULL for manual jobs; returned parsed in
+--                      the generate response and in History.
+--   auto_voice_status TEXT — 'none' | 'pending' | 'applied' |
+--                      'failed_refunded' for the plan's voice step,
+--                      which runs after the base video completes.
+--   auto_voice_cost   INTEGER — credits of the voice add-on inside
+--                      the job's total, refunded alone (exactly once)
+--                      when only the voice step fails.
