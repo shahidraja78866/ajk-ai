@@ -130,3 +130,16 @@ CREATE TABLE IF NOT EXISTS pack_purchases (
 --                     so a refund can claw back the same amount from the
 --                     same bucket). provider values now also include
 --                     'google_play' and 'payfast'.
+--
+-- === Video modes, image-to-video, watermarks (migration v7) ===
+-- generations gains:  mode ('realistic' | 'cartoon', default 'realistic'),
+--                     source_image_path (the uploader-owned image under
+--                     data/uploads/<userId>/ that the job animated, if any),
+--                     watermark_text (optional user-supplied overlay text),
+--                     watermark_status ('none' | 'pending' | 'applied' |
+--                     'failed' — the honest post-processing outcome).
+--
+-- === Normal plan price change (migration v8) ===
+-- One-time UPDATE of the 'normal' plan row only: price_monthly 1999,
+-- price_yearly 19990, credits_monthly 150 (owner decision 2026-10-23).
+-- Pro / Extra Pro unchanged; fresh DBs seed the same values.

@@ -114,6 +114,80 @@ endpoint's coverage of that language. The automated tests exercise the
 translation plumbing against a local stub only, so real-world Kashmiri
 translation coverage/quality is exercised only in production.
 
+## Video modes, image-to-video & watermarks (migration v7)
+
+The Studio opens with two clearly separated mode cards, and every
+generation request carries a `mode`:
+
+| Mode | Label in the app | Styles it permits |
+|---|---|---|
+| `realistic` (default) | Realistic Human Video | `realistic`, `cinematic` |
+| `cartoon` | Cartoon / Animation | `cartoon`, `anime` |
+
+The server validates the pairing: an unknown mode, or a style outside
+the selected mode's list, is rejected with 400 before anything is
+charged. The mode is stored on the generation row (migration v7) and
+shown as a label in History. Mode does **not** change credit costs —
+the existing duration/quality pricing applies unchanged, and the same
+is true for image-to-video and watermarks (see below).
+
+**Audio honesty (verified against fal.ai's docs, 2026-10-23):** MiniMax
+H3 generates a native stereo audio track (score, dialogue and foley)
+inside every generation, and its schema has **no `generate_audio`
+toggle** — so this backend never sends one for H3 text- or
+image-to-video calls. If a prompt asks for spoken dialogue, the model
+may generate speech that follows the prompt, but the dialogue
+**language is not guaranteed**, and Urdu dialogue is **not officially
+documented** for this (or any) fal model. This build adds no separate
+dialogue/TTS or dedicated lip-sync stage, and no lip-sync quality is
+promised: the owner's rule stands that realistic samples (a person
+walking and speaking, a talking close-up, natural gestures) and cartoon
+samples must be generated and reviewed before these experiences are
+called complete — that review needs a funded fal.ai balance and has
+not happened yet.
+
+**Image-to-video.** `POST /api/uploads/image` (signed-in users only)
+accepts `{ image_base64, content_type }` for PNG/JPEG/WebP. The declared
+type is never trusted — the real type is sniffed from the magic bytes —
+and the decoded image is capped at 5 MB. Files are stored under
+`data/uploads/<userId>/` and the endpoint returns that path. A
+generation may then pass `image_path`; the server only accepts a path
+inside the **caller's own** upload folder, stores it on the row
+(`source_image_path`), and routes the job to the image-to-video model
+(`FAL_MODEL_I2V`, default `minimax/h3/image-to-video` — **verified**
+against fal.ai's official API docs on 2026-10-23:
+https://fal.ai/models/minimax/h3/image-to-video/api). The image is sent
+in the endpoint's documented **`image_url`** field as a base64 data URI
+(fal accepts data URIs for file inputs). The endpoint's canvas follows
+the supplied image, so no `aspect_ratio` is sent for image jobs. If
+`FAL_MODEL_I2V` is pointed at an endpoint that does not exist, fal
+rejects the submission and the job fails with the usual automatic
+refund — the same failure path as text-to-video.
+
+**Watermarks.** A generation may include `watermark_text` (1–30
+printable ASCII/Latin characters; anything else — including
+Urdu/Arabic script — is rejected with 400, because the renderer cannot
+shape those scripts correctly). When a job with watermark text
+completes, the server downloads the finished MP4, renders the text at
+the **bottom-right in white at ~70% opacity**, stores the result under
+`data/generated/` (served at `/files/generated/...`), and points the
+history row at it with `watermark_status = 'applied'`. If
+post-processing fails for any reason, the original unwatermarked video
+is kept and the row is marked `watermark_status = 'failed'` — a failed
+watermark is never reported as applied. Jobs without watermark text
+keep `watermark_status = 'none'`.
+
+*Renderer note (honest deviation):* the brief asked for ffmpeg's
+`drawtext` filter, but the pinned `ffmpeg-static` 5.3.0 binary was
+built **without libfreetype and has no `drawtext` filter at all**
+(verified locally: `No such filter: 'drawtext'`). The same pinned
+binary does ship **libass**, so the watermark is rendered with its
+`ass` subtitle filter instead — identical placement, opacity and size
+contract, and no system ffmpeg dependency (a system ffmpeg cannot be
+assumed on the host). Generated files live on local disk, like joined
+clips: on ephemeral hosting they disappear on restart/redeploy, so
+users should download watermarked videos promptly.
+
 ## Test results (backend, 2026-10-20)
 Run locally with `bash test.sh` — **19/19 tests passed** with a dummy key (no paid calls):
 - ✅ health + config endpoint exposes no secrets
@@ -146,6 +220,17 @@ payment; a correctly-signed success IPN grants once (replay no-op); a bad
 signature is rejected; a failure IPN grants nothing; a reversal IPN
 claws back. Latest full run: **201/201 checks passed**.
 
+**Update (2026-10-23, video modes + Normal price change):** the suite
+now also covers the two video modes (validation, style pairing, stored
+mode), image uploads (magic-byte sniffing against a lying declared
+type, the 5 MB cap, cross-user ownership), the i2v fal request shape
+(`image_url` data URI, no `aspect_ratio`, no `generate_audio`), the
+watermark pipeline (applied on a locally generated clip with duration
+and dimensions preserved; failure path keeps the original video and
+marks `failed`), migration v7 re-applying on a v6-shaped database, and
+migration v8 repricing the Normal plan on a pre-v8 database (Pro
+untouched). Latest full run: **235/235 checks passed**.
+
 ## Safety built in
 - Key and JWT secret live only in `.env`; `/api/config` returns only public settings.
 - Credits are deducted and the job recorded in **one atomic transaction** (double-spend safe).
@@ -161,7 +246,7 @@ they are edited in the Admin Panel and boot never overwrites an admin's edits.
 
 | Plan | Monthly | Yearly | Credits/mo | Quality | Generation route |
 |---|---|---|---|---|---|
-| Normal | Rs 1,500 | Rs 15,000 | 100 | 768P | H3 model, resolution `768P` |
+| Normal | Rs 1,999 | Rs 19,990 | 150 | 768P | H3 model, resolution `768P` |
 | Pro | Rs 3,000 | Rs 30,000 | 120 | 2K | H3 model, resolution `2K` |
 | Extra Pro | Rs 5,000 | Rs 50,000 | 120 | Native 4K | Kling O3 4K native-4K endpoint (no `resolution` param; 16:9/9:16/1:1 only) |
 
@@ -509,12 +594,12 @@ Publishing also needs a Play Console account and your app's privacy policy URL �
 the privacy policy page is included in the web app.
 
 ## Files
-- `server.js` — auth, generate (idempotent, plan-routed), status polling, history, reports, config, plans/subscriptions/payments, credit packs, clip joining (ffmpeg-static), Google Play Billing verification + RTDN + voided-purchase clawback, PayFast gateway checkout + signed IPN, admin API
+- `server.js` — auth, generate (idempotent, plan-routed, video modes + image-to-video + watermark post-processing), status polling, history, reports, config, plans/subscriptions/payments, credit packs, clip joining (ffmpeg-static), Google Play Billing verification + RTDN + voided-purchase clawback, PayFast gateway checkout + signed IPN, admin API
 - `public/index.html` — the AJK AI web app (Studio, History with clip joining, Plans & pricing, Buy Credits with Google Play + gateway instant checkout when available, Settings, Privacy)
 - `public/admin.html` — the Admin Panel, served at `/admin` (includes credit-pack editing, pack-purchase approval, Play product IDs, credit-deficit display, billing/transactions)
 - `public/nayapay-qr.jpg` — the owner's NayaPay QR code, shown on the Buy Credits page when NayaPay is selected
 - `schema.sql` — schema reference (`server.js` applies migrations automatically on boot)
-- `test.sh` — the automated test battery (original + monetization + prompt-language + credit-pack + clip-join + Play Billing/gateway tests; see its header for the server env it needs)
+- `test.sh` — the automated test battery (original + monetization + prompt-language + credit-pack + clip-join + Play Billing/gateway + video-mode/image-to-video/watermark/migration tests; see its header for the server env it needs)
 - `test-translate-stub.js` — local Google Translate stub used by `test.sh` (tests never call the real translate endpoint)
 - `test-gateway-stub.js` — signs PayFast-shaped webhook bodies for `test.sh` (tests never call the real gateway)
 - `.env.example` — copy to `.env` and fill in (never commit the real one)

@@ -58,6 +58,12 @@ const CONFIG = {
   // ratios 16:9/9:16/1:1. Override with FAL_MODEL_4K only if the provider
   // changes the endpoint id.
   model4k: process.env.FAL_MODEL_4K || 'fal-ai/kling-video/o3/4k/text-to-video',
+  // Image-to-video endpoint verified against fal.ai's official API docs
+  // (2026-10-23): minimax/h3/image-to-video animates a supplied image as
+  // the opening frame and takes it in the documented `image_url` field.
+  // H3 generates native stereo audio (score, dialogue and foley) itself;
+  // its schema has NO generate_audio toggle, so none is ever sent for H3.
+  modelI2V: (process.env.FAL_MODEL_I2V || 'minimax/h3/image-to-video').trim(),
   resolution: process.env.FAL_RESOLUTION || '768P',
   aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'],
   durations: [5, 10],                       // seconds offered in the UI
@@ -90,6 +96,10 @@ const CONFIG = {
   // NOTE: local disk — on ephemeral hosting (Render free tier) these files
   // disappear when the instance restarts or redeploys.
   joinedDir: process.env.JOINED_DIR || path.join(__dirname, 'data', 'joined'),
+  // User-uploaded source images for image-to-video (one folder per user)
+  // and locally post-processed (watermarked) generations.
+  uploadsDir: path.join(__dirname, 'data', 'uploads'),
+  generatedDir: process.env.GENERATED_DIR || path.join(__dirname, 'data', 'generated'),
   // Public base URL of this server (used to build gateway redirect/callback
   // URLs). Derived from the request when unset.
   publicBaseUrl: (process.env.PUBLIC_BASE_URL || '').trim().replace(/\/+$/, ''),
@@ -138,6 +148,15 @@ const PROMPT_LANGUAGES = [
 ];
 const TRANSLATED_LANGUAGES = new Set(['ur', 'ks', 'ar', 'fa', 'hi']);
 
+// ---------- Video modes ----------
+// Two clearly separated generation experiences. Each mode permits only
+// its own styles; the server validates the pairing on every request.
+const VIDEO_MODES = {
+  realistic: ['realistic', 'cinematic'],
+  cartoon: ['cartoon', 'anime'],
+};
+const MODE_LIST = Object.entries(VIDEO_MODES).map(([id, styles]) => ({ id, styles }));
+
 // Translate a prompt to English via Google Translate's free web endpoint
 // (client=gtx). The response is nested arrays: data[0] is the list of
 // translated segments and each segment's [0] is its text — join them all.
@@ -167,8 +186,8 @@ const FOUR_K_ASPECTS = ['16:9', '9:16', '1:1'];
 // only re-syncs the structural fields (name, quality, resolution, model) and
 // never overwrites prices or credit amounts an admin has changed.
 const PLAN_DEFAULTS = [
-  { id: 'normal',   name: 'Normal',    price_monthly: 1500, price_yearly: 15000,
-    credits_monthly: 100, quality: '768P', quality_label: '768P',      resolution: '768P', model: CONFIG.model,   sort_order: 1,
+  { id: 'normal',   name: 'Normal',    price_monthly: 1999, price_yearly: 19990,
+    credits_monthly: 150, quality: '768P', quality_label: '768P',      resolution: '768P', model: CONFIG.model,   sort_order: 1,
     play_product_monthly: 'ajk_normal_monthly',   play_product_yearly: 'ajk_normal_yearly' },
   { id: 'pro',      name: 'Pro',       price_monthly: 3000, price_yearly: 30000,
     credits_monthly: 120, quality: '2K',   quality_label: '2K',        resolution: '2K',   model: CONFIG.model,   sort_order: 2,
@@ -346,6 +365,26 @@ const MIGRATIONS = [
     ALTER TABLE users ADD COLUMN credit_deficit INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE payments ADD COLUMN pack_id INTEGER;
     ALTER TABLE payments ADD COLUMN credits_granted INTEGER NOT NULL DEFAULT 0;` },
+  // v7 — video modes, image-to-video and watermarks. `mode` separates the
+  // Realistic Human and Cartoon/Animation experiences (existing rows are
+  // realistic by default). source_image_path records the uploader-owned
+  // image a generation was animated from; watermark_text is the optional
+  // user-supplied overlay text and watermark_status tracks the honest
+  // outcome of post-processing: none | pending | applied | failed.
+  { version: 7, up: `
+    ALTER TABLE generations ADD COLUMN mode TEXT NOT NULL DEFAULT 'realistic';
+    ALTER TABLE generations ADD COLUMN source_image_path TEXT;
+    ALTER TABLE generations ADD COLUMN watermark_text TEXT;
+    ALTER TABLE generations ADD COLUMN watermark_status TEXT NOT NULL DEFAULT 'none';` },
+  // v8 — owner price decision (2026-10-23, "Option 2"): the Normal plan
+  // moves to Rs 1,999/month, Rs 19,990/year and 150 credits/month. Like
+  // the v5 rescale it is a one-time, version-gated UPDATE of the normal
+  // row only, so later admin edits are respected and Pro/Extra Pro are
+  // untouched. No grandfathering is needed: no live subscribers exist
+  // yet. Fresh DBs get the same values from PLAN_DEFAULTS.
+  { version: 8, up: `
+    UPDATE plans SET price_monthly = 1999, price_yearly = 19990,
+      credits_monthly = 150 WHERE id = 'normal';` },
 ];
 {
   const applied = new Set(db.prepare('SELECT version FROM schema_migrations').all().map(r => r.version));
@@ -540,7 +579,11 @@ function subscriptionView(sub) {
 // ---------- App ----------
 const app = express();
 app.use(cors({ origin: FRONTEND_ORIGIN || true }));
-app.use(express.json({ limit: '100kb' }));
+// JSON bodies are capped at 100kb — except the image-upload route, whose
+// base64 payload needs its own larger parser (mounted on the route; the
+// global parser is skipped for that exact path).
+const jsonParser = express.json({ limit: '100kb' });
+app.use((req, res, next) => req.path === '/api/uploads/image' ? next() : jsonParser(req, res, next));
 // Payment gateways post their IPN/webhook callbacks as form data.
 app.use(express.urlencoded({ extended: false, limit: '100kb' }));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
@@ -582,6 +625,7 @@ app.get('/api/config', (req, res) => res.json({
   aspect_ratios: CONFIG.aspectRatios,
   durations: CONFIG.durations,
   styles: CONFIG.styles,
+  modes: MODE_LIST,
   prompt_languages: PROMPT_LANGUAGES,
   cost_by_duration: CONFIG.costByDuration,
   signup_credits: CONFIG.signupCredits,
@@ -688,9 +732,67 @@ app.get('/api/me', auth, (req, res) => {
     subscription: subscriptionView(latestSubscription(u.id)) });
 });
 
+// ---------- Image uploads (source images for image-to-video) ----------
+// The client sends the image as base64 JSON. The declared content_type is
+// NEVER trusted: the real type is sniffed from the magic bytes, and only
+// PNG / JPEG / WebP are accepted. Files land under data/uploads/<userId>/
+// — the owner segment in the path is what later proves ownership when a
+// generation references the image. Decoded size is capped at 5 MB.
+const IMAGE_UPLOAD_MAX_BYTES = 5 * 1024 * 1024;
+const IMAGE_TYPES = [
+  { contentType: 'image/png', ext: 'png',
+    match: b => b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 &&
+                b[4] === 0x0d && b[5] === 0x0a && b[6] === 0x1a && b[7] === 0x0a },
+  { contentType: 'image/jpeg', ext: 'jpg',
+    match: b => b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
+  { contentType: 'image/webp', ext: 'webp',
+    match: b => b.length >= 12 && b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WEBP' },
+];
+function sniffImageType(buf) { return IMAGE_TYPES.find(t => t.match(buf)) || null; }
+
+app.post('/api/uploads/image', auth, express.json({ limit: '8mb' }), (req, res) => {
+  const raw = String(req.body?.image_base64 || '').trim();
+  if (!raw) return res.status(400).json({ error: 'image_base64 is required.' });
+  const base64 = raw.startsWith('data:') ? (raw.split(',', 2)[1] || '') : raw;
+  if (!/^[A-Za-z0-9+/=\s]+$/.test(base64))
+    return res.status(400).json({ error: 'image_base64 is not valid base64.' });
+  const buf = Buffer.from(base64, 'base64');
+  if (buf.length === 0) return res.status(400).json({ error: 'The uploaded image is empty.' });
+  if (buf.length > IMAGE_UPLOAD_MAX_BYTES)
+    return res.status(413).json({ error: 'Image is too large — the limit is 5 MB.' });
+  const type = sniffImageType(buf);
+  if (!type)
+    return res.status(415).json({ error: 'Only PNG, JPEG and WebP images are supported.' });
+  const dir = path.join(CONFIG.uploadsDir, String(req.user.id));
+  fs.mkdirSync(dir, { recursive: true });
+  const name = `${randomUUID()}.${type.ext}`;
+  fs.writeFileSync(path.join(dir, name), buf);
+  const imagePath = `data/uploads/${req.user.id}/${name}`;
+  res.status(201).json({ image_path: imagePath, content_type: type.contentType,
+    size_bytes: buf.length });
+});
+
+// Resolve a client-supplied image_path to a stored upload OWNED by this
+// user. Returns { abs, contentType } or null — any path outside the
+// caller's own upload folder (or a missing file) is rejected.
+function resolveOwnedUpload(userId, imagePath) {
+  if (!imagePath || typeof imagePath !== 'string') return null;
+  const normalized = path.posix.normalize(imagePath.replace(/\\/g, '/').replace(/^\.\//, ''));
+  const prefix = `data/uploads/${userId}/`;
+  if (!normalized.startsWith(prefix) || normalized.split('/').includes('..')) return null;
+  const abs = path.join(__dirname, ...normalized.split('/'));
+  if (!abs.startsWith(path.join(CONFIG.uploadsDir, String(userId)) + path.sep)) return null;
+  let buf;
+  try { buf = fs.readFileSync(abs); } catch { return null; }
+  const type = sniffImageType(buf);
+  if (!type) return null;
+  return { abs, contentType: type.contentType, dataUri: `data:${type.contentType};base64,${buf.toString('base64')}` };
+}
+
 // ---------- Generation (idempotent + atomic charge) ----------
 app.post('/api/generate', auth, generateLimiter, async (req, res) => {
   const { prompt, aspect_ratio = '16:9', duration = 5, style = 'realistic', language = 'en' } = req.body || {};
+  const mode = String(req.body?.mode || 'realistic').toLowerCase();
   const idemKey = String(req.headers['idempotency-key'] || req.body?.idempotency_key || '').slice(0, 80) || null;
 
   if (!prompt || prompt.trim().length < 3 || prompt.length > 500)
@@ -701,6 +803,36 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
     return res.status(400).json({ error: `duration must be one of: ${CONFIG.durations.join(', ')} seconds` });
   if (!CONFIG.styles.includes(style))
     return res.status(400).json({ error: `style must be one of: ${CONFIG.styles.join(', ')}` });
+  if (!Object.hasOwn(VIDEO_MODES, mode))
+    return res.status(400).json({ error: `mode must be one of: ${Object.keys(VIDEO_MODES).join(', ')}` });
+  if (!VIDEO_MODES[mode].includes(style))
+    return res.status(400).json({ error: `style "${style}" is not available in ${mode} mode — use one of: ${VIDEO_MODES[mode].join(', ')}` });
+  // Optional watermark: user-supplied overlay text, Latin printable ASCII
+  // only (the renderer has no Urdu/Arabic shaping — non-Latin text would
+  // come out wrong, so it is refused up front rather than faked).
+  let watermarkText = null;
+  let watermarkStatus = 'none';
+  if (req.body?.watermark_text !== undefined && req.body?.watermark_text !== null &&
+      String(req.body.watermark_text).length > 0) {
+    const candidate = String(req.body.watermark_text);
+    if (candidate.length > 30 || !/^[\x20-\x7E]+$/.test(candidate))
+      return res.status(400).json({ error: 'watermark_text must be 1–30 printable ASCII (Latin) characters — Urdu/Arabic-script watermarks are not supported.' });
+    watermarkText = candidate;
+    watermarkStatus = 'pending';
+  }
+  // Optional image-to-video: the source image must be one of THIS user's
+  // uploads (see POST /api/uploads/image). It is sent to the verified H3
+  // image-to-video endpoint in its documented `image_url` field as a
+  // base64 data URI (fal accepts data URIs for file inputs).
+  let sourceImagePath = null;
+  let sourceImageDataUri = null;
+  if (req.body?.image_path !== undefined && req.body?.image_path !== null && req.body?.image_path !== '') {
+    const owned = resolveOwnedUpload(req.user.id, req.body.image_path);
+    if (!owned)
+      return res.status(400).json({ error: 'image_path must be an image you uploaded (POST /api/uploads/image).' });
+    sourceImagePath = String(req.body.image_path).replace(/\\/g, '/').replace(/^\.\//, '');
+    sourceImageDataUri = owned.dataUri;
+  }
   const languageCode = String(language).toLowerCase();
   if (!PROMPT_LANGUAGES.some(l => l.code === languageCode))
     return res.status(400).json({ error: `language must be one of: ${PROMPT_LANGUAGES.map(l => l.code).join(', ')}` });
@@ -754,6 +886,12 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
     fallbackNote = 'Native 4K is only available for 16:9, 9:16 and 1:1 videos; ' +
                    'this video was generated at 2K instead.';
   }
+  // Image-to-video overrides the model route: the verified H3
+  // image-to-video endpoint animates the uploaded image as the opening
+  // frame (its canvas follows the image, so no aspect_ratio is sent).
+  // Credit rules are unchanged — the same duration/4K cost formula below
+  // applies whether or not a source image is attached.
+  if (sourceImagePath) model = CONFIG.modelI2V;
   // Native-4K generations cost double credits; everything else is the
   // standard per-duration rate.
   const cost = (CONFIG.costByDuration[Number(duration)] ?? 1) *
@@ -779,8 +917,8 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
       if (creditBuckets(user).total < cost) throw Object.assign(new Error('NO_CREDITS'), { status: 402 });
       spendBuckets(user, cost); // plan credits first, then free credits
       const info = db.prepare(
-        `INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, cost_credits, idempotency_key, resolution, model, prompt_language, translated_prompt)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(user.id, prompt.trim(), aspect_ratio, Number(duration), style, cost, idemKey, resolution, model, languageCode, translatedPrompt);
+        `INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, cost_credits, idempotency_key, resolution, model, prompt_language, translated_prompt, mode, source_image_path, watermark_text, watermark_status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(user.id, prompt.trim(), aspect_ratio, Number(duration), style, cost, idemKey, resolution, model, languageCode, translatedPrompt, mode, sourceImagePath, watermarkText, watermarkStatus);
       return Number(info.lastInsertRowid);
     });
   } catch (e) {
@@ -798,11 +936,17 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
   // model + resolution the user's plan entitles them to.
   // The Kling native-4K endpoint has no `resolution` parameter (4K is fixed
   // by the endpoint itself) and expects `duration` as a string enum
-  // ("5"/"10" — fal.ai's official schema, verified 2026-10-22). We also pin
-  // generate_audio:false because the app does its own voice-over and mixing.
-  // The H3 model keeps the original body shape with `resolution`.
-  const isNative4k = resolution === '4K' && model !== CONFIG.model;
-  const falBody = isNative4k
+  // ("5"/"10" — fal.ai's official schema, verified 2026-10-22), and that
+  // endpoint's own schema does accept generate_audio, which we pin false.
+  // The H3 text/image-to-video schemas have NO generate_audio toggle —
+  // H3 generates its native audio track itself — so no such field is
+  // ever sent to them.
+  const isNative4k = resolution === '4K' && model === CONFIG.model4k;
+  const falBody = sourceImagePath
+    ? { prompt: `${effectivePrompt} — style: ${style}`,
+        duration: Number(duration), resolution,
+        enable_safety_checker: true, image_url: sourceImageDataUri }
+    : isNative4k
     ? { prompt: `${effectivePrompt} — style: ${style}`,
         duration: String(duration), aspect_ratio,
         generate_audio: false, enable_safety_checker: true }
@@ -823,6 +967,8 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
     const me = db.prepare('SELECT credits FROM users WHERE id = ?').get(req.user.id);
     res.json({ id: jobId, status: 'in_progress', credits_left: me.credits,
                cost_credits: cost, resolution, model, prompt_language: languageCode,
+               mode, source_image_path: sourceImagePath,
+               watermark_status: watermarkStatus,
                ...(translatedPrompt ? { translated_prompt: translatedPrompt } : {}),
                ...(fallbackNote ? { note: fallbackNote } : {}) });
   } catch (e) {
@@ -850,12 +996,85 @@ function failAndRefund(jobId, message) {
   }
 }
 
-// Poll one job: asks fal.ai for status, updates DB, returns video URL when done
+// ---------- Watermark post-processing ----------
+// NOTE on the renderer: the pinned ffmpeg-static 5.3.0 binary has NO
+// drawtext filter (it was built without libfreetype), but it DOES ship
+// libass (the `ass`/`subtitles` filters). The watermark is therefore
+// rendered as a timed ASS subtitle — same visual contract: bottom-right,
+// white at ~70% opacity, small. Claiming drawtext here would be false;
+// the README documents this openly.
+function assTimestamp(seconds) {
+  const s = Math.max(0, Number(seconds) || 0);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  const sec = Math.floor(s % 60), cs = Math.round((s - Math.floor(s)) * 100);
+  return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
+}
+function escapeAssText(text) {
+  return String(text).replace(/\\/g, '\\\\').replace(/\{/g, '\\{').replace(/\}/g, '\\}')
+    .replace(/\r?\n/g, ' ');
+}
+const watermarkInFlight = new Set();
+async function ensureWatermarkApplied(job) {
+  if (!job || job.status !== 'completed' || !job.watermark_text) return job;
+  if (job.watermark_status !== 'pending') return job;
+  if (watermarkInFlight.has(job.id)) return job;
+  watermarkInFlight.add(job.id);
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ajk-wm-'));
+  try {
+    if (!job.video_url) throw new Error('completed job has no video_url to watermark');
+    const input = path.join(work, 'input.mp4');
+    await downloadClip(job.video_url, input, { left: JOIN_MAX_BYTES });
+    const probe = await probeMedia(input);
+    const fontSize = Math.min(72, Math.max(14, Math.round(probe.height / 18)));
+    const assPath = path.join(work, 'watermark.ass');
+    const ass = [
+      '[Script Info]',
+      'ScriptType: v4.00+',
+      `PlayResX: ${probe.width}`,
+      `PlayResY: ${probe.height}`,
+      '',
+      '[V4+ Styles]',
+      'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
+      // Alignment 3 = bottom-right. PrimaryColour &H4DFFFFFF = white with
+      // alpha 0x4D, i.e. ~70% opaque.
+      `Style: Watermark,DejaVu Sans,${fontSize},&H4DFFFFFF,&H000000FF,&H80000000,&H00000000,0,0,0,0,100,100,0,0,1,1,0,3,16,16,16,1`,
+      '',
+      '[Events]',
+      'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
+      `Dialogue: 0,0:00:00.00,${assTimestamp(probe.duration + 0.5)},Watermark,,0,0,0,,${escapeAssText(job.watermark_text)}`,
+      '',
+    ].join('\n');
+    fs.writeFileSync(assPath, ass);
+    fs.mkdirSync(CONFIG.generatedDir, { recursive: true });
+    const name = `${randomUUID()}.mp4`;
+    const output = path.join(CONFIG.generatedDir, name);
+    const filterPath = assPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
+    await runFfmpeg(['-y', '-i', input, '-vf', `ass=${filterPath}`,
+                     '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
+                     '-c:a', 'copy', output]);
+    if (!fs.existsSync(output) || fs.statSync(output).size === 0)
+      throw new Error('watermark render produced no output');
+    db.prepare(`UPDATE generations SET video_url = ?, watermark_status = 'applied',
+                updated_at = datetime('now') WHERE id = ?`).run(`/files/generated/${name}`, job.id);
+  } catch (e) {
+    // Honest failure: the unwatermarked video stays in place and the row
+    // is marked watermark_status='failed' — never reported as applied.
+    console.error(`watermark failed for generation ${job.id}:`, e.message);
+    db.prepare(`UPDATE generations SET watermark_status = 'failed',
+                updated_at = datetime('now') WHERE id = ?`).run(job.id);
+  } finally {
+    watermarkInFlight.delete(job.id);
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+  return db.prepare('SELECT * FROM generations WHERE id = ?').get(job.id) || job;
+}
+
 app.get('/api/generations/:id', auth, async (req, res) => {
   const job = db.prepare('SELECT * FROM generations WHERE id = ? AND user_id = ?')
     .get(req.params.id, req.user.id);
   if (!job) return res.status(404).json({ error: 'Generation not found.' });
-  if (job.status === 'completed' || job.status === 'failed' || !job.fal_request_id)
+  if (job.status === 'completed') return res.json(await ensureWatermarkApplied(job));
+  if (job.status === 'failed' || !job.fal_request_id)
     return res.json(job);
   const jobModel = job.model || CONFIG.model; // jobs remember their routed model
   try {
@@ -872,6 +1091,10 @@ app.get('/api/generations/:id', auth, async (req, res) => {
           db.prepare(`UPDATE generations SET status = 'completed', video_url = ?,
                       updated_at = datetime('now') WHERE id = ?`).run(url, job.id);
           job.status = 'completed'; job.video_url = url;
+          // If this job asked for a watermark, post-process BEFORE the
+          // client sees the completed video (applied or honestly failed).
+          if (job.watermark_text && job.watermark_status === 'pending')
+            return res.json(await ensureWatermarkApplied(job));
         }
       }
       // fal's queue reports failures via the result payload; a non-2xx status
@@ -1834,7 +2057,9 @@ app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'adm
 // Joined videos live on local disk (see CONFIG.joinedDir) and are served
 // here — mounted before the SPA fallback so the files win over index.html.
 fs.mkdirSync(CONFIG.joinedDir, { recursive: true });
+fs.mkdirSync(CONFIG.generatedDir, { recursive: true });
 app.use('/files/joined', express.static(CONFIG.joinedDir));
+app.use('/files/generated', express.static(CONFIG.generatedDir));
 app.use(express.static(path.join(__dirname, 'public')));
 app.get(/^\/(?!api\/).*/, (req, res) =>
   res.sendFile(path.join(__dirname, 'public', 'index.html')));

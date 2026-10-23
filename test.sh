@@ -107,8 +107,9 @@ check "gateway webhook unconfigured -> 503" "503" "$(curl -s -o /dev/null -w '%{
 echo "--- monetization: plans API (public) ---"
 PLANS=$(curl -s $B/api/plans); echo "$PLANS" | head -c 400; echo
 check "plans list has 3 plans" "3" "$(echo $PLANS | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["plans"]))')"
-check "normal plan price Rs 1500" "1500" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="normal"][0]["price_monthly"])')"
-check "normal plan 100 credits/mo" "100" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="normal"][0]["credits_monthly"])')"
+check "normal plan price Rs 1999" "1999" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="normal"][0]["price_monthly"])')"
+check "normal plan yearly Rs 19990" "19990" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="normal"][0]["price_yearly"])')"
+check "normal plan 150 credits/mo" "150" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="normal"][0]["credits_monthly"])')"
 check "extrapro label is Native 4K" "Native 4K" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="extrapro"][0]["quality_label"])')"
 
 echo "--- monetization: admin auth ---"
@@ -128,13 +129,13 @@ MP=$(curl -s -X POST $B/api/admin/users/$PID/manual-payment -H "Authorization: B
 echo "$MP"
 check "manual payment ok" "True" "$(echo $MP | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
 PME=$(curl -s $B/api/me -H "Authorization: Bearer $PTOKEN")
-check "activation: total credits 100 free + 100 plan = 200" "200" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
-check "activation: plan bucket = 100" "100" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
+check "activation: total credits 100 free + 150 plan = 250" "250" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "activation: plan bucket = 150" "150" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
 check "activation: free bucket untouched = 100" "100" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
 check "activation: current plan is normal" "normal" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan"]["id"])')"
 PAY=$(curl -s $B/api/payments -H "Authorization: Bearer $PTOKEN")
 check "user payment history has 1 payment" "1" "$(echo $PAY | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["payments"]))')"
-check "payment amount Rs 1500" "1500" "$(echo $PAY | python3 -c 'import sys,json;print(json.load(sys.stdin)["payments"][0]["amount"])')"
+check "payment amount Rs 1999" "1999" "$(echo $PAY | python3 -c 'import sys,json;print(json.load(sys.stdin)["payments"][0]["amount"])')"
 check "payment provider is manual_test" "manual_test" "$(echo $PAY | python3 -c 'import sys,json;print(json.load(sys.stdin)["payments"][0]["provider"])')"
 
 echo "--- monetization: payment isolation + no self-activation ---"
@@ -152,7 +153,7 @@ PHIST=$(curl -s $B/api/history -H "Authorization: Bearer $PTOKEN")
 check "normal job routed at 768P" "768P" "$(echo $PHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["resolution"])')"
 check "normal job model is H3" "minimax/h3/text-to-video" "$(echo $PHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["model"])')"
 check "normal 10s job cost 20 credits" "20" "$(echo $PHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
-check "credits refunded to 200 after failed normal job" "200" "$(echo $PHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "credits refunded to 250 after failed normal job" "250" "$(echo $PHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 echo "--- monetization: extrapro native-4K routing + double credit cost ---"
 MP2=$(curl -s -X POST $B/api/admin/users/$PID/manual-payment -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{"plan_id":"extrapro","period":"monthly"}')
@@ -213,10 +214,10 @@ check "price restored to Rs 3000" "3000" "$(curl -s $B/api/plans | python3 -c 'i
 
 echo "--- monetization: revenue summary math ---"
 REV=$(curl -s $B/api/admin/revenue -H "Authorization: Bearer $ATOKEN"); echo "$REV"
-check "revenue total = 1500 + 5000" "6500" "$(echo $REV | python3 -c 'import sys,json;print(json.load(sys.stdin)["total_succeeded"])')"
+check "revenue total = 1999 + 5000" "6999" "$(echo $REV | python3 -c 'import sys,json;print(json.load(sys.stdin)["total_succeeded"])')"
 check "revenue payment count = 2" "2" "$(echo $REV | python3 -c 'import sys,json;print(json.load(sys.stdin)["total_succeeded_count"])')"
 check "extrapro revenue = 5000" "5000" "$(echo $REV | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["by_plan"] if p["plan_id"]=="extrapro"][0]["total"])')"
-check "current-month revenue = 6500" "6500" "$(echo $REV | python3 -c 'import sys,json;print(json.load(sys.stdin)["monthly"][0]["total"])')"
+check "current-month revenue = 6999" "6999" "$(echo $REV | python3 -c 'import sys,json;print(json.load(sys.stdin)["monthly"][0]["total"])')"
 
 echo "--- credit packs: catalogue, purchase flow, admin approval (exactly once) ---"
 PK=$(curl -s $B/api/packs); echo "$PK" | head -c 300; echo
@@ -454,9 +455,9 @@ V3=$(curl -s -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $BTOK
 check "play sub verify ok" "True" "$(echo $V3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
 BME=$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN"); echo "$BME"
 check "play sub: current plan is normal" "normal" "$(echo $BME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan"]["id"])')"
-check "play sub: plan bucket granted 100" "100" "$(echo $BME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
+check "play sub: plan bucket granted 150" "150" "$(echo $BME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
 check "play sub: subscription status active" "active" "$(echo $BME | python3 -c 'import sys,json;print(json.load(sys.stdin)["subscription"]["status"])')"
-check "play sub: total = 200 free + 100 plan = 300" "300" "$(echo $BME | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "play sub: total = 200 free + 150 plan = 350" "350" "$(echo $BME | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 echo "--- play billing: (e) voided purchase sync claws credits back ---"
 V4=$(curl -s -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"credits_100","purchase_token":"voided-token"}')
@@ -475,7 +476,7 @@ CO1B=$(echo "$CO1" | sed '$d')
 BASKET1=$(echo $CO1B | python3 -c 'import sys,json;print(json.load(sys.stdin)["basket_id"])')
 check "gateway checkout URL is the PayFast PostTransaction endpoint" "yes" "$(echo $CO1B | python3 -c 'import sys,json;u=json.load(sys.stdin)["checkout_url"];print("yes" if u.endswith("/Ecommerce/api/Transaction/PostTransaction") else "no")')"
 check "gateway checkout params carry the merchant signature" "yes" "$(echo $CO1B | python3 -c 'import sys,json;s=json.load(sys.stdin)["params"].get("SIGNATURE","");print("yes" if len(s)==32 else "no")')"
-check "gateway checkout granted nothing (total still 300)" "300" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "gateway checkout granted nothing (total still 350)" "350" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 echo "--- gateway: (b) correctly-signed success webhook grants exactly once ---"
 WB1=$(node "$(dirname "$0")/test-gateway-stub.js" testmerchant "AJK AI" 1499 "$BASKET1" 00 TXN-GW-1)
@@ -510,6 +511,150 @@ check "reversal webhook claws back 50" "50" "$(echo $WHR | python3 -c 'import sy
 check "reversal: free bucket back to 300" "300" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
 check "reversed gateway payment marked refunded" "refunded" "$(curl -s $B4/api/payments -H "Authorization: Bearer $BTOKEN" | python3 -c "import sys,json;print([p for p in json.load(sys.stdin)['payments'] if p['provider_txn_id']=='$BASKET3'][0]['status'])")"
 kill $SRV4_PID 2>/dev/null
+
+echo "--- video modes, image-to-video, watermarks (own instance) ---"
+# Self-contained FIFTH instance (own throwaway DB). Covers: mode/style
+# pairing validation, migration v7 (by rolling the columns back and
+# rebooting), upload sniffing/size/ownership, the i2v fal request shape
+# (TEST_RECORD_FAL_BODY hook; dummy key, no real fal call), and the
+# watermark post-processing pipeline against a tiny locally generated
+# clip (applied + failure paths).
+B5=http://127.0.0.1:18094
+WM_PORT=18093
+rm -f /tmp/myvideoai-modes-test.db
+rm -rf /tmp/modegen /tmp/wmclips; mkdir -p /tmp/modegen /tmp/wmclips
+FFBIN5=$(node --input-type=module -e "import f from 'ffmpeg-static'; console.log(f)" 2>/dev/null)
+"$FFBIN5" -y -v error -f lavfi -i color=c=green:size=320x240:rate=24:duration=1 -f lavfi -i sine=frequency=330:duration=1 -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest /tmp/wmclips/wm.mp4
+(cd /tmp/wmclips && python3 -m http.server $WM_PORT > /dev/null 2>&1) &
+WM_PID=$!
+MODES_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-modes-test.db PORT=18094 FAL_KEY=dummy_test_key "$MODES_JWT_NAME=modes-instance-dummy-value" TEST_RECORD_FAL_BODY=1 GENERATED_DIR=/tmp/modegen node "$(dirname "$0")/server.js" > /tmp/myvideoai-modes-test.log 2>&1 &
+SRV5_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B5/api/health && break || sleep 0.25; done
+CFG5=$(curl -s $B5/api/config)
+check "config exposes 2 video modes" "2" "$(echo $CFG5 | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["modes"]))')"
+check "realistic mode permits realistic+cinematic" "cinematic,realistic" "$(echo $CFG5 | python3 -c 'import sys,json;d=json.load(sys.stdin);print(",".join(sorted([m for m in d["modes"] if m["id"]=="realistic"][0]["styles"])))')"
+MR=$(curl -s -X POST $B5/api/auth/register -H 'Content-Type: application/json' -d '{"email":"modeuser@example.com","password":"password123"}')
+MTOKEN=$(echo $MR | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+MID=$(curl -s $B5/api/me -H "Authorization: Bearer $MTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+
+echo "--- modes: validation + style pairing ---"
+check "unknown mode rejected 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B5/api/generate -H "Authorization: Bearer $MTOKEN" -H 'Content-Type: application/json' -d '{"prompt":"a calm lake at dawn","mode":"cinematic3d","style":"realistic"}')"
+check "cartoon mode + realistic style rejected 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B5/api/generate -H "Authorization: Bearer $MTOKEN" -H 'Content-Type: application/json' -d '{"prompt":"a calm lake at dawn","mode":"cartoon","style":"realistic"}')"
+check "realistic mode + anime style rejected 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B5/api/generate -H "Authorization: Bearer $MTOKEN" -H 'Content-Type: application/json' -d '{"prompt":"a calm lake at dawn","mode":"realistic","style":"anime"}')"
+curl -s -o /dev/null -X POST $B5/api/generate -H "Authorization: Bearer $MTOKEN" -H 'Idempotency-Key: mode-cartoon-1' -H 'Content-Type: application/json' -d '{"prompt":"a funny cartoon cat chasing a butterfly","mode":"cartoon","style":"anime","duration":5}'
+MHIST=$(curl -s $B5/api/history -H "Authorization: Bearer $MTOKEN")
+check "cartoon job stored with mode cartoon" "cartoon" "$(echo $MHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["mode"])')"
+check "cartoon job stored with style anime" "anime" "$(echo $MHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["style"])')"
+curl -s -o /dev/null -X POST $B5/api/generate -H "Authorization: Bearer $MTOKEN" -H 'Idempotency-Key: mode-default-1' -H 'Content-Type: application/json' -d '{"prompt":"a person walking through a market","style":"realistic","duration":5}'
+MHIST=$(curl -s $B5/api/history -H "Authorization: Bearer $MTOKEN")
+check "mode defaults to realistic" "realistic" "$(echo $MHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["mode"])')"
+
+echo "--- uploads: sniffing (declared type ignored), size cap, ownership ---"
+check "upload requires auth 401" "401" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B5/api/uploads/image -H 'Content-Type: application/json' -d '{"image_base64":"iVBORw0KGgo=","content_type":"image/png"}')"
+PNG_B64=$(python3 -c "import base64; print(base64.b64encode(bytes.fromhex('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c636000000000020001e221bc330000000049454e44ae426082')).decode())")
+UP=$(curl -s -w '\n%{http_code}' -X POST $B5/api/uploads/image -H "Authorization: Bearer $MTOKEN" -H 'Content-Type: application/json' -d "{\"image_base64\":\"$PNG_B64\",\"content_type\":\"text/plain\"}")
+check "png upload accepted 201" "201" "$(echo "$UP" | tail -1)"
+UPBODY=$(echo "$UP" | sed '$d')
+check "sniffed content type is image/png (declared text/plain ignored)" "image/png" "$(echo $UPBODY | python3 -c 'import sys,json;print(json.load(sys.stdin)["content_type"])')"
+IMGPATH=$(echo $UPBODY | python3 -c 'import sys,json;print(json.load(sys.stdin)["image_path"])')
+check "upload path is under the uploader's folder" "yes" "$(echo $UPBODY | python3 -c "import sys,json;p=json.load(sys.stdin)['image_path'];print('yes' if p.startswith('data/uploads/$MID/') else 'no')")"
+TEXT_B64=$(python3 -c "import base64; print(base64.b64encode(b'this is not an image at all').decode())")
+check "non-image bytes rejected 415 despite image/png claim" "415" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B5/api/uploads/image -H "Authorization: Bearer $MTOKEN" -H 'Content-Type: application/json' -d "{\"image_base64\":\"$TEXT_B64\",\"content_type\":\"image/png\"}")"
+python3 -c "
+import base64, json
+data = bytes.fromhex('89504e470d0a1a0a') + b'0' * (5 * 1024 * 1024 + 1)
+json.dump({'image_base64': base64.b64encode(data).decode(), 'content_type': 'image/png'}, open('/tmp/bigupload.json', 'w'))
+"
+check "image over 5 MB rejected 413" "413" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B5/api/uploads/image -H "Authorization: Bearer $MTOKEN" -H 'Content-Type: application/json' -d @/tmp/bigupload.json)"
+OR5=$(curl -s -X POST $B5/api/auth/register -H 'Content-Type: application/json' -d '{"email":"modeother@example.com","password":"password123"}')
+OTOKEN5=$(echo $OR5 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+UP2=$(curl -s -X POST $B5/api/uploads/image -H "Authorization: Bearer $OTOKEN5" -H 'Content-Type: application/json' -d "{\"image_base64\":\"$PNG_B64\",\"content_type\":\"image/png\"}")
+IMGPATH2=$(echo $UP2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["image_path"])')
+check "generating from another user's image rejected 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B5/api/generate -H "Authorization: Bearer $MTOKEN" -H 'Content-Type: application/json' -d "{\"prompt\":\"animate this portrait slowly\",\"image_path\":\"$IMGPATH2\"}")"
+
+echo "--- image-to-video: fal request shape via the recorded body hook ---"
+curl -s -o /dev/null -X POST $B5/api/generate -H "Authorization: Bearer $MTOKEN" -H 'Idempotency-Key: mode-i2v-1' -H 'Content-Type: application/json' -d "{\"prompt\":\"the scene slowly comes alive, gentle camera push in\",\"mode\":\"realistic\",\"style\":\"realistic\",\"duration\":5,\"image_path\":\"$IMGPATH\"}"
+FB6=$(curl -s $B5/api/_test/fal-body)
+check "i2v body sends image_url as a png data URI" "yes" "$(echo $FB6 | python3 -c 'import sys,json;u=json.load(sys.stdin)["body"].get("image_url","");print("yes" if u.startswith("data:image/png;base64,") else "no")')"
+check "i2v body omits aspect_ratio (canvas follows the image)" "absent" "$(echo $FB6 | python3 -c 'import sys,json;print("absent" if "aspect_ratio" not in json.load(sys.stdin)["body"] else "PRESENT")')"
+check "i2v body sends NO generate_audio (H3 has no such toggle)" "absent" "$(echo $FB6 | python3 -c 'import sys,json;print("absent" if "generate_audio" not in json.load(sys.stdin)["body"] else "PRESENT")')"
+MHIST=$(curl -s $B5/api/history -H "Authorization: Bearer $MTOKEN")
+check "i2v job routed to the verified i2v model" "minimax/h3/image-to-video" "$(echo $MHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["model"])')"
+check "i2v job stored source_image_path" "$IMGPATH" "$(echo $MHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["source_image_path"])')"
+
+echo "--- watermarks: validation ---"
+check "non-Latin watermark text rejected 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B5/api/generate -H "Authorization: Bearer $MTOKEN" -H 'Content-Type: application/json' -d '{"prompt":"a quiet river at sunset","watermark_text":"شاہد راجپوت"}')"
+check "watermark over 30 chars rejected 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B5/api/generate -H "Authorization: Bearer $MTOKEN" -H 'Content-Type: application/json' -d '{"prompt":"a quiet river at sunset","watermark_text":"ABCDEFGHIJKLMNOPQRSTUVWXYZ12345"}')"
+
+echo "--- watermarks: post-processing applied + failure paths ---"
+WMIDS=$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-modes-test.db');
+const ins = (url) => Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits, mode, watermark_text, watermark_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run($MID, 'watermark seed', '4:3', 1, 'realistic', 'completed', url, 0, 'realistic', 'AJK AI', 'pending').lastInsertRowid);
+console.log([ins('http://127.0.0.1:$WM_PORT/wm.mp4'), ins('http://127.0.0.1:$WM_PORT/missing.mp4')].join(' '));
+")
+read WMOK WMFAIL <<< "$WMIDS"
+WMRES=$(curl -s $B5/api/generations/$WMOK -H "Authorization: Bearer $MTOKEN")
+check "watermark job reports applied" "applied" "$(echo $WMRES | python3 -c 'import sys,json;print(json.load(sys.stdin)["watermark_status"])')"
+WMURL=$(echo $WMRES | python3 -c 'import sys,json;print(json.load(sys.stdin)["video_url"])')
+check "watermarked video served from /files/generated/" "yes" "$(echo $WMRES | python3 -c 'import sys,json;u=json.load(sys.stdin)["video_url"];print("yes" if u.startswith("/files/generated/") else "no")')"
+check "watermarked file downloads (200)" "200" "$(curl -s -o /tmp/wm-out.mp4 -w '%{http_code}' $B5$WMURL)"
+check "watermarked output keeps 320x240" "320x240" "$("$FFBIN5" -i /tmp/wm-out.mp4 2>&1 | python3 -c 'import sys,re; m=re.search(r"[,\s](\d{2,5})x(\d{2,5})(?=[,\s\[])", sys.stdin.read()); print(m.group(1)+"x"+m.group(2) if m else "none")')"
+check "watermarked output keeps ~1s duration" "ok" "$("$FFBIN5" -i /tmp/wm-out.mp4 2>&1 | python3 -c 'import sys,re; m=re.search(r"Duration: (\d+):(\d+):([\d.]+)", sys.stdin.read()); d=int(m.group(1))*3600+int(m.group(2))*60+float(m.group(3)) if m else -1; print("ok" if 0.7 <= d <= 1.4 else "bad")')"
+WMRES2=$(curl -s $B5/api/generations/$WMFAIL -H "Authorization: Bearer $MTOKEN")
+check "unreachable source marks watermark failed (not applied)" "failed" "$(echo $WMRES2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["watermark_status"])')"
+check "failed watermark keeps the original video_url" "http://127.0.0.1:$WM_PORT/missing.mp4" "$(echo $WMRES2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["video_url"])')"
+
+echo "--- migration v7: columns roll back to v6 shape and re-apply on boot ---"
+kill $SRV5_PID 2>/dev/null; sleep 0.5
+node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-modes-test.db');
+db.exec('DELETE FROM schema_migrations WHERE version = 7');
+for (const col of ['mode', 'source_image_path', 'watermark_text', 'watermark_status'])
+  db.exec('ALTER TABLE generations DROP COLUMN ' + col);
+console.log('rolled back to v6 shape');
+"
+env DB_PATH=/tmp/myvideoai-modes-test.db PORT=18094 FAL_KEY=dummy_test_key "$MODES_JWT_NAME=modes-instance-dummy-value" TEST_RECORD_FAL_BODY=1 GENERATED_DIR=/tmp/modegen node "$(dirname "$0")/server.js" > /tmp/myvideoai-modes-test2.log 2>&1 &
+SRV5_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B5/api/health && break || sleep 0.25; done
+check "v7 re-applied on boot (schema_migrations has 7)" "yes" "$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-modes-test.db');
+const cols = db.prepare('PRAGMA table_info(generations)').all().map(r => r.name);
+const mig = db.prepare('SELECT version FROM schema_migrations WHERE version = 7').get();
+console.log(mig && ['mode','source_image_path','watermark_text','watermark_status'].every(c => cols.includes(c)) ? 'yes' : 'no');
+")"
+check "pre-v7 rows gain mode=realistic after upgrade" "realistic" "$(curl -s $B5/api/history -H "Authorization: Bearer $MTOKEN" | python3 -c 'import sys,json;rows=json.load(sys.stdin)["generations"];print([g for g in rows if g["prompt"]=="watermark seed"][0]["mode"])')"
+
+echo "--- migration v8: Normal price change applies to a v7-shaped DB ---"
+kill $SRV5_PID 2>/dev/null; sleep 0.5
+node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-modes-test.db');
+db.exec('DELETE FROM schema_migrations WHERE version = 8');
+db.exec(\"UPDATE plans SET price_monthly = 1500, price_yearly = 15000, credits_monthly = 100 WHERE id = 'normal'\");
+console.log('normal plan rolled back to pre-v8 values');
+"
+env DB_PATH=/tmp/myvideoai-modes-test.db PORT=18094 FAL_KEY=dummy_test_key "$MODES_JWT_NAME=modes-instance-dummy-value" TEST_RECORD_FAL_BODY=1 GENERATED_DIR=/tmp/modegen node "$(dirname "$0")/server.js" > /tmp/myvideoai-modes-test3.log 2>&1 &
+SRV5_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B5/api/health && break || sleep 0.25; done
+check "v8 re-applied on boot (1999/19990/150)" "1999/19990/150" "$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-modes-test.db');
+const p = db.prepare(\"SELECT price_monthly, price_yearly, credits_monthly FROM plans WHERE id = 'normal'\").get();
+const mig = db.prepare('SELECT version FROM schema_migrations WHERE version = 8').get();
+console.log(mig ? [p.price_monthly, p.price_yearly, p.credits_monthly].join('/') : 'missing');
+")"
+check "v8 leaves Pro untouched (3000/120)" "3000/120" "$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-modes-test.db');
+const p = db.prepare(\"SELECT price_monthly, credits_monthly FROM plans WHERE id = 'pro'\").get();
+console.log([p.price_monthly, p.credits_monthly].join('/'));
+")"
+kill $SRV5_PID $WM_PID 2>/dev/null
+rm -rf "$(dirname "$0")/data/uploads/$MID" "$(dirname "$0")/data/uploads/$OID5" 2>/dev/null
 
 echo "--- rate limit: burst until 429 ---"
 FOUND429="no"
