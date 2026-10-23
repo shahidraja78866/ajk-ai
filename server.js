@@ -76,6 +76,23 @@ const CONFIG = {
   // H3 generates native stereo audio (score, dialogue and foley) itself;
   // its schema has NO generate_audio toggle, so none is ever sent for H3.
   modelI2V: (process.env.FAL_MODEL_I2V || 'minimax/h3/image-to-video').trim(),
+  // Reference-to-video endpoint for saved characters (Phase C2). Schema
+  // AND price verified against fal.ai's official llms.txt for this model
+  // (2026-10-23): inputs are prompt (required; refer to the references in
+  // the text as "Image 1", "Video 1", ...), reference_image_urls
+  // (list<string> — up to 9 subject/style images; images + videos + audio
+  // together at most 12 files), reference_video_urls, reference_audio_urls,
+  // duration (integer 5-15), resolution (480P | 768P | 2K | 4K — 480P/768P
+  // native, 2K/4K upscale a 768P base), aspect_ratio (adaptive | 21:9 |
+  // 16:9 | 4:3 | 1:1 | 3:4 | 9:16), enable_safety_checker,
+  // prompt_expansion_mode, seed; output is { video: { url },
+  // expanded_prompt }. Price is the standard H3 table — $0.05/s at 480P,
+  // $0.06/s at 768P, $0.13/s at 2K, $0.16/s at 4K — and the first 5
+  // reference images are free (each additional image $0.08; a character
+  // always sends exactly ONE image, so there is never an image fee).
+  // Because the price matches the standard rate card exactly, character
+  // generations are charged the standard rate with NO surcharge.
+  modelRef: (process.env.FAL_MODEL_REF || 'minimax/h3/reference-to-video').trim(),
   resolution: process.env.FAL_RESOLUTION || '768P',
   aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'],
   durations: [5, 10],                       // seconds offered in the UI
@@ -574,6 +591,27 @@ const MIGRATIONS = [
   // 'upscale') and source_generation_id — no further columns needed.
   { version: 12, up: `
     ALTER TABLE generations ADD COLUMN stage TEXT NOT NULL DEFAULT 'final';` },
+  // v13 — character library (Phase C2): a user saves a character once —
+  // a reference image (one of their own uploads) plus an optional bound
+  // voice — and reuses it across generations and lip-sync jobs for a
+  // consistent look. generations.character_id records which saved
+  // character a job used (NULL for character-free jobs); the column is a
+  // plain reference with no cascade, so deleting a character never
+  // deletes or alters the generations made with it (History then simply
+  // shows no character name for those rows).
+  { version: 13, up: `
+    CREATE TABLE IF NOT EXISTS characters (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      name TEXT NOT NULL,
+      image_path TEXT NOT NULL,
+      voice_provider TEXT,
+      voice_id TEXT,
+      voice_language TEXT,
+      voice_style TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    ALTER TABLE generations ADD COLUMN character_id INTEGER;` },
 ];
 {
   const applied = new Set(db.prepare('SELECT version FROM schema_migrations').all().map(r => r.version));
@@ -963,6 +1001,15 @@ app.get('/api/config', (req, res) => res.json({
     cost_by_duration: CONFIG.draftCost,
     upgrade_qualities: ['768P', '2K', '4K'],
   },
+  // Character library (Phase C2): a saved character is one of the user's
+  // own uploaded images plus an optional bound voice. Generations with a
+  // character are routed to the verified reference-to-video endpoint at
+  // the STANDARD rate card (its per-second price is the H3 table and the
+  // single reference image is inside the free allowance) — no surcharge.
+  characters: {
+    max_per_user: CHARACTER_MAX_PER_USER,
+    model: CONFIG.modelRef,
+  },
 }));
 app.get('/api/health', (req, res) => res.json({ ok: true, model: CONFIG.model }));
 
@@ -1113,6 +1160,121 @@ function resolveOwnedUpload(userId, imagePath) {
   return { abs, contentType: type.contentType, dataUri: `data:${type.contentType};base64,${buf.toString('base64')}` };
 }
 
+// ---------- Character library (Phase C2) ----------------------------------
+// A saved character = one reference image (always one of the user's OWN
+// uploads — the same ownership proof as image-to-video) plus an OPTIONAL
+// bound voice (provider + voice + spoken language + style, validated
+// against the public voice catalog). Users save a character once and
+// reuse it: in /api/generate the character's image drives the visual via
+// the reference-to-video endpoint (charged at the standard rate card —
+// see CONFIG.modelRef), and in /api/voice/lipsync the character supplies
+// both the source image and (unless overridden) the voice. Character
+// consistency is the model's best effort, never a guarantee — the UI and
+// README say so plainly.
+const CHARACTER_MAX_PER_USER = 10;
+
+function publicCharacter(c) {
+  if (!c) return null;
+  return { id: c.id, name: c.name, image_path: c.image_path,
+    // Uploaded images are served under /files/uploads/<userId>/<file>;
+    // image_path is the stored "data/uploads/<userId>/<file>" form.
+    image_url: '/' + String(c.image_path).replace(/^data\//, 'files/'),
+    voice: c.voice_provider
+      ? { provider: c.voice_provider, voice_id: c.voice_id,
+          language: c.voice_language, style: c.voice_style }
+      : null,
+    created_at: c.created_at };
+}
+function getOwnCharacter(userId, characterId) {
+  const id = Number(characterId);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  return db.prepare('SELECT * FROM characters WHERE id = ? AND user_id = ?')
+    .get(id, userId) || null;
+}
+// Validate the optional voice binding of a character against the public
+// voice catalog (the same catalog /api/config exposes — only configured
+// providers can be bound, since an unconfigured provider could never be
+// used). Returns a normalized { provider, voice_id, language, style } or
+// null when no binding was supplied. Throws { status, error } on bad
+// input. When a provider is bound, the language defaults to Urdu and the
+// style to conversation, and the voice to the provider's default voice
+// for the language — a bound character always carries a COMPLETE voice
+// so lip-sync can use it without further choices.
+function parseCharacterVoice(body) {
+  const bad = (msg) => Object.assign(new Error(msg), { status: 400 });
+  const has = (k) => body?.[k] !== undefined && body?.[k] !== null && body?.[k] !== '';
+  const anyVoice = ['voice_provider', 'voice_id', 'voice_language', 'voice_style'].some(has);
+  if (!anyVoice) return null;
+  const provider = String(body?.voice_provider || '').toLowerCase();
+  if (!provider)
+    throw bad('voice_provider is required when a voice is bound to a character.');
+  const catalogEntry = publicVoiceCatalog().find(p => p.provider === provider);
+  if (!catalogEntry)
+    throw bad(`voice_provider "${provider}" is not in the voice catalog (or its provider is not configured on this server).`);
+  const language = has('voice_language') ? String(body.voice_language).toLowerCase() : 'ur';
+  if (!VOICE_LANGUAGES.some(l => l.code === language))
+    throw bad(`voice_language must be one of: ${VOICE_LANGUAGES.map(l => l.code).join(', ')}`);
+  const style = has('voice_style') ? String(body.voice_style).toLowerCase() : 'conversation';
+  if (!VOICE_STYLES.includes(style))
+    throw bad(`voice_style must be one of: ${VOICE_STYLES.join(', ')}`);
+  let voiceId;
+  if (has('voice_id')) {
+    voiceId = String(body.voice_id);
+    const ok = providerVoicesFor(provider, language).some(v => v.id === voiceId);
+    if (!ok) throw bad(`voice_id "${voiceId}" is not available for ${provider} / ${language}.`);
+  } else {
+    const def = defaultVoiceFor(provider, language);
+    if (!def) throw bad(`No voice is available for ${provider} / ${language}.`);
+    voiceId = def.id;
+  }
+  return { provider, voice_id: voiceId, language, style };
+}
+
+app.post('/api/characters', auth, (req, res) => {
+  const b = req.body || {};
+  const name = String(b.name || '').trim();
+  if (name.length < 1 || name.length > 60)
+    return res.status(400).json({ error: 'A character name of 1–60 characters is required.' });
+  // The reference image must be one of THIS user's uploads — the exact
+  // same ownership check as image-to-video. Another user's image path
+  // fails here because it does not resolve under the caller's folder.
+  const owned = resolveOwnedUpload(req.user.id, b.image_path);
+  if (!owned)
+    return res.status(400).json({ error: 'image_path must be an image you uploaded (POST /api/uploads/image).' });
+  let voice;
+  try { voice = parseCharacterVoice(b); }
+  catch (e) { return res.status(e.status || 400).json({ error: e.message }); }
+  const count = db.prepare('SELECT COUNT(*) AS c FROM characters WHERE user_id = ?')
+    .get(req.user.id).c;
+  if (Number(count) >= CHARACTER_MAX_PER_USER)
+    return res.status(400).json({ error: `You can save at most ${CHARACTER_MAX_PER_USER} characters. Delete one before adding another.` });
+  const imagePath = String(b.image_path).replace(/\\/g, '/').replace(/^\.\//, '');
+  const info = db.prepare(
+    `INSERT INTO characters (user_id, name, image_path, voice_provider, voice_id, voice_language, voice_style)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .run(req.user.id, name, imagePath,
+         voice?.provider || null, voice?.voice_id || null,
+         voice?.language || null, voice?.style || null);
+  const row = db.prepare('SELECT * FROM characters WHERE id = ?').get(Number(info.lastInsertRowid));
+  res.status(201).json({ character: publicCharacter(row) });
+});
+
+app.get('/api/characters', auth, (req, res) => {
+  const rows = db.prepare('SELECT * FROM characters WHERE user_id = ? ORDER BY id')
+    .all(req.user.id);
+  res.json({ characters: rows.map(publicCharacter) });
+});
+
+app.delete('/api/characters/:id', auth, (req, res) => {
+  const row = getOwnCharacter(req.user.id, req.params.id);
+  if (!row) return res.status(404).json({ error: 'Character not found.' });
+  // Only the character row goes away — generations made with it keep
+  // their character_id and their history (the name join just returns
+  // nothing for them afterwards).
+  db.prepare('DELETE FROM characters WHERE id = ?').run(row.id);
+  res.json({ ok: true });
+});
+
 // ---------- Generation (idempotent + atomic charge) ----------
 app.post('/api/generate', auth, generateLimiter, async (req, res) => {
   const { prompt, aspect_ratio = '16:9', duration = 5, style = 'realistic', language = 'en' } = req.body || {};
@@ -1182,17 +1344,32 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
   const isDraft = String(req.body?.quality || '').toLowerCase() === 'draft';
   if (isDraft && soundSpec)
     return res.status(400).json({ error: 'Drafts cannot take sound add-ons. Generate the draft first, then upgrade it to full quality and add sound to that version.' });
+  // Optional saved character (Phase C2): the character must be one of
+  // THIS user's saved characters (404 otherwise — never a hint that
+  // someone else's character exists). Its reference image drives the
+  // visual via the reference-to-video route below, so the character's
+  // image becomes the source image here; an explicit image_path sent
+  // alongside a character is ignored (the character wins).
+  let character = null;
+  if (req.body?.character_id !== undefined && req.body?.character_id !== null && req.body?.character_id !== '') {
+    character = getOwnCharacter(req.user.id, req.body.character_id);
+    if (!character)
+      return res.status(404).json({ error: 'Character not found.' });
+  }
   // Optional image-to-video: the source image must be one of THIS user's
   // uploads (see POST /api/uploads/image). It is sent to the verified H3
   // image-to-video endpoint in its documented `image_url` field as a
   // base64 data URI (fal accepts data URIs for file inputs).
   let sourceImagePath = null;
   let sourceImageDataUri = null;
-  if (req.body?.image_path !== undefined && req.body?.image_path !== null && req.body?.image_path !== '') {
-    const owned = resolveOwnedUpload(req.user.id, req.body.image_path);
+  const wantedImagePath = character ? character.image_path : req.body?.image_path;
+  if (wantedImagePath !== undefined && wantedImagePath !== null && wantedImagePath !== '') {
+    const owned = resolveOwnedUpload(req.user.id, wantedImagePath);
     if (!owned)
-      return res.status(400).json({ error: 'image_path must be an image you uploaded (POST /api/uploads/image).' });
-    sourceImagePath = String(req.body.image_path).replace(/\\/g, '/').replace(/^\.\//, '');
+      return res.status(400).json({ error: character
+        ? 'The saved character image is no longer available. Please delete the character and save it again with a fresh upload.'
+        : 'image_path must be an image you uploaded (POST /api/uploads/image).' });
+    sourceImagePath = String(wantedImagePath).replace(/\\/g, '/').replace(/^\.\//, '');
     sourceImageDataUri = owned.dataUri;
   }
   const languageCode = String(language).toLowerCase();
@@ -1273,11 +1450,21 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
   // Credit rules are unchanged — the same per-quality rate card below
   // applies whether or not a source image is attached.
   if (sourceImagePath) model = CONFIG.modelI2V;
+  // Character override: a saved character's image goes to the verified
+  // reference-to-video endpoint (it takes the image as a REFERENCE for
+  // subject consistency rather than as the literal opening frame). Plan
+  // caps, the rate card and the 4K aspect fallback above are unchanged —
+  // the endpoint's own resolution ladder matches the H3 table (its 2K/4K
+  // are upscales of a 768P base, exactly like the H3 text/image routes;
+  // only the Kling route is native 4K, and a character job never takes
+  // it because Kling has no reference-image input).
+  if (character) model = CONFIG.modelRef;
   // Draft override: 480P on the standard H3 model (480P is a documented
   // H3 resolution tier), flat draft pricing instead of the rate card.
   if (isDraft) {
     resolution = '480P';
-    model = sourceImagePath ? CONFIG.modelI2V : CONFIG.model;
+    model = character ? CONFIG.modelRef
+          : sourceImagePath ? CONFIG.modelI2V : CONFIG.model;
   }
   // Rate card (v9): the credit cost comes from the ROUTED quality's own
   // row — 768P 10/20, 2K 15/30, native 4K 40/80 for 5s/10s.
@@ -1310,11 +1497,11 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
       if (creditBuckets(user).total < totalCost) throw Object.assign(new Error('NO_CREDITS'), { status: 402 });
       spendBuckets(user, totalCost); // plan credits first, then free credits
       const info = db.prepare(
-        `INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, cost_credits, idempotency_key, resolution, model, prompt_language, translated_prompt, mode, source_image_path, watermark_text, watermark_status, sound_mode, sound_status, sound_prompt, sound_volume, sound_cost, stage)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(user.id, prompt.trim(), aspect_ratio, Number(duration), style, totalCost, idemKey, resolution, model, languageCode, translatedPrompt, mode, sourceImagePath, watermarkText, watermarkStatus,
+        `INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, cost_credits, idempotency_key, resolution, model, prompt_language, translated_prompt, mode, source_image_path, watermark_text, watermark_status, sound_mode, sound_status, sound_prompt, sound_volume, sound_cost, stage, character_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(user.id, prompt.trim(), aspect_ratio, Number(duration), style, totalCost, idemKey, resolution, model, languageCode, translatedPrompt, mode, sourceImagePath, watermarkText, watermarkStatus,
            soundSpec ? soundSpec.mode : null, soundSpec ? 'pending' : 'none',
            soundSpec ? soundSpec.prompt : null, soundSpec ? soundSpec.volume : null, soundCost,
-           isDraft ? 'draft' : 'final');
+           isDraft ? 'draft' : 'final', character ? character.id : null);
       return Number(info.lastInsertRowid);
     });
   } catch (e) {
@@ -1338,7 +1525,17 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
   // H3 generates its native audio track itself — so no such field is
   // ever sent to them.
   const isNative4k = resolution === '4K' && model === CONFIG.model4k;
-  const falBody = sourceImagePath
+  // Reference-to-video body (schema verified from fal's llms.txt for
+  // minimax/h3/reference-to-video, 2026-10-23): the character image goes
+  // in reference_image_urls as a base64 data URI (fal accepts data URIs
+  // for file inputs, as with image_url elsewhere), and the prompt names
+  // it "Image 1" — the documented way to cite a reference in the text.
+  const falBody = character
+    ? { prompt: `Image 1 is the main character. ${effectivePrompt} — style: ${style}`,
+        duration: Number(duration), aspect_ratio, resolution,
+        enable_safety_checker: true,
+        reference_image_urls: [sourceImageDataUri] }
+    : sourceImagePath
     ? { prompt: `${effectivePrompt} — style: ${style}`,
         duration: Number(duration), resolution,
         enable_safety_checker: true, image_url: sourceImageDataUri }
@@ -1365,6 +1562,7 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
                cost_credits: totalCost, resolution, model, prompt_language: languageCode,
                stage: isDraft ? 'draft' : 'final',
                mode, source_image_path: sourceImagePath,
+               ...(character ? { character_id: character.id, character_name: character.name } : {}),
                watermark_status: watermarkStatus,
                ...(soundSpec ? { sound_mode: soundSpec.mode, sound_status: 'pending',
                                  sound_cost_credits: soundCost } : {}),
@@ -1469,7 +1667,10 @@ async function ensureWatermarkApplied(job) {
 }
 
 app.get('/api/generations/:id', auth, async (req, res) => {
-  const job = db.prepare('SELECT * FROM generations WHERE id = ? AND user_id = ?')
+  const job = db.prepare(
+    `SELECT g.*, c.name AS character_name FROM generations g
+     LEFT JOIN characters c ON c.id = g.character_id
+     WHERE g.id = ? AND g.user_id = ?`)
     .get(req.params.id, req.user.id);
   if (!job) return res.status(404).json({ error: 'Generation not found.' });
   if (job.status === 'completed') {
@@ -1516,7 +1717,13 @@ app.get('/api/generations/:id', auth, async (req, res) => {
 });
 
 app.get('/api/history', auth, (req, res) => {
-  const rows = db.prepare('SELECT * FROM generations WHERE user_id = ? ORDER BY id DESC LIMIT 50')
+  // character_name rides along (NULL when the job used no character, or
+  // the character was deleted afterwards — the generation itself and its
+  // character_id are never touched by a character delete).
+  const rows = db.prepare(
+    `SELECT g.*, c.name AS character_name FROM generations g
+     LEFT JOIN characters c ON c.id = g.character_id
+     WHERE g.user_id = ? ORDER BY g.id DESC LIMIT 50`)
     .all(req.user.id);
   const me = db.prepare('SELECT credits FROM users WHERE id = ?').get(req.user.id);
   res.json({ credits: me.credits, generations: rows });
@@ -2092,7 +2299,7 @@ function recordVoiceJob({ userId, kind, settings, text, status, audioPath = null
 
 // Charge + insert a generations row atomically (same rules as /api/generate:
 // daily cap, balance check, plan-bucket-first spend). Throws {status,error}.
-function chargeVoiceGeneration(userId, { cost, prompt, aspectRatio, duration, style, model, kind, sourceGenerationId = null, sourceImagePath = null, promptLanguage = null, translatedPrompt = null, resolution = '768P', stage = 'final', mode = 'realistic' }) {
+function chargeVoiceGeneration(userId, { cost, prompt, aspectRatio, duration, style, model, kind, sourceGenerationId = null, sourceImagePath = null, promptLanguage = null, translatedPrompt = null, resolution = '768P', stage = 'final', mode = 'realistic', characterId = null }) {
   return tx(() => {
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
     if (!user) throw Object.assign(new Error('Account not found.'), { status: 404 });
@@ -2107,11 +2314,11 @@ function chargeVoiceGeneration(userId, { cost, prompt, aspectRatio, duration, st
     const info = db.prepare(
       `INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status,
          cost_credits, resolution, model, prompt_language, translated_prompt,
-         mode, source_image_path, kind, source_generation_id, stage)
-       VALUES (?, ?, ?, ?, ?, 'in_progress', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+         mode, source_image_path, kind, source_generation_id, stage, character_id)
+       VALUES (?, ?, ?, ?, ?, 'in_progress', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(userId, prompt, aspectRatio, duration, style, cost, resolution, model,
            promptLanguage, translatedPrompt, mode, sourceImagePath, kind, sourceGenerationId,
-           stage);
+           stage, characterId);
     return Number(info.lastInsertRowid);
   });
 }
@@ -2198,17 +2405,29 @@ app.post('/api/voice/lipsync', auth, voiceLimiter, async (req, res) => {
   const plan = sub ? getPlan(sub.plan_id) : null;
   if (!plan || !plan.can_lipsync)
     return res.status(403).json({ error: 'Talking / Lip-Sync videos need the Pro or Extra Pro plan. Upgrade your plan to create a talking character.' });
-  // Exactly one visual source: an owned uploaded image OR a completed
-  // generation's video.
-  const hasImage = b.image_path !== undefined && b.image_path !== null && b.image_path !== '';
+  // Visual source: a saved character (its reference image), an owned
+  // uploaded image, OR a completed generation's video. A character plus
+  // a generation_id is ambiguous and rejected; a character plus an
+  // image_path uses the character's image.
+  let character = null;
+  if (b.character_id !== undefined && b.character_id !== null && b.character_id !== '') {
+    character = getOwnCharacter(req.user.id, b.character_id);
+    if (!character)
+      return res.status(404).json({ error: 'Character not found.' });
+  }
+  const hasImage = !!character || (b.image_path !== undefined && b.image_path !== null && b.image_path !== '');
   const hasGen = b.generation_id !== undefined && b.generation_id !== null && b.generation_id !== '';
+  if (character && hasGen)
+    return res.status(400).json({ error: 'Choose either a character or a finished video for lip-sync, not both.' });
   if (hasImage === hasGen)
-    return res.status(400).json({ error: 'Provide exactly one of image_path (an uploaded image) or generation_id (a finished video).' });
+    return res.status(400).json({ error: 'Provide exactly one of character_id, image_path (an uploaded image) or generation_id (a finished video).' });
   let owned = null, sourceGen = null;
   if (hasImage) {
-    owned = resolveOwnedUpload(req.user.id, b.image_path);
+    owned = resolveOwnedUpload(req.user.id, character ? character.image_path : b.image_path);
     if (!owned)
-      return res.status(400).json({ error: 'image_path must be an image you uploaded (POST /api/uploads/image).' });
+      return res.status(400).json({ error: character
+        ? 'The saved character image is no longer available. Please delete the character and save it again with a fresh upload.'
+        : 'image_path must be an image you uploaded (POST /api/uploads/image).' });
   } else {
     sourceGen = db.prepare('SELECT * FROM generations WHERE id = ? AND user_id = ?')
       .get(Number(b.generation_id), req.user.id);
@@ -2226,7 +2445,20 @@ app.post('/api/voice/lipsync', auth, voiceLimiter, async (req, res) => {
       .get(Number(b.voice_job_id), req.user.id);
     if (!audioJob) return res.status(400).json({ error: 'voice_job_id must be one of your completed voice jobs.' });
   } else {
-    try { settings = parseVoiceSettings(b); }
+    // Voice settings: fields sent explicitly in the request win; any
+    // field left out falls back to the character's bound voice (when a
+    // character with a bound voice is used), so picking a character is
+    // enough to get its voice.
+    let settingsBody = b;
+    if (character && character.voice_provider) {
+      settingsBody = { ...b };
+      if (!settingsBody.provider) settingsBody.provider = character.voice_provider;
+      if (!settingsBody.voice && character.voice_id) settingsBody.voice = character.voice_id;
+      if (!settingsBody.spoken_language && character.voice_language)
+        settingsBody.spoken_language = character.voice_language;
+      if (!settingsBody.style && character.voice_style) settingsBody.style = character.voice_style;
+    }
+    try { settings = parseVoiceSettings(settingsBody); }
     catch (e) { return res.status(e.status || 400).json({ error: e.message }); }
     if (!settings.provider)
       return res.status(503).json({ error: 'voice_not_configured', message: VOICE_NOT_CONFIGURED_MSG });
@@ -2243,7 +2475,10 @@ app.post('/api/voice/lipsync', auth, voiceLimiter, async (req, res) => {
       duration: sourceGen ? sourceGen.duration : 5,
       style: 'realistic', model, kind: 'lipsync',
       sourceGenerationId: sourceGen ? sourceGen.id : null,
-      sourceImagePath: hasImage ? String(b.image_path).replace(/\\/g, '/').replace(/^\.\//, '') : null,
+      sourceImagePath: hasImage
+        ? String(character ? character.image_path : b.image_path).replace(/\\/g, '/').replace(/^\.\//, '')
+        : null,
+      characterId: character ? character.id : null,
       promptLanguage: settings ? settings.language : (audioJob ? audioJob.language : null),
       translatedPrompt: settings && settings.scriptMode === 'roman' ? settings.text : null,
     });
@@ -4094,7 +4329,12 @@ fs.mkdirSync(CONFIG.joinedDir, { recursive: true });
 fs.mkdirSync(CONFIG.generatedDir, { recursive: true });
 fs.mkdirSync(CONFIG.voiceDir, { recursive: true });
 fs.mkdirSync(CONFIG.soundsDir, { recursive: true });
+fs.mkdirSync(CONFIG.uploadsDir, { recursive: true });
 app.use('/files/joined', express.static(CONFIG.joinedDir));
+// Uploaded source images are served so the app can show them (character
+// thumbnails, the starting-image preview). Filenames are unguessable
+// UUIDs — the same exposure model as the other /files mounts.
+app.use('/files/uploads', express.static(CONFIG.uploadsDir));
 app.use('/files/generated', express.static(CONFIG.generatedDir));
 app.use('/files/voice', express.static(CONFIG.voiceDir));
 app.use('/files/sounds', express.static(CONFIG.soundsDir));

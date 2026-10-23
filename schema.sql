@@ -203,3 +203,25 @@ CREATE TABLE IF NOT EXISTS voice_jobs (
   error         TEXT,
   created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- === Character library (migration v13, applied automatically by
+-- === server.js) ===
+-- A saved character is one reference image (always one of the owner's
+-- own uploads, data/uploads/<userId>/<file>) plus an OPTIONAL bound
+-- voice (provider + voice id + spoken language + style, validated
+-- against the public voice catalog; all four voice columns are NULL
+-- when no voice is bound). Cap: 10 characters per user. generations
+-- gains character_id — the saved character a generation or lip-sync
+-- job used (NULL for character-free jobs). The reference is plain (no
+-- cascade): deleting a character never deletes its generations.
+CREATE TABLE IF NOT EXISTS characters (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id        INTEGER NOT NULL REFERENCES users(id),
+  name           TEXT NOT NULL,
+  image_path     TEXT NOT NULL,  -- data/uploads/<userId>/<file>
+  voice_provider TEXT,           -- gemini | elevenlabs | azure (NULL = no bound voice)
+  voice_id       TEXT,           -- provider voice id
+  voice_language TEXT,           -- ur | hi | en
+  voice_style    TEXT,           -- narration | conversation | news | energetic | emotional
+  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);

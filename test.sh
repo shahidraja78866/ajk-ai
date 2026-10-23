@@ -49,6 +49,11 @@
 # clip169.mp4 (16:9, with audio) and silent.mp4 (no audio) fixtures. A
 # python http server (port 18081) serves a 30-second clip for the
 # upscale price-formula check.
+# The character-library tests (Phase C2) use a twelfth instance (port
+# 18079, own DB) with the fal bases pointed at the stub (port 18080),
+# extended with the minimax/h3/reference-to-video queue endpoint; the
+# character generations complete there and the lip-sync TTS calls are
+# asserted via the recorded voice-calls hook.
 # Outgoing provider request shapes are asserted via the TEST_RECORD-style
 # hook GET /api/_test/voice-calls.
 # e.g.  ADMIN_EMAIL=admin@example.com FAL_MODEL_4K=test-4k-model TEST_RECORD_FAL_BODY=1 TRANSLATE_API_BASE=http://127.0.0.1:18099 npm start
@@ -1417,6 +1422,155 @@ const mig = db.prepare('SELECT COUNT(*) AS c FROM schema_migrations WHERE versio
 console.log(cols === 1 && Number(mig) === 1 ? 'ok' : 'bad');
 ")"
 kill $SRV11_PID $FALSTUB11_PID $FINHTTP_PID 2>/dev/null
+
+echo "--- character library (Phase C2, fal stub) ---"
+CHAR_STUB_PORT=18080
+B12=http://127.0.0.1:18079
+rm -f /tmp/myvideoai-char-test.db; rm -rf /tmp/charvoice /tmp/chargen; mkdir -p /tmp/charvoice /tmp/chargen
+FAL_STUB_PORT=$CHAR_STUB_PORT node "$(dirname "$0")/test-fal-stub.js" > /tmp/fal-stub-char.log 2>&1 &
+CHARSTUB_PID=$!
+for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:$CHAR_STUB_PORT/__calls && break || sleep 0.25; done
+CHAR_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-char-test.db PORT=18079 FAL_KEY=dummy_test_key "$CHAR_JWT_NAME=char-instance-dummy-value" \
+  ADMIN_EMAIL=charadmin@example.com TEST_RECORD_FAL_BODY=1 \
+  FAL_API_BASE_URL=http://127.0.0.1:$CHAR_STUB_PORT FAL_QUEUE_BASE_URL=http://127.0.0.1:$CHAR_STUB_PORT \
+  FAL_POLL_INTERVAL_MS=100 VOICE_DIR=/tmp/charvoice GENERATED_DIR=/tmp/chargen \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-char-test.log 2>&1 &
+SRV12_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B12/api/health && break || sleep 0.25; done
+CFG12=$(curl -s $B12/api/config)
+check "characters config: cap 10 + reference-to-video model" "10/minimax/h3/reference-to-video" "$(echo $CFG12 | python3 -c 'import sys,json;c=json.load(sys.stdin)["characters"];print(str(c["max_per_user"])+"/"+c["model"])')"
+AR12=$(curl -s -X POST $B12/api/auth/register -H 'Content-Type: application/json' -d '{"email":"charadmin@example.com","password":"password123"}')
+AT12=$(echo $AR12 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+RA12=$(curl -s -X POST $B12/api/auth/register -H 'Content-Type: application/json' -d '{"email":"char-a@example.com","password":"password123"}')
+TA12=$(echo $RA12 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+RB12=$(curl -s -X POST $B12/api/auth/register -H 'Content-Type: application/json' -d '{"email":"char-b@example.com","password":"password123"}')
+TB12=$(echo $RB12 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+PNG_B64_C=$(python3 -c "import base64; print(base64.b64encode(bytes.fromhex('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c636000000000020001e221bc330000000049454e44ae426082')).decode())")
+RED_B64_C=$(python3 -c "
+import zlib, struct, base64, sys
+def chunk(t, d):
+    c = struct.pack('>I', len(d)) + t + d
+    return c + struct.pack('>I', zlib.crc32(t + d) & 0xffffffff)
+raw = b''.join(b'\x00' + bytes((255, 0, 0)) * 2 for _ in range(2))
+png = (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 2, 2, 8, 2, 0, 0, 0))
+       + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b''))
+sys.stdout.write(base64.b64encode(png).decode())
+")
+UPA=$(curl -s -X POST $B12/api/uploads/image -H "Authorization: Bearer $TA12" -H 'Content-Type: application/json' -d "{\"image_base64\":\"$PNG_B64_C\",\"content_type\":\"image/png\"}")
+IMGA=$(echo $UPA | python3 -c 'import sys,json;print(json.load(sys.stdin)["image_path"])')
+UPB=$(curl -s -X POST $B12/api/uploads/image -H "Authorization: Bearer $TB12" -H 'Content-Type: application/json' -d "{\"image_base64\":\"$PNG_B64_C\",\"content_type\":\"image/png\"}")
+IMGB=$(echo $UPB | python3 -c 'import sys,json;print(json.load(sys.stdin)["image_path"])')
+UPRED=$(curl -s -X POST $B12/api/uploads/image -H "Authorization: Bearer $TA12" -H 'Content-Type: application/json' -d "{\"image_base64\":\"$RED_B64_C\",\"content_type\":\"image/png\"}")
+IMGRED=$(echo $UPRED | python3 -c 'import sys,json;print(json.load(sys.stdin)["image_path"])')
+
+# -- CRUD + validation --
+CH1=$(curl -s -w '\n%{http_code}' -X POST $B12/api/characters -H "Authorization: Bearer $TA12" -H 'Content-Type: application/json' -d "{\"name\":\"Captain Sara\",\"image_path\":\"$IMGA\"}")
+check "character create (no voice) -> 201" "201" "$(echo "$CH1" | tail -1)"
+CH1B=$(echo "$CH1" | sed '$d')
+SARA_ID=$(echo $CH1B | python3 -c 'import sys,json;print(json.load(sys.stdin)["character"]["id"])')
+check "character create: name + image echoed, voice null" "Captain Sara/None" "$(echo $CH1B | python3 -c 'import sys,json;c=json.load(sys.stdin)["character"];print(c["name"]+"/"+str(c["voice"]))')"
+SARA_URL=$(echo $CH1B | python3 -c 'import sys,json;print(json.load(sys.stdin)["character"]["image_url"])')
+check "character image_url is served (200)" "200" "$(curl -s -o /dev/null -w '%{http_code}' $B12$SARA_URL)"
+check "character create with ANOTHER user's image -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B12/api/characters -H "Authorization: Bearer $TA12" -H 'Content-Type: application/json' -d "{\"name\":\"Stolen\",\"image_path\":\"$IMGB\"}")"
+check "character create with a nonexistent image -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B12/api/characters -H "Authorization: Bearer $TA12" -H 'Content-Type: application/json' -d "{\"name\":\"Ghost\",\"image_path\":\"data/uploads/999/nope.png\"}")"
+check "character create without a name -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B12/api/characters -H "Authorization: Bearer $TA12" -H 'Content-Type: application/json' -d "{\"name\":\"\",\"image_path\":\"$IMGA\"}")"
+CH2=$(curl -s -w '\n%{http_code}' -X POST $B12/api/characters -H "Authorization: Bearer $TA12" -H 'Content-Type: application/json' -d "{\"name\":\"Hero\",\"image_path\":\"$IMGA\",\"voice_provider\":\"gemini\",\"voice_id\":\"Charon\",\"voice_language\":\"ur\",\"voice_style\":\"narration\"}")
+check "character create with bound voice -> 201" "201" "$(echo "$CH2" | tail -1)"
+check "character create: bound voice stored (gemini/Charon/ur/narration)" "gemini/Charon/ur/narration" "$(echo "$CH2" | sed '$d' | python3 -c 'import sys,json;v=json.load(sys.stdin)["character"]["voice"];print(v["provider"]+"/"+v["voice_id"]+"/"+v["language"]+"/"+v["style"])')"
+check "character create: unknown provider -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B12/api/characters -H "Authorization: Bearer $TA12" -H 'Content-Type: application/json' -d "{\"name\":\"X\",\"image_path\":\"$IMGA\",\"voice_provider\":\"bogus\"}")"
+check "character create: unknown voice id -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B12/api/characters -H "Authorization: Bearer $TA12" -H 'Content-Type: application/json' -d "{\"name\":\"X\",\"image_path\":\"$IMGA\",\"voice_provider\":\"gemini\",\"voice_id\":\"NotAVoice\"}")"
+check "character create: bad voice language -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B12/api/characters -H "Authorization: Bearer $TA12" -H 'Content-Type: application/json' -d "{\"name\":\"X\",\"image_path\":\"$IMGA\",\"voice_provider\":\"gemini\",\"voice_language\":\"fr\"}")"
+check "character create: bad voice style -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B12/api/characters -H "Authorization: Bearer $TA12" -H 'Content-Type: application/json' -d "{\"name\":\"X\",\"image_path\":\"$IMGA\",\"voice_provider\":\"gemini\",\"voice_style\":\"loud\"}")"
+check "character create: voice_id without provider -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B12/api/characters -H "Authorization: Bearer $TA12" -H 'Content-Type: application/json' -d "{\"name\":\"X\",\"image_path\":\"$IMGA\",\"voice_id\":\"Charon\"}")"
+check "characters list: A sees own 2" "2" "$(curl -s $B12/api/characters -H "Authorization: Bearer $TA12" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["characters"]))')"
+check "characters list: B sees 0 (own only)" "0" "$(curl -s $B12/api/characters -H "Authorization: Bearer $TB12" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["characters"]))')"
+check "characters list: bound voice included" "Charon" "$(curl -s $B12/api/characters -H "Authorization: Bearer $TA12" | python3 -c 'import sys,json;print([c for c in json.load(sys.stdin)["characters"] if c["name"]=="Hero"][0]["voice"]["voice_id"])')"
+
+# -- cap: 10 per user (dedicated user so A's count is undisturbed) --
+RC12=$(curl -s -X POST $B12/api/auth/register -H 'Content-Type: application/json' -d '{"email":"char-cap@example.com","password":"password123"}')
+TC12=$(echo $RC12 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+UPC=$(curl -s -X POST $B12/api/uploads/image -H "Authorization: Bearer $TC12" -H 'Content-Type: application/json' -d "{\"image_base64\":\"$PNG_B64_C\",\"content_type\":\"image/png\"}")
+IMGC=$(echo $UPC | python3 -c 'import sys,json;print(json.load(sys.stdin)["image_path"])')
+CAP_CODES=""
+for i in $(seq 1 10); do
+  CAP_CODES="$CAP_CODES $(curl -s -o /dev/null -w '%{http_code}' -X POST $B12/api/characters -H "Authorization: Bearer $TC12" -H 'Content-Type: application/json' -d "{\"name\":\"Cap $i\",\"image_path\":\"$IMGC\"}")"
+done
+check "character cap: the first 10 creates succeed" " 201 201 201 201 201 201 201 201 201 201" "$CAP_CODES"
+check "character cap: the 11th create -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B12/api/characters -H "Authorization: Bearer $TC12" -H 'Content-Type: application/json' -d "{\"name\":\"Cap 11\",\"image_path\":\"$IMGC\"}")"
+check "character cap: list still holds exactly 10" "10" "$(curl -s $B12/api/characters -H "Authorization: Bearer $TC12" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["characters"]))')"
+
+# -- generate with a character: reference-to-video at the standard rate --
+CG=$(curl -s -w '\n%{http_code}' -X POST $B12/api/generate -H "Authorization: Bearer $TA12" -H 'Content-Type: application/json' -d "{\"prompt\":\"a captain walks through a rainy neon city\",\"aspect_ratio\":\"16:9\",\"duration\":5,\"character_id\":$SARA_ID}")
+check "generate with character -> 200" "200" "$(echo "$CG" | tail -1)"
+CGB=$(echo "$CG" | sed '$d')
+GEN1_ID=$(echo $CGB | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+check "generate with character: routed to reference-to-video" "minimax/h3/reference-to-video" "$(echo $CGB | python3 -c 'import sys,json;print(json.load(sys.stdin)["model"])')"
+check "generate with character: response carries id + name" "$SARA_ID/Captain Sara" "$(echo $CGB | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["character_id"])+"/"+g["character_name"])')"
+check "generate with character: STANDARD rate (768P 5s = 10), balance 90" "10/90" "$(echo $CGB | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+FB12=$(curl -s $B12/api/_test/fal-body)
+check "ref fal body: reference_image_urls[0] is the character image data URI" "data:image/png;base64,$PNG_B64_C" "$(echo $FB12 | python3 -c 'import sys,json;print(json.load(sys.stdin)["body"]["reference_image_urls"][0])')"
+check "ref fal body: prompt cites Image 1, no image_url field" "ok" "$(echo $FB12 | python3 -c 'import sys,json;b=json.load(sys.stdin)["body"];print("ok" if b["prompt"].startswith("Image 1 is the main character.") and "image_url" not in b else "bad")')"
+check "ref fal body: duration int + resolution + aspect + safety" "5/768P/16:9/True" "$(echo $FB12 | python3 -c 'import sys,json;b=json.load(sys.stdin)["body"];print(str(b["duration"])+"/"+b["resolution"]+"/"+b["aspect_ratio"]+"/"+str(b["enable_safety_checker"]))')"
+check "generate with ANOTHER user's character -> 404" "404" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B12/api/generate -H "Authorization: Bearer $TB12" -H 'Content-Type: application/json' -d "{\"prompt\":\"someone else walks in the rain\",\"character_id\":$SARA_ID}")"
+check "generate with a nonexistent character -> 404" "404" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B12/api/generate -H "Authorization: Bearer $TA12" -H 'Content-Type: application/json' -d '{"prompt":"a ghost walks in the rain","character_id":99999}')"
+# the character wins over an explicit image_path: a different (red) upload
+# is passed, but the reference image must still be Sara's original photo.
+CG2=$(curl -s -X POST $B12/api/generate -H "Authorization: Bearer $TA12" -H 'Content-Type: application/json' -d "{\"prompt\":\"the captain crosses a windy harbour\",\"aspect_ratio\":\"16:9\",\"duration\":5,\"character_id\":$SARA_ID,\"image_path\":\"$IMGRED\"}")
+check "character precedence: row records the CHARACTER's image, not image_path" "$IMGA" "$(echo $CG2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["source_image_path"])')"
+FB12B=$(curl -s $B12/api/_test/fal-body)
+check "character precedence: reference image is still Sara's photo" "data:image/png;base64,$PNG_B64_C" "$(echo $FB12B | python3 -c 'import sys,json;print(json.load(sys.stdin)["body"]["reference_image_urls"][0])')"
+for i in $(seq 1 30); do
+  ST12=$(curl -s $B12/api/generations/$GEN1_ID -H "Authorization: Bearer $TA12" | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])')
+  [[ "$ST12" == "completed" ]] && break || sleep 0.3
+done
+check "character generation completes (stub)" "completed" "$ST12"
+HIST12=$(curl -s $B12/api/history -H "Authorization: Bearer $TA12")
+check "history: character job carries character_id + name" "$SARA_ID/Captain Sara" "$(echo $HIST12 | python3 -c "import sys,json;g=[x for x in json.load(sys.stdin)['generations'] if x['id']==$GEN1_ID][0];print(str(g['character_id'])+'/'+str(g['character_name']))")"
+
+# -- lip-sync with a character: image + bound voice come from it --
+RP12=$(curl -s -X POST $B12/api/auth/register -H 'Content-Type: application/json' -d '{"email":"char-pro@example.com","password":"password123"}')
+TP12=$(echo $RP12 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+PID12=$(curl -s $B12/api/me -H "Authorization: Bearer $TP12" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+curl -s -o /dev/null -X POST $B12/api/admin/users/$PID12/activate -H "Authorization: Bearer $AT12" -H 'Content-Type: application/json' -d '{"plan_id":"pro","period":"monthly"}'
+UPP=$(curl -s -X POST $B12/api/uploads/image -H "Authorization: Bearer $TP12" -H 'Content-Type: application/json' -d "{\"image_base64\":\"$PNG_B64_C\",\"content_type\":\"image/png\"}")
+IMGP=$(echo $UPP | python3 -c 'import sys,json;print(json.load(sys.stdin)["image_path"])')
+CHL=$(curl -s -X POST $B12/api/characters -H "Authorization: Bearer $TP12" -H 'Content-Type: application/json' -d "{\"name\":\"Anchor Ahmed\",\"image_path\":\"$IMGP\",\"voice_provider\":\"gemini\",\"voice_id\":\"Charon\",\"voice_language\":\"ur\",\"voice_style\":\"narration\"}")
+CHAR_LIP=$(echo $CHL | python3 -c 'import sys,json;print(json.load(sys.stdin)["character"]["id"])')
+LS12=$(curl -s -w '\n%{http_code}' -X POST $B12/api/voice/lipsync -H "Authorization: Bearer $TP12" -H 'Content-Type: application/json' -d "{\"character_id\":$CHAR_LIP,\"script\":\"mera naam ahmed hai\",\"script_mode\":\"roman\"}")
+check "lipsync with character -> 201" "201" "$(echo "$LS12" | tail -1)"
+LS12B=$(echo "$LS12" | sed '$d')
+check "lipsync with character: cost 30, credits_left 570" "30/570" "$(echo $LS12B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "lipsync with character: row records character + its image" "$CHAR_LIP/$IMGP" "$(echo $LS12B | python3 -c 'import sys,json;g=json.load(sys.stdin)["generation"];print(str(g["character_id"])+"/"+str(g["source_image_path"]))')"
+VC12=$(curl -s $B12/api/_test/voice-calls)
+check "lipsync with character: TTS used the BOUND voice (Charon, Urdu)" "Charon/Urdu (Pakistan)" "$(echo $VC12 | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x["kind"]=="tts"][-1];print(c["body"]["voice"]+"/"+c["body"]["language_code"])')"
+check "lipsync with character: queue body is the character image data URI" "ok" "$(echo $VC12 | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x["kind"]=="queue"][-1];print("ok" if c["model"]=="minimax/h3-max/lip-sync/image-to-video" and c["body"]["image_url"].startswith("data:image/png") else "bad")')"
+LS13=$(curl -s -w '\n%{http_code}' -X POST $B12/api/voice/lipsync -H "Authorization: Bearer $TP12" -H 'Content-Type: application/json' -d "{\"character_id\":$CHAR_LIP,\"script\":\"salam dost\",\"script_mode\":\"roman\",\"provider\":\"elevenlabs\",\"voice\":\"Rachel\",\"spoken_language\":\"ur\",\"style\":\"conversation\"}")
+check "lipsync override -> 201" "201" "$(echo "$LS13" | tail -1)"
+VC13=$(curl -s $B12/api/_test/voice-calls)
+check "lipsync override: explicit voice wins over the binding (Rachel)" "elevenlabs/Rachel" "$(echo $VC13 | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x["kind"]=="tts"][-1];print(c["provider"]+"/"+c["body"]["voice"])')"
+check "lipsync override: credits_left 540" "540" "$(curl -s $B12/api/me -H "Authorization: Bearer $TP12" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "lipsync with ANOTHER user's character -> 404" "404" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B12/api/voice/lipsync -H "Authorization: Bearer $TP12" -H 'Content-Type: application/json' -d "{\"character_id\":$SARA_ID,\"script\":\"salam dost\",\"script_mode\":\"roman\"}")"
+check "lipsync with a nonexistent character -> 404" "404" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B12/api/voice/lipsync -H "Authorization: Bearer $TP12" -H 'Content-Type: application/json' -d '{"character_id":99999,"script":"salam dost","script_mode":"roman"}')"
+check "lipsync 404s charged nothing (still 540)" "540" "$(curl -s $B12/api/me -H "Authorization: Bearer $TP12" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+
+# -- delete: cross-user 404, and past generations survive --
+HERO_ID=$(curl -s $B12/api/characters -H "Authorization: Bearer $TA12" | python3 -c 'import sys,json;print([c for c in json.load(sys.stdin)["characters"] if c["name"]=="Hero"][0]["id"])')
+check "delete another user's character -> 404" "404" "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE $B12/api/characters/$HERO_ID -H "Authorization: Bearer $TB12")"
+check "delete a nonexistent character -> 404" "404" "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE $B12/api/characters/99999 -H "Authorization: Bearer $TA12")"
+check "delete own character -> 200 ok" "200" "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE $B12/api/characters/$SARA_ID -H "Authorization: Bearer $TA12")"
+check "characters list after delete: Sara gone (Hero remains)" "Hero" "$(curl -s $B12/api/characters -H "Authorization: Bearer $TA12" | python3 -c 'import sys,json;print(",".join(c["name"] for c in json.load(sys.stdin)["characters"]))')"
+HIST12B=$(curl -s $B12/api/history -H "Authorization: Bearer $TA12")
+check "delete keeps past generations (job survives, name now empty)" "completed/None" "$(echo $HIST12B | python3 -c "import sys,json;g=[x for x in json.load(sys.stdin)['generations'] if x['id']==$GEN1_ID][0];print(g['status']+'/'+str(g['character_name']))")"
+check "migration v13 applied (characters table + character_id column)" "ok" "$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-char-test.db');
+const t = db.prepare(\"SELECT name FROM sqlite_master WHERE type='table' AND name='characters'\").all().length;
+const cols = db.prepare(\"SELECT name FROM pragma_table_info('generations') WHERE name = 'character_id'\").all().length;
+const mig = db.prepare('SELECT COUNT(*) AS c FROM schema_migrations WHERE version = 13').get().c;
+console.log(t === 1 && cols === 1 && Number(mig) === 1 ? 'ok' : 'bad');
+")"
+kill $SRV12_PID $CHARSTUB_PID 2>/dev/null
 
 echo "--- rate limit: burst until 429 ---"
 FOUND429="no"

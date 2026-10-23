@@ -19,6 +19,8 @@
 //        returns clip.mp4 like any other video job)
 //   POST /minimax/h3/image-to-video               (queue submit; a prompt
 //        containing "FAILME" gets an HTTP 500 — extend failure tests)
+//   POST /minimax/h3/reference-to-video           (queue submit — the
+//        character-library route, Phase C2)
 //   POST /mirelo-ai/sfx2.0/video-to-audio         (queue submit)
 //   POST <any other path>                         (queue submit — covers
 //        the video models on instances that complete generations here)
@@ -72,7 +74,8 @@ const TTS_PATHS = new Set(['/fal-ai/gemini-3.1-flash-tts', '/fal-ai/elevenlabs/t
 const SFX_PATH = '/fal-ai/elevenlabs/sound-effects/v2';
 const MUSIC_PATH = '/cassetteai/music-generator';
 const QUEUE_PATHS = new Set(['/minimax/h3-max/lip-sync/image-to-video', '/fal-ai/latentsync',
-                             '/fal-ai/mmaudio-v2', '/mirelo-ai/sfx2.0/video-to-audio']);
+                             '/fal-ai/mmaudio-v2', '/mirelo-ai/sfx2.0/video-to-audio',
+                             '/minimax/h3/reference-to-video']);
 
 http.createServer((req, res) => {
   const u = new URL(req.url, 'http://127.0.0.1');

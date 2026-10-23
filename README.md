@@ -440,6 +440,91 @@ endpoint actually does. All finisher quality is **unproven** until
 real outputs are generated on a funded fal.ai balance and reviewed —
 the suite covers everything above with stubs only.
 
+## Character library — save a character once, reuse it everywhere (Phase C2, migration v13)
+
+The pattern Kling Elements, Pika Character Studio and Google Flow
+Ingredients market: a user saves a character **once** — a reference
+photo plus an optional bound voice — and then reuses that character
+across videos, so the same character keeps appearing with a consistent
+look instead of being re-described (and re-randomized) in every prompt.
+
+**Saving a character.** `POST /api/characters` with `{ name,
+image_path }` and optional voice fields (`voice_provider`,
+`voice_id`, `voice_language`, `voice_style`). The image must be one of
+the caller's **own uploads** — the exact same ownership resolution as
+image-to-video, so another user's image path fails with 400 (the file
+simply does not exist under the caller's folder). The voice binding is
+validated against the public voice catalog (the providers `/api/config`
+exposes): an unknown provider, a voice the provider does not offer for
+that language, a bad language or a bad style are all 400. When a
+provider is bound, the language defaults to Urdu, the style to
+conversation and the voice to the provider's default for the language,
+so a bound character always carries a **complete** voice. Cap: **10
+characters per user** (the 11th create is a 400). `GET /api/characters`
+lists only the caller's own characters, each with an `image_url`
+(uploaded images are served under `/files/uploads/<userId>/<file>` —
+unguessable UUID filenames, the same exposure model as the other
+`/files` mounts) and the bound voice. `DELETE /api/characters/:id`
+deletes only the caller's own character (404 otherwise) and **never
+touches past generations** — jobs made with it keep their
+`character_id`; History just shows no name for them afterwards.
+
+**Generating with a character.** `POST /api/generate` accepts
+`character_id` (the caller's own, else 404). The character's image
+drives the visual through MiniMax H3 **reference-to-video**
+(`minimax/h3/reference-to-video`, env `FAL_MODEL_REF`). The endpoint's
+schema **and** price were verified against fal.ai's own llms.txt for
+the model (2026-10-23) before wiring: inputs are `prompt` (required —
+references are cited in the text as "Image 1", "Video 1", …),
+`reference_image_urls` (list of strings), `duration` (integer 5–15),
+`resolution` (480P | 768P | 2K | 4K), `aspect_ratio`, and
+`enable_safety_checker`; the output is `{ video: { url } }`. The app
+sends exactly one reference image (as a base64 data URI, like the other
+H3 image inputs) and a prompt of the form `Image 1 is the main
+character. <prompt> — style: <style>`. **Price:** the endpoint charges
+the standard H3 per-second table ($0.05 at 480P, $0.06 at 768P, $0.13
+at 2K, $0.16 at 4K) and the first 5 reference images are free (each
+additional image $0.08) — a character always sends one image, inside
+the free allowance — so character generations are charged the
+**standard rate card with no surcharge**, and plan caps, mode/style
+pairing, prompt translation, moderation, the sound add-on and the
+draft workflow all behave exactly as for a normal generation (a
+character also wins over an explicit `image_path` when both are sent).
+The job row records `character_id`, and History (and the generation
+response) show the character's name. One routing note: a character job
+never takes the Kling native-4K route (that endpoint has no
+reference-image input) — at 4K a character job is the reference
+endpoint's own 4K tier, which — like H3's other 2K/4K tiers — upscales
+a 768P base; only character-free jobs on the Extra Pro plan are native
+4K.
+
+**Lip-sync with a character.** `POST /api/voice/lipsync` accepts
+`character_id` as its visual source: the character's photo is animated
+(image route), and the row records the character. Voice fields sent
+explicitly in the request win per-field; any field left out falls back
+to the character's **bound voice** (provider, voice, language, style),
+so picking a character is enough to get its voice. A `character_id`
+combined with a `generation_id` is rejected (400), and another user's
+character is a 404 that charges nothing. The usual Pro/Extra Pro
+lip-sync entitlement still applies first.
+
+**In the app.** The Studio has a **My Characters** card (name + photo
+upload reusing the image-upload flow, optional voice binding from the
+same catalog as the Voice card, character cards with thumbnail, name,
+bound-voice label and Delete), a character picker with thumbnail in
+the generate form, and a character picker in the lip-sync flow that
+fills the photo and the bound voice. History labels character jobs
+with the character's name.
+
+**Honest limits.** Character consistency is the **model's best
+effort, not a guarantee** — the app copy says so wherever characters
+are offered. The reference endpoint keeps the subject consistent
+according to its own model quality, which is **unproven** until real
+outputs are generated on a funded fal.ai balance and reviewed; the
+suite covers everything above with the local fal stub only. One
+reference image is used per character (the endpoint accepts up to 9,
+plus reference video/audio — out of scope here).
+
 ## Test results (backend, 2026-10-20)
 Run locally with `bash test.sh` — **19/19 tests passed** with a dummy key (no paid calls):
 - ✅ health + config endpoint exposes no secrets
