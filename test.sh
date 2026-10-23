@@ -85,6 +85,17 @@
 # fair-use cap of 10 standalone lip-sync jobs per day (11th -> 429).
 # Outgoing provider request shapes are asserted via the TEST_RECORD-style
 # hook GET /api/_test/voice-calls.
+# The Phase I tests (in-app tester feedback for the Play closed test) use
+# a twenty-second instance (port 18050, own DB, no stubs needed): the
+# feedback lifecycle on a dedicated tester user (401 unauth, 201 happy
+# path with the server-stamped user-agent + app_version, 400 on short
+# message / bad category / another user's generation_id, default 'other'
+# category, own generation_id attached and stored, 10/hour rate limit ->
+# 429 on the 11th), the admin inbox (reporter email, newest first,
+# ?status=open filter, non-admin 403, resolve/reopen flips persist), the
+# config app_version marker, and frontend greps for the Settings feedback
+# card, the History "Report issue" action, the version footer and the
+# credits-chip balance-retry fix.
 # e.g.  ADMIN_EMAIL=admin@example.com FAL_MODEL_4K=test-4k-model TEST_RECORD_FAL_BODY=1 TRANSLATE_API_BASE=http://127.0.0.1:18099 npm start
 # Run against a FRESH database (fixed test emails are registered each run).
 TEST_FAL_MODEL_4K=${TEST_FAL_MODEL_4K:-fal-ai/kling-video/o3/4k/text-to-video}
@@ -2117,6 +2128,96 @@ check "g2 lipsync: 11th standalone job of the day -> 429" "429" "$(echo "$LS11" 
 check "g2 lipsync: 429 names the daily fair-use limit" "yes" "$(echo "$LS11" | sed '$d' | python3 -c 'import sys,json;print("yes" if "fair-use" in json.load(sys.stdin)["error"] else "no")')"
 check "g2 lipsync: fair-use cap charged nothing (still 600)" "600" "$(curl -s $B21/api/me -H "Authorization: Bearer $PT21" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 kill $SRV21_PID $G2STUB_PID 2>/dev/null
+
+echo "--- Phase I: in-app tester feedback (dedicated instance, no stubs) ---"
+B22=http://127.0.0.1:18050
+rm -f /tmp/myvideoai-feedback-test.db
+FB_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-feedback-test.db PORT=18050 FAL_KEY=dummy_test_key "$FB_JWT_NAME=feedback-instance-dummy-value" \
+  ADMIN_EMAIL=fbadmin@example.com \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-feedback-test.log 2>&1 &
+SRV22_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B22/api/health && break || sleep 0.25; done
+AR22=$(curl -s -X POST $B22/api/auth/register -H 'Content-Type: application/json' -d '{"email":"fbadmin@example.com","password":"password123"}')
+AT22=$(echo $AR22 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+UR22=$(curl -s -X POST $B22/api/auth/register -H 'Content-Type: application/json' -d '{"email":"fbuser@example.com","password":"password123"}')
+UT22=$(echo $UR22 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+# 1. unauthenticated -> 401
+FB_UNAUTH=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B22/api/feedback -H 'Content-Type: application/json' -d '{"category":"bug","message":"the app crashed on my phone"}')
+check "phase I: unauthenticated feedback -> 401" "401" "$FB_UNAUTH"
+# 2. happy path -> 201 with id + status, distinctive User-Agent header
+FB_OK=$(curl -s -w '\n%{http_code}' -X POST $B22/api/feedback -H "Authorization: Bearer $UT22" -H 'Content-Type: application/json' -H 'User-Agent: PhaseITestUA/2.0 (TestPhone)' -d '{"category":"bug","message":"The video came out blurry on my test phone."}')
+check "phase I: happy path -> 201" "201" "$(echo "$FB_OK" | tail -1)"
+check "phase I: happy path response carries id + status open" "open" "$(echo "$FB_OK" | sed '$d' | python3 -c 'import sys,json;r=json.load(sys.stdin);print(r["status"] if r.get("id") else "noid")')"
+FBID1=$(echo "$FB_OK" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+# 3. admin inbox: reporter email, server-stamped user-agent + app_version
+FB_LIST=$(curl -s $B22/api/admin/feedback -H "Authorization: Bearer $AT22")
+check "phase I: admin list shows the reporter's email" "fbuser@example.com" "$(echo "$FB_LIST" | python3 -c 'import sys,json;rows=json.load(sys.stdin)["feedback"];print(rows[0]["user_email"] if rows else "none")')"
+check "phase I: admin list stores the request user-agent (server-stamped)" "PhaseITestUA/2.0 (TestPhone)" "$(echo "$FB_LIST" | python3 -c 'import sys,json;rows=json.load(sys.stdin)["feedback"];print(rows[0]["user_agent"] if rows else "none")')"
+check "phase I: admin list stores the app version (server-stamped)" "1.0" "$(echo "$FB_LIST" | python3 -c 'import sys,json;rows=json.load(sys.stdin)["feedback"];print(rows[0]["app_version"] if rows else "none")')"
+check "phase I: admin list is newest first" "yes" "$(echo "$FB_LIST" | python3 -c 'import sys,json;ids=[r["id"] for r in json.load(sys.stdin)["feedback"]];print("yes" if ids==sorted(ids,reverse=True) else "no")')"
+# 4. validation: too-short message / bad category -> 400
+FB_SHORT=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B22/api/feedback -H "Authorization: Bearer $UT22" -H 'Content-Type: application/json' -d '{"category":"bug","message":"abc"}')
+check "phase I: 3-char message -> 400" "400" "$FB_SHORT"
+FB_BADCAT=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B22/api/feedback -H "Authorization: Bearer $UT22" -H 'Content-Type: application/json' -d '{"category":"spam","message":"This category is not allowed at all."}')
+check "phase I: bad category -> 400" "400" "$FB_BADCAT"
+# 5. absent category defaults to 'other' and is stored that way
+FB_NOCAT=$(curl -s -w '\n%{http_code}' -X POST $B22/api/feedback -H "Authorization: Bearer $UT22" -H 'Content-Type: application/json' -d '{"message":"No category was sent with this report."}')
+check "phase I: absent category -> 201" "201" "$(echo "$FB_NOCAT" | tail -1)"
+FB_LIST2=$(curl -s $B22/api/admin/feedback -H "Authorization: Bearer $AT22")
+check "phase I: absent category stored as other" "other" "$(echo "$FB_LIST2" | python3 -c 'import sys,json;rows=json.load(sys.stdin)["feedback"];print([r["category"] for r in rows if r["message"]=="No category was sent with this report."][0])')"
+# 6. generation ownership: B's video is a failed 502 generate (dummy key by
+#    design) — the row exists, which is all the ownership check needs.
+OR22=$(curl -s -X POST $B22/api/auth/register -H 'Content-Type: application/json' -d '{"email":"fbother@example.com","password":"password123"}')
+OT22=$(echo $OR22 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+curl -s -o /dev/null -X POST $B22/api/generate -H "Authorization: Bearer $OT22" -H 'Content-Type: application/json' -d '{"prompt":"a calm ocean sunset","aspect_ratio":"16:9","duration":5}'
+BGEN=$(curl -s $B22/api/history -H "Authorization: Bearer $OT22" | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["id"])')
+FB_OTHER=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B22/api/feedback -H "Authorization: Bearer $UT22" -H 'Content-Type: application/json' -d "{\"category\":\"bug\",\"message\":\"Attaching someone elses video should be rejected.\",\"generation_id\":$BGEN}")
+check "phase I: another user's generation_id -> 400" "400" "$FB_OTHER"
+FB_GHOST=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B22/api/feedback -H "Authorization: Bearer $UT22" -H 'Content-Type: application/json' -d '{"category":"bug","message":"Attaching a video that does not exist should be rejected.","generation_id":999999}')
+check "phase I: nonexistent generation_id -> 400" "400" "$FB_GHOST"
+curl -s -o /dev/null -X POST $B22/api/generate -H "Authorization: Bearer $UT22" -H 'Content-Type: application/json' -d '{"prompt":"a calm ocean sunset","aspect_ratio":"16:9","duration":5}'
+AGEN=$(curl -s $B22/api/history -H "Authorization: Bearer $UT22" | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["id"])')
+FB_OWN=$(curl -s -w '\n%{http_code}' -X POST $B22/api/feedback -H "Authorization: Bearer $UT22" -H 'Content-Type: application/json' -d "{\"category\":\"quality\",\"message\":\"My own video came out blurry, attaching it here.\",\"generation_id\":$AGEN}")
+check "phase I: own generation_id -> 201" "201" "$(echo "$FB_OWN" | tail -1)"
+FB_OWN_ID=$(echo "$FB_OWN" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+FB_LIST3=$(curl -s $B22/api/admin/feedback -H "Authorization: Bearer $AT22")
+check "phase I: own generation_id stored on the report" "$AGEN" "$(echo "$FB_LIST3" | python3 -c "import sys,json;rows={r['id']:r for r in json.load(sys.stdin)['feedback']};print(rows[$FB_OWN_ID]['generation_id'])")"
+# 7. rate limit: 10/hour/user on a dedicated user -> 11th is 429
+LR22=$(curl -s -X POST $B22/api/auth/register -H 'Content-Type: application/json' -d '{"email":"fblimit@example.com","password":"password123"}')
+LT22=$(echo $LR22 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+FBOK22=0
+for i in $(seq 1 10); do
+  CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B22/api/feedback -H "Authorization: Bearer $LT22" -H 'Content-Type: application/json' -d "{\"category\":\"other\",\"message\":\"Rate limit probe number $i from the tester.\"}")
+  [[ "$CODE" == "201" ]] && FBOK22=$((FBOK22+1))
+done
+check "phase I: 10 reports in an hour all succeed (201 x10)" "10" "$FBOK22"
+FB429=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B22/api/feedback -H "Authorization: Bearer $LT22" -H 'Content-Type: application/json' -d '{"category":"other","message":"Rate limit probe number 11 from the tester."}')
+check "phase I: 11th report in an hour -> 429" "429" "$FB429"
+# 8. admin endpoints: non-admin -> 403 on both
+check "phase I: non-admin GET /api/admin/feedback -> 403" "403" "$(curl -s -o /dev/null -w '%{http_code}' $B22/api/admin/feedback -H "Authorization: Bearer $UT22")"
+check "phase I: non-admin POST status -> 403" "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B22/api/admin/feedback/$FBID1/status -H "Authorization: Bearer $UT22" -H 'Content-Type: application/json' -d '{"status":"resolved"}')"
+# 9. resolve -> flips + persists; ?status=open filter; reopen works
+FB_RES=$(curl -s -X POST $B22/api/admin/feedback/$FBID1/status -H "Authorization: Bearer $AT22" -H 'Content-Type: application/json' -d '{"status":"resolved"}')
+check "phase I: resolve flips status to resolved" "resolved" "$(echo "$FB_RES" | python3 -c 'import sys,json;print(json.load(sys.stdin)["feedback"]["status"])')"
+check "phase I: resolved status persists on re-read" "resolved" "$(curl -s $B22/api/admin/feedback -H "Authorization: Bearer $AT22" | python3 -c "import sys,json;rows={r['id']:r for r in json.load(sys.stdin)['feedback']};print(rows[$FBID1]['status'])")"
+check "phase I: ?status=open filter hides the resolved report" "no" "$(curl -s "$B22/api/admin/feedback?status=open" -H "Authorization: Bearer $AT22" | python3 -c "import sys,json;ids=[r['id'] for r in json.load(sys.stdin)['feedback']];print('yes' if $FBID1 in ids else 'no')")"
+FB_REOPEN=$(curl -s -X POST $B22/api/admin/feedback/$FBID1/status -H "Authorization: Bearer $AT22" -H 'Content-Type: application/json' -d '{"status":"open"}')
+check "phase I: reopen flips status back to open" "open" "$(echo "$FB_REOPEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["feedback"]["status"])')"
+# 10. config exposes the version marker the footer + reports use
+check "phase I: /api/config exposes app_version" "1.0" "$(curl -s $B22/api/config | python3 -c 'import sys,json;print(json.load(sys.stdin)["app_version"])')"
+# 11. frontend greps: settings card, report-issue action, version footer
+HOMEPAGE22=$(curl -s $B22/)
+check "phase I frontend: feedback card with Urdu heading ships" "yes" "$(echo "$HOMEPAGE22" | grep -q 'id="feedbackCard"' && echo "$HOMEPAGE22" | grep -q 'Feedback · رائے / مسئلہ' && echo yes || echo no)"
+check "phase I frontend: category select ships all four values" "yes" "$(echo "$HOMEPAGE22" | grep -q 'id="feedbackCategory"' && echo "$HOMEPAGE22" | grep -q 'value="bug"' && echo "$HOMEPAGE22" | grep -q 'value="quality"' && echo "$HOMEPAGE22" | grep -q 'value="feature"' && echo "$HOMEPAGE22" | grep -q 'value="other"' && echo yes || echo no)"
+check "phase I frontend: send button + counter + version footer ship" "yes" "$(echo "$HOMEPAGE22" | grep -q 'id="feedbackSendBtn"' && echo "$HOMEPAGE22" | grep -q 'id="feedbackCount"' && echo "$HOMEPAGE22" | grep -q 'id="appVersionLine"' && echo yes || echo no)"
+check "phase I frontend: history Report issue action + attach chip ship" "yes" "$(echo "$HOMEPAGE22" | grep -q 'Report issue' && echo "$HOMEPAGE22" | grep -q 'id="feedbackAttach"' && echo yes || echo no)"
+# 12. credits-chip balance-retry fix (owner-visible bug): retry logic,
+#     the tap-the-chip toast, and the chip re-running loadMe()
+check "credits chip fix: loadMe retries /api/me a few seconds apart" "yes" "$(echo "$HOMEPAGE22" | grep -q 'loadMeAttempt' && echo "$HOMEPAGE22" | grep -q 'loadMeAttempt(n + 1)' && echo "$HOMEPAGE22" | grep -q '3000' && echo yes || echo no)"
+check "credits chip fix: failure toast tells the user to tap the chip" "yes" "$(echo "$HOMEPAGE22" | grep -qF 'tap the chip to retry' && echo yes || echo no)"
+check "credits chip fix: chip tap re-runs loadMe, buy view still opens on success" "yes" "$(echo "$HOMEPAGE22" | grep -q 'loadMe().then(function (ok)' && echo yes || echo no)"
+kill $SRV22_PID 2>/dev/null
 
 echo "--- rate limit: burst until 429 ---"
 FOUND429="no"

@@ -1227,6 +1227,13 @@ exactly once (replay is a no-op), subscription token activates the plan,
 unknown/unpaid tokens grant nothing, another user can't replay a token,
 and a voided purchase is clawed back with the payment marked refunded.
 
+**Closed-testing notes (14 days, ~20 testers):** in-app feedback plus the
+app-version marker (Phase I, above) are the test's reporting channel —
+testers file from Settings → Feedback, the owner triages in Admin Panel →
+Feedback, and every report names the build it came from. Run the closed
+test **only after the fal.ai top-up** — without it, every tester's
+generation fails and refunds, and the 14 days are wasted.
+
 ## PayFast gateway (automatic local payments — Easypaisa / JazzCash / cards / bank)
 
 The local route is automatic too — no screenshots, no manual approval.
@@ -1386,6 +1393,43 @@ failures return a clear error and never create a charge.
 redeploys. Users should **download joined videos promptly**; the history row
 remains, but the file behind it may not.
 
+## Tester feedback (Phase I, migration v16)
+
+Built for the 14-day Google Play closed test: testers report problems from
+**inside the app**, and the owner reads every report in the Admin Panel —
+no screenshots over chat, no lost messages.
+
+**How testers report:** Settings → the **Feedback · رائے / مسئلہ** card.
+Pick a category (مسئلہ / کوالٹی / نئی سہولت / دیگر = bug / quality / feature
+/ other), write what happened (5–1000 characters), tap **Send feedback**.
+From any History item, the **Report issue** action jumps straight to the
+card with that video attached (a removable chip names it, and the
+`generation_id` rides along with the report). Sign-in is required, so the
+team can follow up. Reports are rate-limited to **10 per hour per user** to
+keep the inbox meaningful.
+
+**What the owner sees:** Admin Panel → **Feedback** lists every report,
+newest first, with the reporter's **email**, category badge, message, the
+attached video (when one was attached), and a meta line carrying the
+**app version + user agent + date**. Both are stamped **server-side** — a
+tester cannot forge them — so each report is tied to the exact build and
+device class it came from. `?status=open` narrows the inbox to untriaged
+reports; **Resolve / Reopen** flips a report's status (reports are never
+deleted).
+
+**Version marker:** `APP_VERSION` env (default `1.0`; bump per release) is
+exposed as `app_version` in `/api/config` and shown in the Settings footer
+as `AJK AI · Version <x>`. The same value is stamped onto every feedback
+report.
+
+**Also fixed in this build (owner-visible bug):** the credits chip could
+stay stuck at "– credits" for a whole session — the balance loader gave up
+silently on any non-401 failure (network hiccup, 5xx, server waking).
+It now **retries up to 3 times a few seconds apart**, and on final failure
+toasts *"Balance couldn't load — tap the chip to retry"*; **tapping the
+chip re-runs the load** (it still opens Buy Credits when the balance loads
+fine).
+
 ## The localhost fix: app + API on one address
 This server also serves the AJK AI web app itself (`public/index.html`) at its
 root address `/`. So one address does everything: open the server's address in
@@ -1433,7 +1477,7 @@ the privacy policy page is included in the web app.
 - `public/admin.html` — the Admin Panel, served at `/admin` (includes credit-pack editing, pack-purchase approval, Play product IDs, credit-deficit display, billing/transactions)
 - `public/nayapay-qr.jpg` — the owner's NayaPay QR code, shown on the Buy Credits page when NayaPay is selected
 - `schema.sql` — schema reference (`server.js` applies migrations automatically on boot)
-- `test.sh` — the automated test battery (original + monetization + prompt-language + credit-pack + clip-join + Play Billing/gateway + video-mode/image-to-video/watermark/migration + voice-system tests; see its header for the server env it needs)
+- `test.sh` — the automated test battery (original + monetization + prompt-language + credit-pack + clip-join + Play Billing/gateway + video-mode/image-to-video/watermark/migration + voice-system + tester-feedback tests; see its header for the server env it needs)
 - `test-translate-stub.js` — local Google Translate stub used by `test.sh` (tests never call the real translate endpoint)
 - `test-gateway-stub.js` — signs PayFast-shaped webhook bodies for `test.sh` (tests never call the real gateway)
 - `test-fal-stub.js` — local fal.ai stub (TTS endpoints + lip-sync queue + media files) used by the voice tests in `test.sh` (tests never call the real fal API)

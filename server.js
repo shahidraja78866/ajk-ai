@@ -106,6 +106,12 @@ const CONFIG = {
   // Bootstrap admin: the account with this email gets the admin flag
   // (at registration, at login, and for existing accounts at boot).
   adminEmail: (process.env.ADMIN_EMAIL || '').trim().toLowerCase(),
+  // App version marker (Phase I): stamped onto every feedback report
+  // server-side (the client cannot forge it) and shown in the app's
+  // Settings footer via /api/config, so tester reports from the Play
+  // closed test can be tied to the build they were using. Bump
+  // APP_VERSION per release.
+  appVersion: (process.env.APP_VERSION || '1.0').trim() || '1.0',
   // Base URL for server-side prompt translation (Google Translate "gtx" web
   // endpoint). Overridable via TRANSLATE_API_BASE — tests point it at a
   // local stub so the suite never calls the real endpoint.
@@ -701,6 +707,23 @@ const MIGRATIONS = [
   // stored plan — never silently presented as silent).
   { version: 15, up: `
     ALTER TABLE generations ADD COLUMN mute_status TEXT NOT NULL DEFAULT 'none';` },
+  // v16 — tester feedback (Phase I): in-app feedback reports for the
+  // Play closed test. user_agent and app_version are captured by the
+  // SERVER at submit time (never client-supplied), generation_id links
+  // an optional History item the report is about, and status is the
+  // owner's triage state ('open' | 'resolved').
+  { version: 16, up: `
+    CREATE TABLE IF NOT EXISTS feedback (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      category TEXT NOT NULL DEFAULT 'other',
+      message TEXT NOT NULL,
+      generation_id INTEGER REFERENCES generations(id),
+      app_version TEXT,
+      user_agent TEXT,
+      status TEXT NOT NULL DEFAULT 'open',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );` },
 ];
 {
   const applied = new Set(db.prepare('SELECT version FROM schema_migrations').all().map(r => r.version));
@@ -977,6 +1000,11 @@ const soundLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 30,
 const finishLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 30,
   keyGenerator: (req) => String(req.user?.id || req.ip),
   message: { error: 'Rate limit: max 30 finisher requests per hour.' } });
+// Feedback reports (Phase I): testers file them from inside the app —
+// a tight per-user cap keeps the Admin Panel inbox meaningful.
+const feedbackLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 10,
+  keyGenerator: (req) => String(req.user?.id || req.ip),
+  message: { error: 'Rate limit: max 10 feedback reports per hour.' } });
 
 function auth(req, res, next) {
   const token = (req.headers.authorization || '').replace('Bearer ', '');
@@ -1006,6 +1034,9 @@ function moderated(prompt) {
 // ---------- Public config (no secrets) ----------
 app.get('/api/config', (req, res) => res.json({
   model: CONFIG.model,
+  // App version marker (Phase I) — the Settings footer shows it and the
+  // server stamps it onto every feedback report.
+  app_version: CONFIG.appVersion,
   aspect_ratios: CONFIG.aspectRatios,
   durations: CONFIG.durations,
   styles: CONFIG.styles,
@@ -4709,6 +4740,43 @@ app.post('/api/report', auth, (req, res) => {
   res.json({ ok: true, message: 'Thank you. Our team will review this content.' });
 });
 
+// ---------- Tester feedback (Phase I) --------------------------------------
+// In-app feedback for the Play closed test: a signed-in user files a
+// categorized report from Settings (optionally attached to one of THEIR
+// OWN generations via the History "Report issue" action). The server —
+// never the client — stamps the app version and the request's
+// User-Agent onto the row, so the owner reading the Admin Panel knows
+// exactly which build and device class a report came from. The owner
+// triages reports via GET /api/admin/feedback (below).
+const FEEDBACK_CATEGORIES = ['bug', 'quality', 'feature', 'other'];
+app.post('/api/feedback', auth, feedbackLimiter, (req, res) => {
+  const b = req.body || {};
+  const category = (b.category === undefined || b.category === null || b.category === '')
+    ? 'other' : String(b.category).toLowerCase();
+  if (!FEEDBACK_CATEGORIES.includes(category))
+    return res.status(400).json({ error: `category must be one of: ${FEEDBACK_CATEGORIES.join(', ')}` });
+  const message = String(b.message ?? '').trim();
+  if (message.length < 5 || message.length > 1000)
+    return res.status(400).json({ error: 'Please write between 5 and 1000 characters so the team can act on your feedback.' });
+  if (moderated(message))
+    return res.status(400).json({ error: 'This feedback was blocked by content moderation. Please rephrase it.' });
+  let generationId = null;
+  if (b.generation_id !== undefined && b.generation_id !== null && b.generation_id !== '') {
+    const gid = Number(b.generation_id);
+    const own = Number.isInteger(gid)
+      ? db.prepare('SELECT id FROM generations WHERE id = ? AND user_id = ?').get(gid, req.user.id)
+      : null;
+    if (!own)
+      return res.status(400).json({ error: 'That video is not in your history — send the feedback without attaching it.' });
+    generationId = gid;
+  }
+  const info = db.prepare(`INSERT INTO feedback (user_id, category, message, generation_id, app_version, user_agent)
+                           VALUES (?, ?, ?, ?, ?, ?)`)
+    .run(req.user.id, category, message, generationId, CONFIG.appVersion,
+         String(req.headers['user-agent'] || '').slice(0, 300));
+  res.status(201).json({ id: Number(info.lastInsertRowid), status: 'open' });
+});
+
 // ==========================================================================
 // Automatic payments (Phase 3) — Google Play Billing + PayFast gateway
 // ==========================================================================
@@ -5552,6 +5620,32 @@ app.post('/api/admin/pack-purchases/:id/reject', auth, requireAdmin, (req, res) 
   if (outcome.code === 404) return res.status(404).json({ error: 'Purchase not found.' });
   if (outcome.code === 409) return res.status(409).json({ error: 'That purchase was already decided.', purchase: outcome.purchase });
   res.json({ ok: true, purchase: outcome.purchase });
+});
+
+// ---------- Admin: tester feedback (Phase I) -------------------------------
+// The owner reads every in-app feedback report here (Admin Panel →
+// Feedback section): reporter email, category, message, the optional
+// generation it is about, and the server-stamped app version + user
+// agent. ?status=open narrows to the untriaged inbox. Resolving or
+// reopening is a plain status flip — reports are never deleted.
+app.get('/api/admin/feedback', auth, requireAdmin, (req, res) => {
+  const status = String(req.query.status || '');
+  const base = `SELECT f.*, u.email AS user_email FROM feedback f
+                JOIN users u ON u.id = f.user_id`;
+  const rows = ['open', 'resolved'].includes(status)
+    ? db.prepare(`${base} WHERE f.status = ? ORDER BY f.id DESC LIMIT 200`).all(status)
+    : db.prepare(`${base} ORDER BY f.id DESC LIMIT 200`).all();
+  res.json({ feedback: rows });
+});
+
+app.post('/api/admin/feedback/:id/status', auth, requireAdmin, (req, res) => {
+  const status = String(req.body?.status || '');
+  if (!['open', 'resolved'].includes(status))
+    return res.status(400).json({ error: "status must be 'open' or 'resolved'." });
+  const fb = db.prepare('SELECT * FROM feedback WHERE id = ?').get(req.params.id);
+  if (!fb) return res.status(404).json({ error: 'Feedback not found.' });
+  db.prepare('UPDATE feedback SET status = ? WHERE id = ?').run(status, fb.id);
+  res.json({ ok: true, feedback: db.prepare('SELECT * FROM feedback WHERE id = ?').get(fb.id) });
 });
 
 // ---------- Admin panel page ----------
