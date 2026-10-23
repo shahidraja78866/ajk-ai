@@ -742,6 +742,29 @@ explanatory paragraphs (Templates intro, Describe guidance, the AI
 Auto description, the modes' audio note) were shortened to one short
 line each.
 
+**Flow-style minimal Studio (Phase F, frontend only).** The create
+surface is now composer-first, in this order: a quiet template rail
+(icon + short label only, one horizontally scrolling row), the prompt
+composer (the existing `#prompt` textarea and a compact
+`#promptLang` select), one quick chip row, the unchanged AI Auto
+confirmation panel, a compact Recent strip, the existing collapsed
+`#advancedCard`, and the unchanged sticky cost/Generate bar. The chip
+row reuses the **same** `#aspectSeg` and `#durationSeg` controls —
+moved, not duplicated — and the same `#aiAutoToggle` checkbox,
+restyled as a small switch labelled "Auto"; the generate flow reads
+exactly the same elements and state as before. Recent shows the
+signed-in user's latest three generations from the same
+`/api/history` response the History tab already renders (a video
+thumbnail when one is available, otherwise a status icon, plus the
+short prompt and status); tapping an item opens History, and the
+strip renders nothing at all when there are no generations. The
+advanced container still holds mode, character picker, starting
+image, style and quality, with the Voice, Sound and Watermark cards
+nested as before. No control, element id or API call shape changed:
+all 189 existing ids are preserved. The two visible differentiators
+from Flow-style composers remain the AI Auto switch and the total
+credit cost shown up front in the sticky bar.
+
 ## Test results (backend, 2026-10-20)
 Run locally with `bash test.sh` — **19/19 tests passed** with a dummy key (no paid calls):
 - ✅ health + config endpoint exposes no secrets
