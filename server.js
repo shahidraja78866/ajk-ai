@@ -33,7 +33,7 @@ import rateLimit from 'express-rate-limit';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createSign, createHash, timingSafeEqual } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -90,6 +90,35 @@ const CONFIG = {
   // NOTE: local disk — on ephemeral hosting (Render free tier) these files
   // disappear when the instance restarts or redeploys.
   joinedDir: process.env.JOINED_DIR || path.join(__dirname, 'data', 'joined'),
+  // Public base URL of this server (used to build gateway redirect/callback
+  // URLs). Derived from the request when unset.
+  publicBaseUrl: (process.env.PUBLIC_BASE_URL || '').trim().replace(/\/+$/, ''),
+  // --- Google Play Billing (Phase 3) ---------------------------------------
+  // FAILS CLOSED: until PLAY_PACKAGE_NAME and GOOGLE_PLAY_CREDENTIALS are
+  // both set, the Play verify endpoint answers 503 and grants nothing.
+  // GOOGLE_PLAY_CREDENTIALS is a service-account JSON — either a path to
+  // the file or the JSON itself inline (server-side only, never shipped
+  // to the client). PLAY_TEST_MODE=1 swaps in the token-keyed mock
+  // verifier used by test.sh — test environments ONLY, never production.
+  playPackageName: (process.env.PLAY_PACKAGE_NAME || '').trim(),
+  playCredentials: (process.env.GOOGLE_PLAY_CREDENTIALS || '').trim(),
+  playRtdnSecret: (process.env.PLAY_RTDN_SECRET || '').trim(),
+  playTestMode: process.env.PLAY_TEST_MODE === '1',
+  // --- Payment gateway (PayFast — Easypaisa / JazzCash / cards / bank) -----
+  // FAILS CLOSED: until GATEWAY_PROVIDER=payfast and the merchant id +
+  // secured key are set, gateway checkout answers 503 and webhooks grant
+  // nothing. GATEWAY_TEST_MODE=1 (tests only) skips the token-mint HTTP
+  // call to the real gateway; IPN signature verification still runs.
+  // PAYFAST_BASE_URL defaults to the UAT host — switch to the production
+  // host given in the merchant dashboard at go-live.
+  gatewayProvider: (process.env.GATEWAY_PROVIDER || '').trim().toLowerCase(),
+  gatewayTestMode: process.env.GATEWAY_TEST_MODE === '1',
+  payfast: {
+    merchantId: (process.env.PAYFAST_MERCHANT_ID || '').trim(),
+    merchantName: (process.env.PAYFAST_MERCHANT_NAME || '').trim(),
+    securedKey: (process.env.PAYFAST_SECURED_KEY || '').trim(),
+    baseUrl: (process.env.PAYFAST_BASE_URL || 'https://ipguat.apps.net.pk').replace(/\/+$/, ''),
+  },
 };
 
 // ---------- Prompt languages ----------
@@ -139,20 +168,23 @@ const FOUR_K_ASPECTS = ['16:9', '9:16', '1:1'];
 // never overwrites prices or credit amounts an admin has changed.
 const PLAN_DEFAULTS = [
   { id: 'normal',   name: 'Normal',    price_monthly: 1500, price_yearly: 15000,
-    credits_monthly: 100, quality: '768P', quality_label: '768P',      resolution: '768P', model: CONFIG.model,   sort_order: 1 },
+    credits_monthly: 100, quality: '768P', quality_label: '768P',      resolution: '768P', model: CONFIG.model,   sort_order: 1,
+    play_product_monthly: 'ajk_normal_monthly',   play_product_yearly: 'ajk_normal_yearly' },
   { id: 'pro',      name: 'Pro',       price_monthly: 3000, price_yearly: 30000,
-    credits_monthly: 120, quality: '2K',   quality_label: '2K',        resolution: '2K',   model: CONFIG.model,   sort_order: 2 },
+    credits_monthly: 120, quality: '2K',   quality_label: '2K',        resolution: '2K',   model: CONFIG.model,   sort_order: 2,
+    play_product_monthly: 'ajk_pro_monthly',      play_product_yearly: 'ajk_pro_yearly' },
   { id: 'extrapro', name: 'Extra Pro', price_monthly: 5000, price_yearly: 50000,
-    credits_monthly: 120, quality: '4K',   quality_label: 'Native 4K', resolution: '4K',   model: CONFIG.model4k, sort_order: 3 },
+    credits_monthly: 120, quality: '4K',   quality_label: 'Native 4K', resolution: '4K',   model: CONFIG.model4k, sort_order: 3,
+    play_product_monthly: 'ajk_extrapro_monthly', play_product_yearly: 'ajk_extrapro_yearly' },
 ];
 
 // One-time credit packs (top-ups bought outside subscriptions). Seeded into
 // the `credit_packs` table on first boot; afterwards editable in the admin
 // panel — boot never overwrites an admin's edits.
 const PACK_DEFAULTS = [
-  { credits: 50,  price_pkr: 899,  sort_order: 1 },
-  { credits: 100, price_pkr: 1499, sort_order: 2 },
-  { credits: 250, price_pkr: 3499, sort_order: 3 },
+  { credits: 50,  price_pkr: 899,  sort_order: 1, play_product_id: 'credits_50' },
+  { credits: 100, price_pkr: 1499, sort_order: 2, play_product_id: 'credits_100' },
+  { credits: 250, price_pkr: 3499, sort_order: 3, play_product_id: 'credits_250' },
 ];
 const PACK_METHODS = ['easypaisa', 'jazzcash', 'bank', 'nayapay', 'other'];
 
@@ -298,6 +330,22 @@ const MIGRATIONS = [
       decided_at TEXT,
       decided_by INTEGER REFERENCES users(id)
     );` },
+  // v6 — automatic payments (Phase 3): Google Play product mapping on
+  // plans/packs, payments gain pack_id + credits_granted (needed to claw
+  // back exactly what a payment granted, from the right bucket), and users
+  // gain credit_deficit — the unrecovered remainder when a refund clawback
+  // can't take back credits the user already spent.
+  { version: 6, up: `
+    ALTER TABLE plans ADD COLUMN play_product_monthly TEXT;
+    ALTER TABLE plans ADD COLUMN play_product_yearly TEXT;
+    UPDATE plans SET play_product_monthly = 'ajk_normal_monthly', play_product_yearly = 'ajk_normal_yearly' WHERE id = 'normal';
+    UPDATE plans SET play_product_monthly = 'ajk_pro_monthly', play_product_yearly = 'ajk_pro_yearly' WHERE id = 'pro';
+    UPDATE plans SET play_product_monthly = 'ajk_extrapro_monthly', play_product_yearly = 'ajk_extrapro_yearly' WHERE id = 'extrapro';
+    ALTER TABLE credit_packs ADD COLUMN play_product_id TEXT;
+    UPDATE credit_packs SET play_product_id = 'credits_' || credits WHERE play_product_id IS NULL;
+    ALTER TABLE users ADD COLUMN credit_deficit INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE payments ADD COLUMN pack_id INTEGER;
+    ALTER TABLE payments ADD COLUMN credits_granted INTEGER NOT NULL DEFAULT 0;` },
 ];
 {
   const applied = new Set(db.prepare('SELECT version FROM schema_migrations').all().map(r => r.version));
@@ -319,14 +367,21 @@ for (const p of PLAN_DEFAULTS) {
   const existing = db.prepare('SELECT id FROM plans WHERE id = ?').get(p.id);
   if (!existing) {
     db.prepare(`INSERT INTO plans (id, name, price_monthly, price_yearly, credits_monthly,
-                quality, quality_label, resolution, model, sort_order)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+                quality, quality_label, resolution, model, sort_order,
+                play_product_monthly, play_product_yearly)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(p.id, p.name, p.price_monthly, p.price_yearly, p.credits_monthly,
-           p.quality, p.quality_label, p.resolution, p.model, p.sort_order);
+           p.quality, p.quality_label, p.resolution, p.model, p.sort_order,
+           p.play_product_monthly, p.play_product_yearly);
   } else {
+    // Play product ids are backfilled only when unset (COALESCE) — an
+    // admin's edits in the Admin Panel always win over these defaults.
     db.prepare(`UPDATE plans SET name = ?, quality = ?, quality_label = ?,
-                resolution = ?, model = ?, sort_order = ? WHERE id = ?`)
-      .run(p.name, p.quality, p.quality_label, p.resolution, p.model, p.sort_order, p.id);
+                resolution = ?, model = ?, sort_order = ?,
+                play_product_monthly = COALESCE(play_product_monthly, ?),
+                play_product_yearly = COALESCE(play_product_yearly, ?) WHERE id = ?`)
+      .run(p.name, p.quality, p.quality_label, p.resolution, p.model, p.sort_order,
+           p.play_product_monthly, p.play_product_yearly, p.id);
   }
 }
 // Seed the credit-pack catalogue on first boot only (when the table is
@@ -336,10 +391,14 @@ for (const p of PLAN_DEFAULTS) {
   const { c } = db.prepare('SELECT COUNT(*) AS c FROM credit_packs').get();
   if (Number(c) === 0) {
     for (const p of PACK_DEFAULTS) {
-      db.prepare('INSERT INTO credit_packs (credits, price_pkr, sort_order) VALUES (?, ?, ?)')
-        .run(p.credits, p.price_pkr, p.sort_order);
+      db.prepare('INSERT INTO credit_packs (credits, price_pkr, sort_order, play_product_id) VALUES (?, ?, ?, ?)')
+        .run(p.credits, p.price_pkr, p.sort_order, p.play_product_id);
     }
   }
+  // Backfill Play product ids for packs that predate them (deterministic
+  // default 'credits_<n>'); an admin's own value is never overwritten.
+  db.prepare(`UPDATE credit_packs SET play_product_id = 'credits_' || credits
+              WHERE play_product_id IS NULL OR play_product_id = ''`).run();
 }
 // Bootstrap admin for an already-registered account (see also register/login).
 if (CONFIG.adminEmail) {
@@ -422,13 +481,14 @@ function refreshSubscriptionState(userId) {
 // Activate (or replace) a subscription and grant this cycle's plan credits.
 // The ONLY ways in are a succeeded payment record or an admin action —
 // both funnel through here, so plan credits can never appear without a
-// subscription row behind them.
-function activateSubscription(userId, plan, { period = 'monthly', paymentId = null } = {}) {
+// subscription row behind them. `periodEnd` (Google Play purchases) pins
+// the period end to the provider's expiry instead of a calendar month.
+function activateSubscription(userId, plan, { period = 'monthly', paymentId = null, periodEnd = null } = {}) {
   return tx(() => {
     db.prepare(`UPDATE subscriptions SET status = 'expired', updated_at = datetime('now')
                 WHERE user_id = ? AND status IN ('active', 'grace', 'canceled')`).run(userId);
     const now = new Date();
-    const end = addMonths(now, period === 'yearly' ? 12 : 1);
+    const end = periodEnd ? new Date(periodEnd) : addMonths(now, period === 'yearly' ? 12 : 1);
     const info = db.prepare(
       `INSERT INTO subscriptions (user_id, plan_id, status, period, started_at,
          current_period_start, current_period_end, last_grant_at, payment_id)
@@ -459,11 +519,14 @@ function grantMonthlyCredits(userId) {
 function publicPlan(p) {
   return { id: p.id, name: p.name, price_monthly: p.price_monthly, price_yearly: p.price_yearly,
     currency: p.currency, credits_monthly: p.credits_monthly, quality: p.quality,
-    quality_label: p.quality_label, resolution: p.resolution };
+    quality_label: p.quality_label, resolution: p.resolution,
+    // Google Play subscription product ids (set in Play Console; editable
+    // in the Admin Panel). Used by the app's Digital Goods purchase flow.
+    play_product_id: { monthly: p.play_product_monthly || null, yearly: p.play_product_yearly || null } };
 }
 function publicPack(p) {
   return { id: p.id, credits: p.credits, price_pkr: p.price_pkr, currency: 'PKR',
-    is_active: !!p.is_active };
+    is_active: !!p.is_active, play_product_id: p.play_product_id || null };
 }
 function subscriptionView(sub) {
   if (!sub) return null;
@@ -478,6 +541,8 @@ function subscriptionView(sub) {
 const app = express();
 app.use(cors({ origin: FRONTEND_ORIGIN || true }));
 app.use(express.json({ limit: '100kb' }));
+// Payment gateways post their IPN/webhook callbacks as form data.
+app.use(express.urlencoded({ extended: false, limit: '100kb' }));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
 const generateLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 10,
   message: { error: 'Rate limit: max 10 generations per hour.' } });
@@ -524,6 +589,12 @@ app.get('/api/config', (req, res) => res.json({
   // Manual payment destinations for credit packs — only the methods the
   // owner configured in the environment are listed (may be empty).
   payment_methods: CONFIG.paymentMethods,
+  // Automatic-payment availability (flags only, never secrets): the app
+  // shows Google Play purchase buttons when Play Billing is configured
+  // server-side, and the gateway "Instant" buttons when a payment gateway
+  // is configured. Both stay false until the owner's accounts exist.
+  play_billing_configured: playBillingConfigured(),
+  gateway_configured: gatewayConfigured(),
 }));
 app.get('/api/health', (req, res) => res.json({ ok: true, model: CONFIG.model }));
 
@@ -609,7 +680,7 @@ app.post('/api/auth/login', async (req, res) => {
 
 app.get('/api/me', auth, (req, res) => {
   refreshSubscriptionState(req.user.id);
-  const u = db.prepare('SELECT id, email, credits, free_credits, plan_credits, is_admin, created_at FROM users WHERE id = ?').get(req.user.id);
+  const u = db.prepare('SELECT id, email, credits, free_credits, plan_credits, credit_deficit, is_admin, created_at FROM users WHERE id = ?').get(req.user.id);
   if (!u) return res.status(404).json({ error: 'Account not found.' });
   const sub = currentSubscription(u.id);
   const plan = sub ? getPlan(sub.plan_id) : null;
@@ -965,9 +1036,563 @@ app.post('/api/report', auth, (req, res) => {
   res.json({ ok: true, message: 'Thank you. Our team will review this content.' });
 });
 
+// ==========================================================================
+// Automatic payments (Phase 3) — Google Play Billing + PayFast gateway
+// ==========================================================================
+// Both pipelines obey the same two rules:
+//   1. FAIL CLOSED — credits are granted ONLY after the provider verifies
+//      the payment server-side (Google Play Developer API for Play; the
+//      signed IPN for the gateway). Client claims, screenshots and
+//      notification text alone never grant anything.
+//   2. EXACTLY ONCE — every provider transaction is recorded in the
+//      `payments` table under its unique provider_txn_id. Replays return
+//      the recorded outcome and never grant twice. Refunds/voids from
+//      either provider run through the SAME clawback helper below.
+
+// ---------- Google Play: credentials, OAuth (RS256), verification --------
+let _playCredsCache = null;
+function loadPlayCredentials() {
+  if (_playCredsCache) return _playCredsCache;
+  const raw = CONFIG.playCredentials;
+  if (!raw) return null;
+  try {
+    const json = raw.trim().startsWith('{') ? raw : fs.readFileSync(raw.trim(), 'utf8');
+    const parsed = JSON.parse(json);
+    if (!parsed.client_email || !parsed.private_key) return null;
+    _playCredsCache = parsed;
+    return parsed;
+  } catch { return null; }
+}
+function playBillingConfigured() {
+  if (CONFIG.playTestMode) return true;
+  return !!CONFIG.playPackageName && !!loadPlayCredentials();
+}
+function base64url(input) {
+  return Buffer.from(input).toString('base64')
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+let _playTokenCache = { token: null, exp: 0 };
+async function playAccessToken() {
+  if (_playTokenCache.token && Date.now() < _playTokenCache.exp - 30000)
+    return _playTokenCache.token;
+  const creds = loadPlayCredentials();
+  if (!creds) throw Object.assign(new Error('PLAY_NOT_CONFIGURED'), { status: 503 });
+  const now = Math.floor(Date.now() / 1000);
+  const header = base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const claim = base64url(JSON.stringify({
+    iss: creds.client_email,
+    scope: 'https://www.googleapis.com/auth/androidpublisher',
+    aud: 'https://oauth2.googleapis.com/token',
+    iat: now, exp: now + 3600,
+  }));
+  const signer = createSign('RSA-SHA256');
+  signer.update(`${header}.${claim}`);
+  const signature = signer.sign(creds.private_key).toString('base64')
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const r = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion: `${header}.${claim}.${signature}`,
+    }),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!r.ok) throw Object.assign(new Error(`PLAY_OAUTH_${r.status}`), { status: 502 });
+  const data = await r.json();
+  _playTokenCache = { token: data.access_token,
+    exp: Date.now() + (Number(data.expires_in) || 3600) * 1000 };
+  return _playTokenCache.token;
+}
+
+// Mock verifier — TEST ONLY (PLAY_TEST_MODE=1, used by test.sh; production
+// must never set it). Simulates Google's answers keyed by the purchase
+// token string, in the same shape as the real API responses:
+//   "valid-pack-*"  -> a paid one-time product purchase
+//   "valid-sub-*"   -> a paid, active subscription (expiry 30 days out)
+//   "voided-token"  -> a paid purchase that the voided list later reports
+//   "pending-*"    -> a purchase NOT in a paid state
+//   anything else   -> unknown to Google (verification error)
+function mockPlayVerify(productId, purchaseToken) {
+  const t = String(purchaseToken || '');
+  if (t.startsWith('valid-pack-') || t === 'voided-token')
+    return { purchaseState: 0, acknowledgementState: 1, orderId: `mock-${t}` };
+  if (t.startsWith('valid-sub-'))
+    return { paymentState: 1, autoRenewing: true, orderId: `mock-${t}`,
+             expiryTimeMillis: Date.now() + 30 * 24 * 3600 * 1000,
+             startTimeMillis: Date.now() };
+  if (t.startsWith('pending-'))
+    return { purchaseState: 1, orderId: `mock-${t}` };
+  return null;
+}
+function normalizePlayResult(d) {
+  // Subscription responses carry paymentState (0 pending, 1 received,
+  // 2 free trial, 3 deferred) + expiryTimeMillis; product responses carry
+  // purchaseState (0 purchased, 1 canceled). Both map to a single shape.
+  if (d.paymentState !== undefined || d.expiryTimeMillis !== undefined) {
+    return { kind: 'subscription',
+      paid: d.paymentState === 1 || d.paymentState === 2,
+      expiry: d.expiryTimeMillis ? new Date(Number(d.expiryTimeMillis)) : null,
+      autoRenewing: !!d.autoRenewing };
+  }
+  return { kind: 'product', paid: d.purchaseState === 0, expiry: null,
+    autoRenewing: false };
+}
+
+// Verify a purchase with the Google Play Developer API
+// (androidpublisher v3). kind chooses the products vs subscriptions
+// endpoint. Returns normalizePlayResult's shape.
+async function verifyPlayPurchase({ productId, purchaseToken, kind }) {
+  if (CONFIG.playTestMode) {
+    const m = mockPlayVerify(productId, purchaseToken);
+    if (!m) throw Object.assign(new Error('PLAY_TOKEN_UNKNOWN'), { status: 502 });
+    return normalizePlayResult(m);
+  }
+  if (!playBillingConfigured())
+    throw Object.assign(new Error('PLAY_NOT_CONFIGURED'), { status: 503 });
+  const token = await playAccessToken();
+  const base = 'https://androidpublisher.googleapis.com/androidpublisher/v3/applications/' +
+    encodeURIComponent(CONFIG.playPackageName);
+  const url = kind === 'subscription'
+    ? `${base}/purchases/subscriptions/${encodeURIComponent(productId)}/tokens/${encodeURIComponent(purchaseToken)}`
+    : `${base}/purchases/products/${encodeURIComponent(productId)}/tokens/${encodeURIComponent(purchaseToken)}`;
+  const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(15000) });
+  if (r.status === 404 || r.status === 410)
+    throw Object.assign(new Error('PLAY_TOKEN_UNKNOWN'), { status: 502 });
+  if (!r.ok) throw Object.assign(new Error(`PLAY_API_${r.status}`), { status: 502 });
+  return normalizePlayResult(await r.json());
+}
+
+// Which purchase tokens has Google voided (refunded / revoked / charged
+// back)? Pages through purchases/voidedpurchases. Mock mode reports the
+// one token the mock treats as voided.
+async function listVoidedPlayTokens() {
+  if (CONFIG.playTestMode) return ['voided-token'];
+  if (!playBillingConfigured())
+    throw Object.assign(new Error('PLAY_NOT_CONFIGURED'), { status: 503 });
+  const token = await playAccessToken();
+  const out = [];
+  let pageToken = '';
+  do {
+    const u = new URL('https://androidpublisher.googleapis.com/androidpublisher/v3/applications/' +
+      encodeURIComponent(CONFIG.playPackageName) + '/purchases/voidedpurchases');
+    u.searchParams.set('maxResults', '1000');
+    if (pageToken) u.searchParams.set('token', pageToken);
+    const r = await fetch(u, { headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(15000) });
+    if (!r.ok) throw Object.assign(new Error(`PLAY_API_${r.status}`), { status: 502 });
+    const data = await r.json();
+    for (const v of data.voidedPurchases || [])
+      if (v.purchaseToken) out.push(String(v.purchaseToken));
+    pageToken = data.tokenPagination?.nextPageToken || '';
+  } while (pageToken);
+  return out;
+}
+
+// ---------- Shared refund clawback (Play + gateway) ----------------------
+// Marks the payment refunded and takes back the credits it granted, from
+// the bucket they went to (pack -> free, plan -> plan), floored at 0. Any
+// unrecovered remainder (the user already spent those credits) is added
+// to users.credit_deficit so the shortfall stays visible — in /api/me and
+// the Admin Panel — instead of silently vanishing. A refunded plan
+// payment also expires the subscription it paid for. Idempotent: an
+// already-refunded payment is a no-op.
+function clawbackPayment(payment, reason) {
+  if (!payment || payment.status === 'refunded')
+    return { clawed: 0, deficit: 0, already: true };
+  return tx(() => {
+    db.prepare(`UPDATE payments SET status = 'refunded', note = ? WHERE id = ?`)
+      .run(`Clawback: ${String(reason || 'refunded by provider').slice(0, 200)}`, payment.id);
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(payment.user_id);
+    let clawed = 0, deficit = 0;
+    const granted = Number(payment.credits_granted || 0);
+    if (user && granted > 0) {
+      const b = creditBuckets(user);
+      if (payment.pack_id) {
+        clawed = Math.min(b.free, granted);
+        deficit = granted - clawed;
+        setBuckets(user.id, b.free - clawed, b.plan);
+      } else {
+        clawed = Math.min(b.plan, granted);
+        deficit = granted - clawed;
+        setBuckets(user.id, b.free, b.plan - clawed);
+      }
+      if (deficit > 0)
+        db.prepare('UPDATE users SET credit_deficit = credit_deficit + ? WHERE id = ?')
+          .run(deficit, user.id);
+    }
+    if (payment.plan_id) {
+      db.prepare(`UPDATE subscriptions SET status = 'expired', updated_at = datetime('now')
+                  WHERE payment_id = ? AND status IN ('active', 'grace', 'canceled')`)
+        .run(payment.id);
+    }
+    return { clawed, deficit, already: false };
+  });
+}
+
+// Claw back every succeeded google_play payment whose token the provider
+// reports as voided. Driven by the RTDN webhook and by the admin sync
+// endpoint below (which is also how test.sh exercises it — no real
+// Google calls in tests).
+function syncVoidedPurchases(tokens) {
+  const results = [];
+  for (const t of tokens || []) {
+    const p = db.prepare(`SELECT * FROM payments WHERE provider = 'google_play' AND provider_txn_id = ?`)
+      .get(String(t));
+    if (!p) { results.push({ token: String(t), found: false }); continue; }
+    const r = clawbackPayment(p, 'voided/refunded at Google Play');
+    results.push({ token: String(t), found: true, payment_id: p.id, ...r });
+  }
+  return results;
+}
+
+// ---------- Play Billing endpoints ---------------------------------------
+function findPlayProduct(kind, productId) {
+  if (kind === 'pack') {
+    const pack = db.prepare('SELECT * FROM credit_packs WHERE play_product_id = ? AND is_active = 1')
+      .get(productId);
+    return pack ? { pack } : null;
+  }
+  if (kind === 'subscription') {
+    for (const row of db.prepare('SELECT * FROM plans WHERE is_active = 1').all()) {
+      if (row.play_product_monthly === productId) return { plan: row, period: 'monthly' };
+      if (row.play_product_yearly === productId) return { plan: row, period: 'yearly' };
+    }
+  }
+  return null;
+}
+function playVerifyResult(req, payment, duplicate) {
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  return { ok: true, status: payment.status, payment_id: payment.id,
+    ...(duplicate ? { duplicate: true } : {}),
+    credits: user ? creditBuckets(user) : null };
+}
+
+app.post('/api/billing/play/verify', auth, async (req, res) => {
+  if (!playBillingConfigured())
+    return res.status(503).json({ error: 'billing_not_configured',
+      message: 'Google Play Billing is not configured on this server yet. No credits were granted.' });
+  const b = req.body || {};
+  const kind = b.kind === 'subscription' ? 'subscription' : b.kind === 'pack' ? 'pack' : null;
+  const productId = String(b.product_id || '').trim();
+  const purchaseToken = String(b.purchase_token || '').trim();
+  if (!kind || !productId || !purchaseToken)
+    return res.status(400).json({ error: 'kind ("pack" | "subscription"), product_id and purchase_token are required.' });
+  const found = findPlayProduct(kind, productId);
+  if (!found) return res.status(400).json({ error: 'Unknown product_id for this app.' });
+
+  // Idempotency + token binding: a purchase token belongs to the FIRST
+  // user who verified it. That user's replay returns the recorded outcome
+  // (no second grant); anyone else's attempt is refused.
+  const existing = db.prepare(`SELECT * FROM payments WHERE provider = 'google_play' AND provider_txn_id = ?`)
+    .get(purchaseToken);
+  if (existing) {
+    if (existing.user_id !== req.user.id)
+      return res.status(409).json({ error: 'This purchase is already linked to another account.' });
+    return res.json(playVerifyResult(req, existing, true));
+  }
+
+  let v;
+  try { v = await verifyPlayPurchase({ productId, purchaseToken, kind }); }
+  catch (e) {
+    if (e.message === 'PLAY_NOT_CONFIGURED')
+      return res.status(503).json({ error: 'billing_not_configured' });
+    return res.status(502).json({ error: 'Google Play could not verify this purchase right now. No credits were granted.' });
+  }
+
+  const amount = found.pack ? found.pack.price_pkr
+    : (found.period === 'yearly' ? found.plan.price_yearly : found.plan.price_monthly);
+  const planId = found.plan ? found.plan.id : null;
+  const packId = found.pack ? found.pack.id : null;
+
+  if (!v.paid) {
+    // Record the attempt (never a grant) so it shows in Billing history.
+    try {
+      db.prepare(`INSERT INTO payments (user_id, plan_id, pack_id, amount, currency, provider,
+                    provider_txn_id, status, period, credits_granted, note)
+                  VALUES (?, ?, ?, ?, 'PKR', 'google_play', ?, 'failed', ?, 0,
+                    'Play verification: purchase not in a paid state')`)
+        .run(req.user.id, planId, packId, amount, purchaseToken, found.period || null);
+    } catch { /* a concurrent verify recorded it first — fine */ }
+    return res.status(402).json({ error: 'This purchase is not in a paid state, so no credits were granted.' });
+  }
+
+  // Verified + paid: record the payment, then grant exactly once. The
+  // UNIQUE provider_txn_id is the guard: if a concurrent request recorded
+  // the token first, this request becomes a replay of that record.
+  let paymentId;
+  try {
+    paymentId = Number(db.prepare(
+      `INSERT INTO payments (user_id, plan_id, pack_id, amount, currency, provider,
+         provider_txn_id, status, period, credits_granted, note)
+       VALUES (?, ?, ?, ?, 'PKR', 'google_play', ?, 'succeeded', ?, ?, 'Verified with Google Play')`)
+      .run(req.user.id, planId, packId, amount, purchaseToken, found.period || null,
+           found.pack ? found.pack.credits : found.plan.credits_monthly).lastInsertRowid);
+  } catch (e) {
+    if (String(e.message).includes('UNIQUE')) {
+      const row = db.prepare(`SELECT * FROM payments WHERE provider = 'google_play' AND provider_txn_id = ?`)
+        .get(purchaseToken);
+      if (row && row.user_id !== req.user.id)
+        return res.status(409).json({ error: 'This purchase is already linked to another account.' });
+      if (row) return res.json(playVerifyResult(req, row, true));
+    }
+    throw e;
+  }
+
+  if (found.pack) {
+    tx(() => {
+      const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+      const bk = creditBuckets(user);
+      setBuckets(req.user.id, bk.free + found.pack.credits, bk.plan);
+    });
+  } else {
+    activateSubscription(req.user.id, found.plan,
+      { period: found.period, paymentId, ...(v.expiry ? { periodEnd: v.expiry } : {}) });
+  }
+  const row = db.prepare('SELECT * FROM payments WHERE id = ?').get(paymentId);
+  res.json(playVerifyResult(req, row, false));
+});
+
+// Real-Time Developer Notifications, delivered by Google Cloud Pub/Sub as
+// a push envelope: { message: { data: <base64 JSON>, messageId }, ... }.
+// When PLAY_RTDN_SECRET is set, the Pub/Sub push URL must carry it as
+// ?secret=<value> (or the x-rtdn-secret header) — anything else is
+// refused. Envelopes are ACKed (200) even for notification kinds we don't
+// act on, so Pub/Sub doesn't retry them forever.
+app.post('/api/billing/play/rtdn', (req, res) => {
+  if (CONFIG.playRtdnSecret) {
+    const given = String(req.query.secret || req.headers['x-rtdn-secret'] || '');
+    const a = Buffer.from(given), c = Buffer.from(CONFIG.playRtdnSecret);
+    if (a.length !== c.length || !timingSafeEqual(a, c))
+      return res.status(401).json({ error: 'Invalid RTDN secret.' });
+  }
+  let note = null;
+  try {
+    const data = req.body?.message?.data;
+    note = data ? JSON.parse(Buffer.from(String(data), 'base64').toString('utf8')) : req.body;
+  } catch { return res.status(400).json({ error: 'Malformed RTDN envelope.' }); }
+  const voided = note?.voidedPurchaseNotification;
+  if (voided?.purchaseToken) {
+    const p = db.prepare(`SELECT * FROM payments WHERE provider = 'google_play' AND provider_txn_id = ?`)
+      .get(String(voided.purchaseToken));
+    if (p) clawbackPayment(p, 'Google Play voided purchase (RTDN)');
+  }
+  // Other notification kinds (subscription renewed/canceled/…) need no
+  // action here: entitlement expiry is enforced lazily by
+  // refreshSubscriptionState, and renewals arrive as new verified
+  // purchases through the verify endpoint.
+  res.json({ ok: true });
+});
+
+// Admin-triggered reconcile: pull Google's voided-purchases list and claw
+// back anything refunded. Also the hook test.sh drives (mocked list).
+app.post('/api/admin/billing/sync-voided', auth, requireAdmin, async (req, res) => {
+  try {
+    const tokens = await listVoidedPlayTokens();
+    res.json({ ok: true, checked: tokens.length, results: syncVoidedPurchases(tokens) });
+  } catch (e) {
+    if (e.message === 'PLAY_NOT_CONFIGURED')
+      return res.status(503).json({ error: 'billing_not_configured' });
+    return res.status(502).json({ error: 'Could not fetch voided purchases from Google Play.' });
+  }
+});
+
+// ---------- Payment gateway: provider abstraction + PayFast adapter ------
+// A gateway provider implements:
+//   createCheckout({ basketId, amount, email, mobile, description,
+//                    successUrl, failureUrl, callbackUrl })
+//     -> { url, method, params }  (the browser is sent here to pay)
+//   verifyWebhook(body) -> { verified, basketId, txnId, amount,
+//                            status: 'success'|'failed'|'reversal'|'pending' }
+// Adding another aggregator later = one more adapter in GATEWAY_PROVIDERS.
+function payfastSignature(merchantId, merchantName, amount, basketId) {
+  // PayFast (APPS) hosted-checkout signature, per the merchant
+  // integration guide: MD5 hex of "MERCHANT_ID:MERCHANT_NAME:TXNAMT:BASKET_ID".
+  return createHash('md5')
+    .update(`${merchantId}:${merchantName}:${amount}:${basketId}`).digest('hex');
+}
+function gatewayConfigured() {
+  return CONFIG.gatewayProvider === 'payfast' &&
+    !!CONFIG.payfast.merchantId && !!CONFIG.payfast.securedKey;
+}
+const payfastAdapter = {
+  // Hosted checkout: mint an access token (GetAccessToken), then hand the
+  // browser the PostTransaction URL + form fields — PayFast hosts the
+  // payment page itself (Easypaisa / JazzCash / cards / bank channels).
+  async createCheckout({ basketId, amount, email, mobile, description,
+                         successUrl, failureUrl, callbackUrl }) {
+    const pf = CONFIG.payfast;
+    let accessToken = 'mock-access-token';
+    if (!CONFIG.gatewayTestMode) {
+      const r = await fetch(`${pf.baseUrl}/Ecommerce/api/Transaction/GetAccessToken`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          MERCHANT_ID: pf.merchantId, SECURED_KEY: pf.securedKey,
+          BASKET_ID: basketId, TXNAMT: String(amount),
+        }),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!r.ok) throw Object.assign(new Error(`PAYFAST_TOKEN_${r.status}`), { status: 502 });
+      const data = await r.json().catch(() => null);
+      accessToken = data?.ACCESS_TOKEN || data?.access_token || '';
+      if (!accessToken) throw Object.assign(new Error('PAYFAST_TOKEN_MISSING'), { status: 502 });
+    }
+    return {
+      url: `${pf.baseUrl}/Ecommerce/api/Transaction/PostTransaction`,
+      method: 'POST',
+      params: {
+        MERCHANT_ID: pf.merchantId,
+        MERCHANT_NAME: pf.merchantName,
+        TOKEN: accessToken,
+        PROCCODE: '00',
+        TXNAMT: String(amount),
+        CUSTOMER_MOBILE_NO: mobile || '',
+        CUSTOMER_EMAIL_ADDRESS: email || '',
+        SIGNATURE: payfastSignature(pf.merchantId, pf.merchantName, amount, basketId),
+        VERSION: 'AJKAI-1.0',
+        TXNDESC: description,
+        SUCCESS_URL: successUrl,
+        FAILURE_URL: failureUrl,
+        BASKET_ID: basketId,
+        ORDER_DATE: new Date().toISOString().slice(0, 19).replace('T', ' '),
+        CHECKOUT_URL: callbackUrl,
+      },
+    };
+  },
+  // IPN verification. An IPN is trusted ONLY when its SIGNATURE matches
+  // the documented MD5 construction recomputed with OUR configured
+  // merchant id/name over the IPN's own amount + basket id — and the
+  // caller additionally checks basket + amount against the pending
+  // payment record we created at checkout.
+  verifyWebhook(body) {
+    const pf = CONFIG.payfast;
+    const g = (...names) => {
+      for (const n of names) {
+        const val = body?.[n];
+        if (val !== undefined && val !== null && String(val) !== '') return String(val);
+      }
+      return '';
+    };
+    const basketId = g('BASKET_ID', 'basket_id', 'ORDER_NO', 'order_no');
+    const txnId = g('TRANSACTION_ID', 'transaction_id', 'TXN_ID');
+    const amount = g('TXNAMT', 'TXN_AMOUNT', 'amount', 'AMOUNT');
+    const rawStatus = g('RESPONSE_CODE', 'err_code', 'ERR_CODE', 'STATUS', 'status', 'code').toLowerCase();
+    const signature = g('SIGNATURE', 'signature').toLowerCase();
+    const expected = payfastSignature(pf.merchantId, pf.merchantName, amount, basketId);
+    let verified = false;
+    if (signature && basketId && amount) {
+      const a = Buffer.from(signature), c = Buffer.from(expected);
+      verified = a.length === c.length && timingSafeEqual(a, c);
+    }
+    let status = 'pending';
+    if (['refunded', 'refund', 'reversed', 'reversal', 'chargeback', 'voided', 'void'].includes(rawStatus))
+      status = 'reversal';
+    else if (['00', '0', 'success', 'succeeded', 'completed', 'approved'].includes(rawStatus))
+      status = 'success';
+    else if (['failed', 'failure', 'cancelled', 'cancel', 'declined', 'error'].includes(rawStatus))
+      status = 'failed';
+    return { verified, basketId, txnId, status, amount: Number(amount) || 0 };
+  },
+};
+const GATEWAY_PROVIDERS = { payfast: payfastAdapter };
+function activeGateway() { return GATEWAY_PROVIDERS[CONFIG.gatewayProvider] || null; }
+
+// Start a gateway checkout for a credit pack. Creates the payments row
+// (status pending, provider_txn_id = our basket/order id) FIRST, so the
+// webhook can be matched and made idempotent; grants nothing here.
+app.post('/api/billing/gateway/checkout', auth, async (req, res) => {
+  const gw = activeGateway();
+  if (!gw || !gatewayConfigured())
+    return res.status(503).json({ error: 'gateway_not_configured',
+      message: 'The payment gateway is not configured on this server yet. No payment was started.' });
+  const pack = db.prepare('SELECT * FROM credit_packs WHERE id = ?')
+    .get(Number(req.body?.pack_id || 0));
+  if (!pack || !pack.is_active)
+    return res.status(404).json({ error: 'That credit pack is not available.' });
+  const basketId = `AJK-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`.toUpperCase();
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  const paymentId = Number(db.prepare(
+    `INSERT INTO payments (user_id, plan_id, pack_id, amount, currency, provider,
+       provider_txn_id, status, period, credits_granted, note)
+     VALUES (?, NULL, ?, ?, 'PKR', ?, ?, 'pending', NULL, 0,
+       'Gateway checkout created — awaiting provider confirmation')`)
+    .run(req.user.id, pack.id, pack.price_pkr, CONFIG.gatewayProvider, basketId).lastInsertRowid);
+  const base = CONFIG.publicBaseUrl || `${req.protocol}://${req.get('host')}`;
+  try {
+    const checkout = await gw.createCheckout({
+      basketId, amount: pack.price_pkr,
+      email: user?.email || '', mobile: String(req.body?.mobile || ''),
+      description: `AJK AI — ${pack.credits} credits pack`,
+      successUrl: `${base}/?gateway=success`,
+      failureUrl: `${base}/?gateway=failed`,
+      callbackUrl: `${base}/api/billing/gateway/webhook`,
+    });
+    res.status(201).json({ ok: true, payment_id: paymentId, basket_id: basketId,
+      provider: CONFIG.gatewayProvider, checkout_url: checkout.url,
+      method: checkout.method, params: checkout.params });
+  } catch (e) {
+    db.prepare(`UPDATE payments SET status = 'failed', note = 'Gateway checkout failed to start' WHERE id = ?`)
+      .run(paymentId);
+    return res.status(502).json({ error: 'The payment gateway could not start this checkout. No payment was taken.' });
+  }
+});
+
+// Gateway IPN/webhook. Grants ONLY on a signature-verified success for a
+// basket we created, with a matching amount — exactly once (a replayed
+// success on an already-succeeded payment is a no-op). Verified reversals
+// run the shared clawback.
+app.post('/api/billing/gateway/webhook', (req, res) => {
+  const gw = activeGateway();
+  if (!gw || !gatewayConfigured())
+    return res.status(503).json({ error: 'gateway_not_configured' });
+  const body = { ...(req.query || {}), ...(req.body || {}) };
+  const v = gw.verifyWebhook(body);
+  if (!v.verified || !v.basketId)
+    return res.status(400).json({ error: 'Webhook signature verification failed.' });
+  const payment = db.prepare(`SELECT * FROM payments WHERE provider = ? AND provider_txn_id = ?`)
+    .get(CONFIG.gatewayProvider, v.basketId);
+  if (!payment) return res.status(404).json({ error: 'Unknown basket/order id.' });
+  if (Number(payment.amount) !== Number(v.amount))
+    return res.status(400).json({ error: 'Webhook amount does not match the order.' });
+
+  if (v.status === 'success') {
+    if (payment.status === 'succeeded') return res.json({ ok: true, duplicate: true, granted: 0 });
+    if (payment.status === 'refunded') return res.json({ ok: true, granted: 0, note: 'already refunded' });
+    const pack = payment.pack_id
+      ? db.prepare('SELECT * FROM credit_packs WHERE id = ?').get(payment.pack_id) : null;
+    const grant = pack ? pack.credits : 0;
+    tx(() => {
+      db.prepare(`UPDATE payments SET status = 'succeeded', credits_granted = ?, note = ? WHERE id = ?`)
+        .run(grant, `Gateway payment verified (txn ${v.txnId || 'n/a'})`, payment.id);
+      if (grant > 0) {
+        const user = db.prepare('SELECT * FROM users WHERE id = ?').get(payment.user_id);
+        const bk = creditBuckets(user);
+        setBuckets(payment.user_id, bk.free + grant, bk.plan);
+      }
+    });
+    return res.json({ ok: true, granted: grant });
+  }
+  if (v.status === 'reversal') {
+    if (payment.status === 'succeeded') {
+      const r = clawbackPayment(payment, 'gateway reversal/refund');
+      return res.json({ ok: true, clawed_back: r.clawed, deficit: r.deficit });
+    }
+    return res.json({ ok: true, note: 'nothing to claw back' });
+  }
+  if (v.status === 'failed') {
+    if (payment.status === 'pending')
+      db.prepare(`UPDATE payments SET status = 'failed', note = 'Gateway reported the payment failed' WHERE id = ?`)
+        .run(payment.id);
+    return res.json({ ok: true, granted: 0 });
+  }
+  return res.json({ ok: true, note: 'pending — nothing granted' });
+});
+
 // ---------- Admin API (all routes require the is_admin flag) ----------
 app.get('/api/admin/users', auth, requireAdmin, (req, res) => {
-  const users = db.prepare('SELECT id, email, credits, free_credits, plan_credits, is_admin, created_at FROM users ORDER BY id').all();
+  const users = db.prepare('SELECT id, email, credits, free_credits, plan_credits, credit_deficit, is_admin, created_at FROM users ORDER BY id').all();
   const subs = db.prepare('SELECT * FROM subscriptions WHERE id IN (SELECT MAX(id) FROM subscriptions GROUP BY user_id)').all();
   const byUser = new Map(subs.map(s => [s.user_id, s]));
   res.json({ users: users.map(u => ({ ...u, subscription: subscriptionView(byUser.get(u.id) || null) })) });
@@ -1000,15 +1625,21 @@ app.put('/api/admin/plans/:id', auth, requireAdmin, (req, res) => {
       resolution: b.resolution !== undefined ? String(b.resolution).toUpperCase() : plan.resolution,
       model: b.model !== undefined ? String(b.model).slice(0, 120) : plan.model,
       is_active: b.is_active !== undefined ? (b.is_active ? 1 : 0) : plan.is_active,
+      // Google Play subscription product ids (must match Play Console).
+      play_product_monthly: b.play_product_monthly !== undefined
+        ? (String(b.play_product_monthly).trim().slice(0, 120) || null) : plan.play_product_monthly,
+      play_product_yearly: b.play_product_yearly !== undefined
+        ? (String(b.play_product_yearly).trim().slice(0, 120) || null) : plan.play_product_yearly,
     };
     if (!RESOLUTIONS.includes(updated.resolution))
       return res.status(400).json({ error: `resolution must be one of: ${RESOLUTIONS.join(', ')}` });
     db.prepare(`UPDATE plans SET price_monthly = ?, price_yearly = ?, credits_monthly = ?,
                 quality_label = ?, quality = ?, resolution = ?, model = ?, is_active = ?,
+                play_product_monthly = ?, play_product_yearly = ?,
                 updated_at = datetime('now') WHERE id = ?`)
       .run(updated.price_monthly, updated.price_yearly, updated.credits_monthly,
            updated.quality_label, updated.quality, updated.resolution, updated.model,
-           updated.is_active, plan.id);
+           updated.is_active, updated.play_product_monthly, updated.play_product_yearly, plan.id);
     res.json({ plan: getPlan(plan.id) });
   } catch (e) {
     if (e.status === 400) return res.status(400).json({ error: 'Prices and credits must be non-negative whole numbers.' });
@@ -1025,8 +1656,9 @@ function validPeriod(b) { return b.period === 'yearly' ? 'yearly' : b.period ===
 
 // TEST/MANUAL payment path — admin only. Records a succeeded payment with
 // provider "manual_test" and activates the subscription from it. This is a
-// stand-in for testing until real Google Play Billing arrives in Phase 3;
-// it is NOT a checkout and end users cannot call it.
+// stand-in for testing alongside the automatic Play Billing pipeline
+// (Phase 3, /api/billing/play/*); it is NOT a checkout and end users
+// cannot call it.
 app.post('/api/admin/users/:id/manual-payment', auth, requireAdmin, (req, res) => {
   const u = adminTargetUser(req, res); if (!u) return;
   const b = req.body || {};
@@ -1134,8 +1766,10 @@ app.put('/api/admin/packs/:id', auth, requireAdmin, (req, res) => {
     const credits = intField('credits');
     const price = intField('price_pkr');
     const active = b.is_active !== undefined ? (b.is_active ? 1 : 0) : pack.is_active;
-    db.prepare(`UPDATE credit_packs SET credits = ?, price_pkr = ?, is_active = ?,
-                updated_at = datetime('now') WHERE id = ?`).run(credits, price, active, pack.id);
+    const playId = b.play_product_id !== undefined
+      ? (String(b.play_product_id).trim().slice(0, 120) || null) : pack.play_product_id;
+    db.prepare(`UPDATE credit_packs SET credits = ?, price_pkr = ?, is_active = ?, play_product_id = ?,
+                updated_at = datetime('now') WHERE id = ?`).run(credits, price, active, playId, pack.id);
     res.json({ pack: db.prepare('SELECT * FROM credit_packs WHERE id = ?').get(pack.id) });
   } catch (e) {
     if (e.status === 400) return res.status(400).json({ error: 'Credits and price must be non-negative whole numbers.' });

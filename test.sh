@@ -19,6 +19,14 @@
 # tests: this script starts a third instance (port 18096, own DB,
 # JOINED_DIR + PAYMENT_EASYPAISA set) plus a python http server for two
 # tiny clips it generates with the pinned ffmpeg-static binary.
+# The automatic-payments tests come in two parts: (1) against THIS main
+# server, which must be started WITHOUT any Play/gateway env — the
+# endpoints must fail closed (503, nothing granted); (2) a self-contained
+# fourth instance (port 18095, own DB) started by this script with
+# PLAY_TEST_MODE=1 (token-keyed mock Play verifier) and GATEWAY_TEST_MODE=1
+# + dummy PayFast merchant values (the real token-mint call is skipped,
+# but IPN signature verification runs for real, signed by
+# test-gateway-stub.js). No real Google or PayFast calls anywhere.
 # e.g.  ADMIN_EMAIL=admin@example.com FAL_MODEL_4K=test-4k-model TEST_RECORD_FAL_BODY=1 TRANSLATE_API_BASE=http://127.0.0.1:18099 npm start
 # Run against a FRESH database (fixed test emails are registered each run).
 TEST_FAL_MODEL_4K=${TEST_FAL_MODEL_4K:-fal-ai/kling-video/o3/4k/text-to-video}
@@ -80,6 +88,21 @@ check "credits still 100" "100" "$(echo $HIST2 | python3 -c 'import sys,json;pri
 echo "--- report endpoint ---"
 RP=$(curl -s -X POST $B/api/report -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "{\"generation_id\":$JOBID,\"reason\":\"test report\"}")
 check "report accepted" "True" "$(echo $RP | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
+
+echo "--- automatic payments: FAIL CLOSED while unconfigured (main server) ---"
+# The main server runs with no PLAY_*/GATEWAY_* env, so both automatic
+# pipelines must refuse and grant nothing.
+CFG0=$(curl -s $B/api/config)
+check "config: play_billing_configured is false" "False" "$(echo $CFG0 | python3 -c 'import sys,json;print(json.load(sys.stdin)["play_billing_configured"])')"
+check "config: gateway_configured is false" "False" "$(echo $CFG0 | python3 -c 'import sys,json;print(json.load(sys.stdin)["gateway_configured"])')"
+UNCONF=$(curl -s -w '\n%{http_code}' -X POST $B/api/billing/play/verify -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"credits_100","purchase_token":"valid-pack-100"}')
+check "play verify unconfigured -> 503" "503" "$(echo "$UNCONF" | tail -1)"
+check "play verify unconfigured error is billing_not_configured" "billing_not_configured" "$(echo "$UNCONF" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+check "unconfigured play verify granted nothing" "100" "$(curl -s $B/api/me -H "Authorization: Bearer $TOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+GWUNCONF=$(curl -s -w '\n%{http_code}' -X POST $B/api/billing/gateway/checkout -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"pack_id":1}')
+check "gateway checkout unconfigured -> 503" "503" "$(echo "$GWUNCONF" | tail -1)"
+check "gateway checkout unconfigured error is gateway_not_configured" "gateway_not_configured" "$(echo "$GWUNCONF" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+check "gateway webhook unconfigured -> 503" "503" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/billing/gateway/webhook -H 'Content-Type: application/x-www-form-urlencoded' -d 'BASKET_ID=X&TXNAMT=1&RESPONSE_CODE=00&SIGNATURE=x')"
 
 echo "--- monetization: plans API (public) ---"
 PLANS=$(curl -s $B/api/plans); echo "$PLANS" | head -c 400; echo
@@ -375,6 +398,118 @@ check "joined file is served (200)" "200" "$(curl -s -o /tmp/joined-dl.mp4 -w '%
 check "joined output duration ~2s" "ok" "$("$FFBIN" -i /tmp/joined-dl.mp4 2>&1 | python3 -c 'import sys,re; m=re.search(r"Duration: (\d+):(\d+):([\d.]+)", sys.stdin.read()); d=int(m.group(1))*3600+int(m.group(2))*60+float(m.group(3)) if m else -1; print("ok" if 1.4 <= d <= 2.6 else "bad")')"
 check "joined output normalized to first clip 320x240" "320x240" "$("$FFBIN" -i /tmp/joined-dl.mp4 2>&1 | python3 -c 'import sys,re; m=re.search(r"[,\s](\d{2,5})x(\d{2,5})(?=[,\s\[])", sys.stdin.read()); print(m.group(1)+"x"+m.group(2) if m else "none")')"
 kill $SRV3_PID $CLIP_PID 2>/dev/null
+
+echo "--- automatic payments: Play Billing (mocked verifier) + PayFast gateway (real signature checks) ---"
+# Self-contained FOURTH instance (own throwaway DB). PLAY_TEST_MODE=1 swaps
+# in the token-keyed mock Play verifier; GATEWAY_TEST_MODE=1 skips only the
+# real PayFast token-mint call — IPN signature verification runs for real
+# against bodies signed by test-gateway-stub.js. No real provider calls.
+B4=http://127.0.0.1:18095
+rm -f /tmp/myvideoai-billing-test.db
+BILL_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-billing-test.db PORT=18095 FAL_KEY=dummy_test_key "$BILL_JWT_NAME=billing-instance-dummy-value" \
+  ADMIN_EMAIL=billadmin@example.com PLAY_TEST_MODE=1 \
+  GATEWAY_PROVIDER=payfast PAYFAST_MERCHANT_ID=testmerchant "PAYFAST_MERCHANT_NAME=AJK AI" \
+  PAYFAST_SECURED_KEY=test-secured-key-dummy GATEWAY_TEST_MODE=1 \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-billing-test.log 2>&1 &
+SRV4_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B4/api/health && break || sleep 0.25; done
+CFG4=$(curl -s $B4/api/config)
+check "billing instance: play_billing_configured true (mock mode)" "True" "$(echo $CFG4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["play_billing_configured"])')"
+check "billing instance: gateway_configured true (mock mode)" "True" "$(echo $CFG4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["gateway_configured"])')"
+PL4=$(curl -s $B4/api/plans)
+check "normal plan exposes play product ids" "ajk_normal_monthly/ajk_normal_yearly" "$(echo $PL4 | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["plans"] if x["id"]=="normal"][0];print(p["play_product_id"]["monthly"]+"/"+p["play_product_id"]["yearly"])')"
+PK4=$(curl -s $B4/api/packs)
+check "pack 100 exposes play product id credits_100" "credits_100" "$(echo $PK4 | python3 -c 'import sys,json;d=json.load(sys.stdin);print([x for x in d["packs"] if x["credits"]==100][0]["play_product_id"])')"
+PACK100_4=$(echo $PK4 | python3 -c 'import sys,json;d=json.load(sys.stdin);print([x for x in d["packs"] if x["credits"]==100][0]["id"])')
+PACK50_4=$(echo $PK4 | python3 -c 'import sys,json;d=json.load(sys.stdin);print([x for x in d["packs"] if x["credits"]==50][0]["id"])')
+BR4=$(curl -s -X POST $B4/api/auth/register -H 'Content-Type: application/json' -d '{"email":"billuser@example.com","password":"password123"}')
+BTOKEN=$(echo $BR4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+AR4=$(curl -s -X POST $B4/api/auth/register -H 'Content-Type: application/json' -d '{"email":"billadmin@example.com","password":"password123"}')
+ATOKEN4=$(echo $AR4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+OR4=$(curl -s -X POST $B4/api/auth/register -H 'Content-Type: application/json' -d '{"email":"billother@example.com","password":"password123"}')
+OTOKEN4=$(echo $OR4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+
+echo "--- play billing: (b) valid pack token grants exactly once ---"
+V1=$(curl -s -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"credits_100","purchase_token":"valid-pack-100"}')
+check "play pack verify ok" "True" "$(echo $V1 | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
+check "play pack verify status succeeded" "succeeded" "$(echo $V1 | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])')"
+check "play pack grant: free bucket 100 signup + 100 pack = 200" "200" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
+V2=$(curl -s -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"credits_100","purchase_token":"valid-pack-100"}')
+check "play pack replay flagged duplicate" "True" "$(echo $V2 | python3 -c 'import sys,json;print(json.load(sys.stdin).get("duplicate"))')"
+check "play pack replay granted nothing more (total still 200)" "200" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+
+echo "--- play billing: (f) a token is bound to its first user ---"
+check "other user replaying the token -> 409" "409" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $OTOKEN4" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"credits_100","purchase_token":"valid-pack-100"}')"
+check "other user balance unchanged (100)" "100" "$(curl -s $B4/api/me -H "Authorization: Bearer $OTOKEN4" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+
+echo "--- play billing: (d) unknown product / unverifiable / unpaid grant nothing ---"
+check "unknown play product -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"nope_product","purchase_token":"valid-pack-100"}')"
+check "token google does not know -> 502" "502" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"credits_100","purchase_token":"bogus-token"}')"
+check "purchase not in paid state -> 402" "402" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"credits_50","purchase_token":"pending-pack-50"}')"
+check "failed verifications granted nothing (total still 200)" "200" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+
+echo "--- play billing: (c) valid subscription token activates the plan ---"
+V3=$(curl -s -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d '{"kind":"subscription","product_id":"ajk_normal_monthly","purchase_token":"valid-sub-monthly"}')
+check "play sub verify ok" "True" "$(echo $V3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
+BME=$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN"); echo "$BME"
+check "play sub: current plan is normal" "normal" "$(echo $BME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan"]["id"])')"
+check "play sub: plan bucket granted 100" "100" "$(echo $BME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
+check "play sub: subscription status active" "active" "$(echo $BME | python3 -c 'import sys,json;print(json.load(sys.stdin)["subscription"]["status"])')"
+check "play sub: total = 200 free + 100 plan = 300" "300" "$(echo $BME | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+
+echo "--- play billing: (e) voided purchase sync claws credits back ---"
+V4=$(curl -s -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"credits_100","purchase_token":"voided-token"}')
+check "voided-token purchase grants first (free 300)" "300" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
+SYNC=$(curl -s -X POST $B4/api/admin/billing/sync-voided -H "Authorization: Bearer $ATOKEN4" -H 'Content-Type: application/json' -d '{}')
+check "sync-voided ok" "True" "$(echo $SYNC | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
+check "sync-voided found and clawed the payment" "100" "$(echo $SYNC | python3 -c 'import sys,json;r=[x for x in json.load(sys.stdin)["results"] if x.get("token")=="voided-token"][0];print(r["clawed"])')"
+check "clawback: free bucket back to 200" "200" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
+check "clawback fully recovered: credit_deficit 0" "0" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credit_deficit"])')"
+check "voided payment marked refunded" "refunded" "$(curl -s $B4/api/payments -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print([p for p in json.load(sys.stdin)["payments"] if p["provider_txn_id"]=="voided-token"][0]["status"])')"
+
+echo "--- gateway: checkout creates a pending payment and grants nothing ---"
+CO1=$(curl -s -w '\n%{http_code}' -X POST $B4/api/billing/gateway/checkout -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d "{\"pack_id\":$PACK100_4}")
+check "gateway checkout -> 201" "201" "$(echo "$CO1" | tail -1)"
+CO1B=$(echo "$CO1" | sed '$d')
+BASKET1=$(echo $CO1B | python3 -c 'import sys,json;print(json.load(sys.stdin)["basket_id"])')
+check "gateway checkout URL is the PayFast PostTransaction endpoint" "yes" "$(echo $CO1B | python3 -c 'import sys,json;u=json.load(sys.stdin)["checkout_url"];print("yes" if u.endswith("/Ecommerce/api/Transaction/PostTransaction") else "no")')"
+check "gateway checkout params carry the merchant signature" "yes" "$(echo $CO1B | python3 -c 'import sys,json;s=json.load(sys.stdin)["params"].get("SIGNATURE","");print("yes" if len(s)==32 else "no")')"
+check "gateway checkout granted nothing (total still 300)" "300" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+
+echo "--- gateway: (b) correctly-signed success webhook grants exactly once ---"
+WB1=$(node "$(dirname "$0")/test-gateway-stub.js" testmerchant "AJK AI" 1499 "$BASKET1" 00 TXN-GW-1)
+WH1=$(curl -s -X POST $B4/api/billing/gateway/webhook -H 'Content-Type: application/x-www-form-urlencoded' -d "$WB1")
+check "gateway success webhook grants 100" "100" "$(echo $WH1 | python3 -c 'import sys,json;print(json.load(sys.stdin)["granted"])')"
+check "gateway grant landed in free bucket (300)" "300" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
+WH1B=$(curl -s -X POST $B4/api/billing/gateway/webhook -H 'Content-Type: application/x-www-form-urlencoded' -d "$WB1")
+check "gateway webhook replay flagged duplicate" "True" "$(echo $WH1B | python3 -c 'import sys,json;print(json.load(sys.stdin).get("duplicate"))')"
+check "gateway replay granted nothing more (free still 300)" "300" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
+
+echo "--- gateway: (c) bad signature rejected, (d) failure status grants nothing ---"
+CO2=$(curl -s -X POST $B4/api/billing/gateway/checkout -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d "{\"pack_id\":$PACK50_4}")
+BASKET2=$(echo $CO2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["basket_id"])')
+WBAD=$(node "$(dirname "$0")/test-gateway-stub.js" testmerchant "WRONG NAME" 899 "$BASKET2" 00 TXN-GW-BAD)
+check "bad-signature webhook -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B4/api/billing/gateway/webhook -H 'Content-Type: application/x-www-form-urlencoded' -d "$WBAD")"
+check "bad signature granted nothing (free still 300)" "300" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
+WFAIL=$(node "$(dirname "$0")/test-gateway-stub.js" testmerchant "AJK AI" 899 "$BASKET2" failed TXN-GW-2)
+WHF=$(curl -s -X POST $B4/api/billing/gateway/webhook -H 'Content-Type: application/x-www-form-urlencoded' -d "$WFAIL")
+check "failure webhook grants 0" "0" "$(echo $WHF | python3 -c 'import sys,json;print(json.load(sys.stdin)["granted"])')"
+check "failure webhook granted nothing (free still 300)" "300" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
+check "failed gateway payment marked failed" "failed" "$(curl -s $B4/api/payments -H "Authorization: Bearer $BTOKEN" | python3 -c "import sys,json;print([p for p in json.load(sys.stdin)['payments'] if p['provider_txn_id']=='$BASKET2'][0]['status'])")"
+
+echo "--- gateway: (e) verified reversal claws credits back ---"
+CO3=$(curl -s -X POST $B4/api/billing/gateway/checkout -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d "{\"pack_id\":$PACK50_4}")
+BASKET3=$(echo $CO3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["basket_id"])')
+WSUC=$(node "$(dirname "$0")/test-gateway-stub.js" testmerchant "AJK AI" 899 "$BASKET3" 00 TXN-GW-3)
+curl -s -X POST $B4/api/billing/gateway/webhook -H 'Content-Type: application/x-www-form-urlencoded' -d "$WSUC" > /dev/null
+check "gateway pack-50 grant landed (free 350)" "350" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
+WREV=$(node "$(dirname "$0")/test-gateway-stub.js" testmerchant "AJK AI" 899 "$BASKET3" refunded TXN-GW-3)
+WHR=$(curl -s -X POST $B4/api/billing/gateway/webhook -H 'Content-Type: application/x-www-form-urlencoded' -d "$WREV")
+check "reversal webhook claws back 50" "50" "$(echo $WHR | python3 -c 'import sys,json;print(json.load(sys.stdin)["clawed_back"])')"
+check "reversal: free bucket back to 300" "300" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
+check "reversed gateway payment marked refunded" "refunded" "$(curl -s $B4/api/payments -H "Authorization: Bearer $BTOKEN" | python3 -c "import sys,json;print([p for p in json.load(sys.stdin)['payments'] if p['provider_txn_id']=='$BASKET3'][0]['status'])")"
+kill $SRV4_PID 2>/dev/null
 
 echo "--- rate limit: burst until 429 ---"
 FOUND429="no"

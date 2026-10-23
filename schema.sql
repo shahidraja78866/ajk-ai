@@ -117,3 +117,16 @@ CREATE TABLE IF NOT EXISTS pack_purchases (
   decided_at      TEXT,
   decided_by      INTEGER REFERENCES users(id)
 );
+
+-- === Automatic payments (migration v6, applied automatically by server.js) ===
+-- plans gains:        play_product_monthly, play_product_yearly
+--                     (Google Play subscription product ids; defaults
+--                      ajk_<plan>_monthly / ajk_<plan>_yearly, admin-editable)
+-- credit_packs gains: play_product_id (defaults credits_50/100/250)
+-- users gains:        credit_deficit (credits a refund clawback could not
+--                     recover because they were already spent)
+-- payments gains:     pack_id (set for pack payments — plan_id stays NULL),
+--                     credits_granted (exactly what the payment granted,
+--                     so a refund can claw back the same amount from the
+--                     same bucket). provider values now also include
+--                     'google_play' and 'payfast'.

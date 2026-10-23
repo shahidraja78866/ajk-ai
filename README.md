@@ -135,6 +135,17 @@ joining with real ffmpeg normalization are covered. Latest full run:
 **150/150 checks passed** (dummy fal key only; see `test.sh` header for the
 server env the battery expects).
 
+**Update (2026-10-23, automatic payments):** the suite now also covers the
+Play Billing pipeline (mocked verifier) and the PayFast gateway
+(mock-signed IPNs): fail-closed 503s on the unconfigured main server;
+valid pack token grants exactly once and replays are no-ops; subscription
+token activates the plan; unknown/unpaid tokens grant nothing; a token
+can't be replayed by another user; voided-purchase sync claws credits
+back and marks the payment refunded; gateway checkout creates a pending
+payment; a correctly-signed success IPN grants once (replay no-op); a bad
+signature is rejected; a failure IPN grants nothing; a reversal IPN
+claws back. Latest full run: **201/201 checks passed**.
+
 ## Safety built in
 - Key and JWT secret live only in `.env`; `/api/config` returns only public settings.
 - Credits are deducted and the job recorded in **one atomic transaction** (double-spend safe).
@@ -189,11 +200,12 @@ retries. A new activation supersedes the previous subscription.
 which is reachable **only** from a succeeded payment record or an admin
 action. There is no user-facing activation endpoint.
 
-**Payments (Phase 1):** real Google Play Billing arrives in Phase 3. For
-testing there is an **admin-only** manual path —
-`POST /api/admin/users/:id/manual-payment` — which records a payment with
+**Payments (Phase 1):** the **admin-only** manual path —
+`POST /api/admin/users/:id/manual-payment` — records a payment with
 provider `manual_test` (clearly marked, no real charge) and activates the
-subscription from it. Users can read their own history at `GET /api/payments`.
+subscription from it. It remains available for testing/comping alongside
+the automatic pipelines below. Users can read their own history at
+`GET /api/payments`.
 
 **Admin:** set `ADMIN_EMAIL` in `.env`; that account gets `is_admin` (at
 registration, login, or boot). Admin Panel: **`/admin`**. Admin API:
@@ -202,6 +214,200 @@ registration, login, or boot). Admin Panel: **`/admin`**. Admin API:
 cancel-subscription`, `GET /api/admin/payments`, `GET /api/admin/revenue`
 (totals by plan/status + monthly revenue, succeeded payments only).
 All admin endpoints return 403 for non-admin users.
+
+## Google Play Billing (automatic — the Android app pipeline)
+
+This is the fully automatic purchase pipeline for the Android (TWA) app:
+the user pays inside Google Play → the app sends the purchase token to
+this backend → the backend verifies it **with Google** → credits land
+instantly, exactly once → refunds/voids claw the credits back.
+
+```
+Play app ──purchase──▶ Google Play ──token──▶ POST /api/billing/play/verify
+                                                    │ verify with Google
+                                                    │ (androidpublisher v3)
+                                                    ▼
+                                     payments row (provider "google_play",
+                                     provider_txn_id = purchase token)
+                                                    │ paid?
+                                          ┌──yes────┴────no──┐
+                                          ▼                  ▼
+                              pack → free_credits      attempt recorded
+                              plan → activateSubscription  (status failed,
+                              (period end = Google expiry)   no grant)
+Refunds: RTDN webhook (voidedPurchaseNotification) and/or the admin
+"sync voided" reconcile ──▶ shared clawback (below).
+```
+
+**Fail closed.** Until `PLAY_PACKAGE_NAME` **and**
+`GOOGLE_PLAY_CREDENTIALS` are both set in the server environment, the
+verify endpoint returns `503 billing_not_configured` and grants nothing,
+and `/api/config` reports `play_billing_configured: false`. No Play
+Console account or service account exists yet, so in production today
+the pipeline is deliberately inert — nothing about it pretends to work.
+
+**Verification.** The service-account credential
+(`GOOGLE_PLAY_CREDENTIALS` — a path to the JSON file, or the JSON inline;
+server-side only) is exchanged for an OAuth token using an RS256-signed
+JWT built with Node's built-in `node:crypto` (no new dependency), then
+the purchase is read from the Play Developer API
+(`purchases/products` for packs, `purchases/subscriptions` for plans).
+A purchase counts as paid only in Google's paid states (product
+`purchaseState = 0`; subscription `paymentState = 1` received or `2` free
+trial). Anything else is recorded as a failed attempt and grants nothing.
+
+**Idempotency & token binding.** The purchase token is stored as the
+payment's unique `provider_txn_id`. Verifying the same token twice
+returns the recorded result and never grants twice; a token first
+verified by one account can never be replayed into another account
+(409). Grants: packs add their credits to `free_credits`; subscriptions
+go through the existing `activateSubscription` path with the period end
+taken from Google's expiry time.
+
+**Refunds / voids — the shared clawback.** Google reports refunds via
+Real-Time Developer Notifications (Pub/Sub push to
+`POST /api/billing/play/rtdn`, shared-secret checked against
+`PLAY_RTDN_SECRET` when set) and via the voided-purchases list, which an
+admin can pull any time with `POST /api/admin/billing/sync-voided`. Both
+run the same `clawbackPayment` helper the gateway uses: the payment is
+marked `refunded`, the granted credits are deducted from the bucket they
+went to (pack → free, plan → plan, floored at 0), any unrecovered
+remainder (credits already spent) is added to the user's
+`credit_deficit` — visible in `/api/me` and the Admin Panel — and a
+refunded plan payment expires the subscription it paid for. Revenue
+needs no special handling: it aggregates `status = 'succeeded'` only,
+so refunded Play/gateway payments drop out of the totals automatically
+(the by-status breakdown still shows them).
+
+**App side.** In the installed Play app, `public/index.html`
+feature-detects the Digital Goods API (`window.getDigitalGoodsService`).
+When present, plan cards get monthly/yearly "Subscribe — Google Play"
+buttons and pack cards a "Buy with Google Play" button: the flow fetches
+the item details, launches Play's billing sheet, posts the returned
+purchase token to the verify endpoint, and only then reports success and
+refreshes the balance. Any error (no service, item missing, sheet
+cancelled, verification failed) shows a clear message — never a fake
+success. When the API is absent (plain web), the existing manual wallet
+flow is completely untouched.
+
+**Product IDs** (stored on plans/packs, editable in the Admin Panel; they
+must match Play Console exactly):
+
+| Item | Play product ID |
+|---|---|
+| Normal monthly / yearly | `ajk_normal_monthly` / `ajk_normal_yearly` |
+| Pro monthly / yearly | `ajk_pro_monthly` / `ajk_pro_yearly` |
+| Extra Pro monthly / yearly | `ajk_extrapro_monthly` / `ajk_extrapro_yearly` |
+| 50 / 100 / 250 credit packs | `credits_50` / `credits_100` / `credits_250` |
+
+### Launch checklist — Google Play (owner steps, in order)
+
+1. **Play Developer account** ($25 one-time, owner's own card) — does not
+   exist yet; this is the one hard blocker for live testing.
+2. Create the app in Play Console with a package name; set the SAME value
+   as `PLAY_PACKAGE_NAME` in the server env (it must match exactly).
+3. Create the 6 subscription products and 3 one-time products with the
+   IDs in the table above (or edit the IDs in the Admin Panel to match
+   whatever was created — they must agree).
+4. Create a **service account** (Google Cloud) with the Play Developer
+   API enabled, grant it access to the app in Play Console
+   (Users & permissions → the account → financial/order permissions),
+   download its JSON key, and set `GOOGLE_PLAY_CREDENTIALS` on the
+   server (path or inline). Never put this file/key in the app or repo.
+5. Set up **RTDN**: create a Pub/Sub topic, attach it in Play Console
+   (Monetization setup → Real-time developer notifications), and point a
+   push subscription at `https://<server>/api/billing/play/rtdn?secret=<PLAY_RTDN_SECRET>`
+   with `PLAY_RTDN_SECRET` set to the same long random value on the server.
+6. Add **license testers** (Play Console → License testing) so test
+   purchases don't charge real money, and run one real end-to-end
+   purchase + one test refund before opening sales.
+
+**Honest limitation:** end-to-end live testing is impossible until the
+Play Developer account exists. The automated suite therefore verifies the
+whole pipeline against a token-keyed **mock verifier**
+(`PLAY_TEST_MODE=1`, test environments only): valid pack token grants
+exactly once (replay is a no-op), subscription token activates the plan,
+unknown/unpaid tokens grant nothing, another user can't replay a token,
+and a voided purchase is clawed back with the payment marked refunded.
+
+## PayFast gateway (automatic local payments — Easypaisa / JazzCash / cards / bank)
+
+The local route is automatic too — no screenshots, no manual approval.
+A **provider abstraction** sits in front of the gateway: a provider
+implements `createCheckout(...)` (returns the hosted-checkout URL + form
+fields) and `verifyWebhook(body)` (returns a normalized, signature-checked
+result). One concrete adapter ships: **PayFast** (the Pakistani
+aggregator — one integration surfaces Easypaisa, JazzCash, bank channels
+and cards).
+
+```
+Buy Credits ──"Instant" button──▶ POST /api/billing/gateway/checkout
+                                     │ payments row (pending,
+                                     │ provider_txn_id = our basket id)
+                                     ▼
+                        PayFast hosted page (user pays)
+                                     │ signed IPN
+                                     ▼
+                        POST /api/billing/gateway/webhook
+                        signature + basket + amount verified?
+                          yes + success ──▶ succeeded + grant once
+                          failure ──▶ marked failed, nothing granted
+                          reversal ──▶ shared clawback + refunded
+```
+
+**Fail closed.** Until `GATEWAY_PROVIDER=payfast` and
+`PAYFAST_MERCHANT_ID` / `PAYFAST_SECURED_KEY` are set, checkout returns
+`503 gateway_not_configured`, the webhook grants nothing, and
+`/api/config` reports `gateway_configured: false`. When unconfigured,
+the Buy Credits page simply keeps the manual transfer flow as the
+fallback; when configured, each pack also shows an
+**"Instant — pay with Easypaisa / JazzCash / Card"** button that starts
+the hosted checkout (a form POST to PayFast's `PostTransaction` URL after
+the server mints an access token via `GetAccessToken`).
+
+**Verification.** Per PayFast's merchant integration guide, the checkout
+signature is the MD5 hex of
+`MERCHANT_ID:MERCHANT_NAME:TXNAMT:BASKET_ID`. The webhook is trusted only
+when (a) its `SIGNATURE` equals that construction recomputed with **our**
+configured merchant id/name over the IPN's amount + basket id, (b) the
+basket id matches a pending payment we created, and (c) the amounts
+match. Success is granted **exactly once** — a replayed success IPN on an
+already-succeeded payment is a no-op; failed/pending IPNs grant nothing;
+a verified reversal/refund runs the same `clawbackPayment` helper as
+Play voids. Gateway payments appear in the Admin Panel's
+Billing/Transactions list with provider `payfast` and count in revenue
+while `succeeded` (and drop out when refunded), exactly like Play.
+
+**Confirm at go-live (from the public docs alone these could not be
+pinned down — check them against the merchant dashboard before taking
+real money):** the production API host (the code defaults to the UAT
+host `ipguat.apps.net.pk` via `PAYFAST_BASE_URL`), the exact IPN field
+set PayFast posts (the adapter accepts the documented aliases:
+`TRANSACTION_ID`, `BASKET_ID`, `TXNAMT`, `RESPONSE_CODE`, `SIGNATURE`),
+the exact status string PayFast sends for a refund/reversal (the adapter
+recognizes `refunded/refund/reversed/chargeback/voided` aliases), and
+whether the callback URL must also be registered in the dashboard (the
+checkout passes it as `CHECKOUT_URL`).
+
+### Go-live requirements — PayFast (owner steps)
+
+1. **The owner's own PayFast merchant account.** Sign-up/KYC needs the
+   owner's **CNIC and bank account** — only the owner can complete it;
+   nobody else can do this step for him.
+2. Put `PAYFAST_MERCHANT_ID`, `PAYFAST_MERCHANT_NAME` and
+   `PAYFAST_SECURED_KEY` in the server env, set `GATEWAY_PROVIDER=payfast`
+   and `PAYFAST_BASE_URL` to the production host from the dashboard, and
+   set `PUBLIC_BASE_URL` to this server's public URL.
+3. PayFast charges **its own per-transaction fee** on top of the pack
+   price (the rate is set in the merchant agreement — it is not in the
+   public docs and is not charged by this app).
+4. Run one small real purchase + one refund end-to-end before announcing.
+
+**Honest note on bank transfers:** a plain IBAN transfer can never
+verify itself — there is no bank API here that reports "this transfer
+arrived". Bank payment becomes automatic **only** as a channel inside
+the gateway checkout above. The manual IBAN/wallet flow stays in the app
+purely as a fallback for while the gateway account doesn't exist.
 
 ## Credit packs (one-time top-ups, manual payment verification)
 
@@ -303,11 +509,12 @@ Publishing also needs a Play Console account and your app's privacy policy URL �
 the privacy policy page is included in the web app.
 
 ## Files
-- `server.js` — auth, generate (idempotent, plan-routed), status polling, history, reports, config, plans/subscriptions/payments, credit packs, clip joining (ffmpeg-static), admin API
-- `public/index.html` — the AJK AI web app (Studio, History with clip joining, Plans & pricing, Buy Credits, Settings, Privacy)
-- `public/admin.html` — the Admin Panel, served at `/admin` (includes credit-pack editing and pack-purchase approval)
+- `server.js` — auth, generate (idempotent, plan-routed), status polling, history, reports, config, plans/subscriptions/payments, credit packs, clip joining (ffmpeg-static), Google Play Billing verification + RTDN + voided-purchase clawback, PayFast gateway checkout + signed IPN, admin API
+- `public/index.html` — the AJK AI web app (Studio, History with clip joining, Plans & pricing, Buy Credits with Google Play + gateway instant checkout when available, Settings, Privacy)
+- `public/admin.html` — the Admin Panel, served at `/admin` (includes credit-pack editing, pack-purchase approval, Play product IDs, credit-deficit display, billing/transactions)
 - `public/nayapay-qr.jpg` — the owner's NayaPay QR code, shown on the Buy Credits page when NayaPay is selected
 - `schema.sql` — schema reference (`server.js` applies migrations automatically on boot)
-- `test.sh` — the automated test battery (original + monetization + prompt-language + credit-pack + clip-join tests; see its header for the server env it needs)
+- `test.sh` — the automated test battery (original + monetization + prompt-language + credit-pack + clip-join + Play Billing/gateway tests; see its header for the server env it needs)
 - `test-translate-stub.js` — local Google Translate stub used by `test.sh` (tests never call the real translate endpoint)
+- `test-gateway-stub.js` — signs PayFast-shaped webhook bodies for `test.sh` (tests never call the real gateway)
 - `.env.example` — copy to `.env` and fill in (never commit the real one)
