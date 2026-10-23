@@ -610,6 +610,122 @@
         .studio-actionbar{ bottom:calc(64px + env(safe-area-inset-bottom)); padding:10px 12px; }
         .kv{ grid-template-columns:105px 1fr; }
       }
+      /* ---------- studio: Flow-style composer (Phase F) ----------
+         The create surface is composer-first: a quiet template rail,
+         one prompt card, one row of quick chips, then Recent. The
+         existing controls themselves are reused — aspect/duration are
+         the same #aspectSeg/#durationSeg nodes, and AI Auto is the
+         same #aiAutoToggle checkbox, only restyled as a switch. */
+      #view-studio .tpl-card{
+        background:transparent; border:0; border-radius:0; box-shadow:none;
+        padding:0; margin:0 0 12px;
+      }
+      .tpl-strip{ gap:10px; padding:2px 2px 8px; scrollbar-width:none; }
+      .tpl-strip::-webkit-scrollbar{ display:none; }
+      .tpl-chip{
+        min-height:56px; padding:10px 13px; border-radius:14px; gap:10px;
+        background:var(--panel); box-shadow:0 4px 16px rgba(0,0,0,.16);
+      }
+      .tpl-chip svg{ width:21px; height:21px; }
+      .tpl-chip .tpl-texts{ line-height:1.2; }
+      .tpl-chip .tpl-name{ font-size:13.5px; }
+      .composer-card{ padding:18px; }
+      .composer-head{
+        display:flex; align-items:flex-start; justify-content:space-between; gap:14px; margin-bottom:12px;
+      }
+      .composer-head h2{ margin:0; }
+      .composer-model{
+        color:var(--faint); font-size:11.5px; line-height:1.35; text-align:right;
+        max-width:48%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+      }
+      .composer-lang{
+        display:flex; align-items:center; gap:8px; color:var(--muted);
+        font-size:12px; font-weight:600; letter-spacing:.04em; text-transform:uppercase;
+      }
+      select#promptLang{
+        width:auto; min-width:138px; padding:7px 30px 7px 10px;
+        border-radius:999px; font-size:13.5px;
+      }
+      .composer-card .field-label{ margin-top:12px; }
+      textarea#prompt{
+        min-height:104px; border-radius:14px; font-size:16px; padding:14px;
+      }
+      .composer-chips{
+        display:flex; align-items:center; gap:10px; flex-wrap:nowrap;
+        margin-top:12px; padding:2px 0 6px; overflow-x:auto; scrollbar-width:none;
+      }
+      .composer-chips::-webkit-scrollbar{ display:none; }
+      .chip-group{ display:flex; align-items:center; gap:6px; flex:none; }
+      .chip-group-label{
+        color:var(--faint); font-size:11px; font-weight:700;
+        letter-spacing:.06em; text-transform:uppercase; white-space:nowrap;
+      }
+      .seg.chip-seg{
+        background:transparent; border:0; border-radius:0; padding:0; gap:6px; flex-wrap:nowrap;
+      }
+      .seg.chip-seg button{
+        flex:0 0 auto; min-width:0; padding:7px 11px; border:1px solid var(--line);
+        border-radius:999px; background:var(--panel-2); font-size:12.5px; white-space:nowrap;
+      }
+      .seg.chip-seg button small{ display:none; }
+      .seg.chip-seg button.sel{
+        background:var(--panel-3); border-color:var(--amber); color:var(--text);
+        box-shadow:0 0 0 1px var(--amber);
+      }
+      .auto-switch{
+        flex:none; display:inline-flex; align-items:center; gap:8px; margin-left:auto;
+        color:var(--text); font-size:13px; font-weight:700; cursor:pointer; white-space:nowrap;
+      }
+      .auto-switch input{
+        appearance:none; -webkit-appearance:none; width:38px; height:22px; margin:0;
+        border:1px solid var(--line); border-radius:999px; background:var(--panel-3);
+        position:relative; cursor:pointer; transition:background .18s,border-color .18s; flex:none;
+      }
+      .auto-switch input::after{
+        content:""; position:absolute; top:2px; left:2px; width:16px; height:16px;
+        border-radius:50%; background:var(--muted); transition:transform .18s,background .18s;
+      }
+      .auto-switch input:checked{ background:var(--amber); border-color:var(--amber); }
+      .auto-switch input:checked::after{ transform:translateX(16px); background:#fff; }
+      .auto-switch input:focus-visible{ outline:2px solid var(--amber); outline-offset:2px; }
+      .studio-auto-panel{ background:var(--panel); margin-top:10px; }
+      .recent-strip{ margin-top:16px; }
+      .recent-strip[hidden]{ display:none !important; }
+      .recent-head{ display:flex; align-items:baseline; justify-content:space-between; margin:0 0 8px; }
+      .recent-head h2{ font-family:var(--font-display); font-size:14px; margin:0; letter-spacing:-.01em; }
+      .recent-head span{ color:var(--faint); font-size:11.5px; }
+      .recent-list{ display:flex; gap:8px; }
+      .recent-item{
+        flex:1 1 0; min-width:0; display:flex; align-items:center; gap:9px;
+        background:var(--panel); border:1px solid var(--line-soft); border-radius:12px;
+        padding:8px; color:var(--text); text-align:left; cursor:pointer;
+      }
+      .recent-item:hover{ background:var(--panel-2); border-color:var(--line); }
+      .recent-thumb,.recent-icon{
+        width:44px; height:44px; border-radius:9px; flex:none; background:#000;
+      }
+      .recent-thumb{ object-fit:cover; display:block; }
+      .recent-icon{
+        display:grid; place-items:center; background:var(--panel-3); color:var(--amber);
+        font-family:var(--font-display); font-size:17px; font-weight:800;
+      }
+      .recent-text{ min-width:0; display:flex; flex-direction:column; line-height:1.3; }
+      .recent-prompt{
+        font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+      }
+      .recent-status{ color:var(--faint); font-size:11.5px; text-transform:capitalize; }
+      @media (max-width:640px){
+        #view-studio .tpl-card{ padding:0; margin-bottom:10px; }
+        .tpl-chip{ min-height:52px; padding:9px 11px; }
+        .composer-card{ padding:16px; }
+        .composer-head{ flex-wrap:wrap; gap:6px 10px; }
+        .composer-model{ max-width:100%; text-align:left; }
+        select#promptLang{ min-width:126px; }
+        textarea#prompt{ min-height:88px; }
+        .recent-list{ overflow-x:auto; padding-bottom:4px; scrollbar-width:none; }
+        .recent-list::-webkit-scrollbar{ display:none; }
+        .recent-item{ flex:0 0 176px; }
+      }
       @media (prefers-reduced-motion: reduce){
         *{ animation:none !important; transition:none !important; }
         html{ scroll-behavior:auto; }
@@ -664,58 +780,57 @@
         <div class="ad-slot" id="adHomeNative" hidden aria-hidden="true">Advertisement</div>
 
         <div class="card tpl-card" id="templateCard">
-          <div class="tpl-head">
-            <h2>Templates</h2>
-            <p class="tpl-sub">One tap fills in a starter prompt and format — edit the words freely.</p>
-          </div>
           <div class="tpl-strip" id="templateGrid" role="group" aria-label="Templates">
             <button type="button" class="tpl-chip" data-template="talking-photo">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4M8 22h8"/></svg>
-              <span class="tpl-texts"><span class="tpl-name">Talking Photo</span><span class="tpl-hint">Opens Voice &amp; Dialogue</span></span>
+              <span class="tpl-texts"><span class="tpl-name">Talking Photo</span></span>
             </button>
             <button type="button" class="tpl-chip" data-template="kids-story">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 6c-1.6-1.6-4.2-2.2-8-2.2v14.4c3.8 0 6.4.6 8 2.2 1.6-1.6 4.2-2.2 8-2.2V3.8C16.2 3.8 13.6 4.4 12 6z"/><path d="M12 6v14.4"/></svg>
-              <span class="tpl-texts"><span class="tpl-name">Kids Story</span><span class="tpl-hint">Cartoon · story starter</span></span>
+              <span class="tpl-texts"><span class="tpl-name">Kids Story</span></span>
             </button>
             <button type="button" class="tpl-chip" data-template="product-ad">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1.3"/></svg>
-              <span class="tpl-texts"><span class="tpl-name">Product Ad</span><span class="tpl-hint">Realistic · 9:16</span></span>
+              <span class="tpl-texts"><span class="tpl-name">Product Ad</span></span>
             </button>
             <button type="button" class="tpl-chip" data-template="breaking-news">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="2"/><path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M4.9 4.9a10 10 0 0 0 0 14.2M19.1 4.9a10 10 0 0 1 0 14.2"/></svg>
-              <span class="tpl-texts"><span class="tpl-name">Breaking-News Short</span><span class="tpl-hint">Realistic · 9:16 · AI-labelled</span></span>
+              <span class="tpl-texts"><span class="tpl-name">Breaking-News Short</span></span>
             </button>
             <button type="button" class="tpl-chip" data-template="music-video">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
-              <span class="tpl-texts"><span class="tpl-name">Music Video</span><span class="tpl-hint">Realistic · music preselected</span></span>
+              <span class="tpl-texts"><span class="tpl-name">Music Video</span></span>
             </button>
             <button type="button" class="tpl-chip" data-template="cartoon-episode">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M8.5 14s1.2 2.2 3.5 2.2 3.5-2.2 3.5-2.2"/><circle cx="9" cy="9.5" r=".6" fill="currentColor"/><circle cx="15" cy="9.5" r=".6" fill="currentColor"/></svg>
-              <span class="tpl-texts"><span class="tpl-name">Cartoon Episode</span><span class="tpl-hint">Cartoon · episode starter</span></span>
+              <span class="tpl-texts"><span class="tpl-name">Cartoon Episode</span></span>
             </button>
           </div>
         </div>
 
         <div class="studio-grid">
           <div>
-            <div class="card">
-              <h2>Describe your video</h2>
-              <p class="sub">One or two sentences: the subject, the setting, the camera move. <span id="modelLine"></span></p>
+            <div class="card composer-card">
+              <div class="composer-head">
+                <h2>Describe your video</h2>
+                <span class="composer-model" id="modelLine"></span>
+              </div>
 
-              <div class="field-label"><span>Prompt language</span></div>
-              <select id="promptLang">
-                <option value="en" selected>English</option>
-                <option value="ur">اردو (Urdu)</option>
-                <option value="ks">کشمیری (Kashmiri)</option>
-                <option value="ar">العربية (Arabic)</option>
-                <option value="fa">فارسی (Persian)</option>
-                <option value="hi">हिन्दी (Hindi)</option>
-                <option value="zh">中文 (Chinese)</option>
-              </select>
-              <p class="lang-hint">Write in your language — the app translates it automatically before generating.</p>
+              <div class="composer-lang">
+                <label for="promptLang">Language</label>
+                <select id="promptLang">
+                  <option value="en" selected>English</option>
+                  <option value="ur">اردو (Urdu)</option>
+                  <option value="ks">کشمیری (Kashmiri)</option>
+                  <option value="ar">العربية (Arabic)</option>
+                  <option value="fa">فارسی (Persian)</option>
+                  <option value="hi">हिन्दी (Hindi)</option>
+                  <option value="zh">中文 (Chinese)</option>
+                </select>
+              </div>
 
               <div class="field-label"><span>Prompt</span><span class="count"><span id="charCount">0</span> / 500</span></div>
-              <textarea id="prompt" maxlength="500" placeholder="A drone flies over a turquoise coastline at sunrise, gentle waves, cinematic light…"></textarea>
+              <textarea id="prompt" maxlength="500" placeholder="What do you want to make? · آپ کیا بنانا چاہتے ہیں؟ Describe the scene, action and camera…"></textarea>
               <div class="prompt-tools">
                 <button type="button" class="tool-btn" id="enhanceBtn">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg>
@@ -725,29 +840,46 @@
                 <button type="button" class="tool-btn" data-example="A paper boat sailing down a rainy city street at night, neon reflections on wet pavement, tracking shot">Try: paper boat</button>
                 <button type="button" class="tool-btn" data-example="Fresh bread being sliced on a wooden table in a sunlit bakery, steam rising, close-up, warm tones">Try: bakery</button>
               </div>
+            </div>
 
-              <div class="field-label"><span>AI Auto Director</span></div>
-              <label class="check-row"><input type="checkbox" id="aiAutoToggle" checked /> <span><strong>AI Auto</strong> — the app reads your prompt and picks the settings itself; it asks first only when something costs extra.</span></label>
-              <p class="lang-hint">Rule-based: it follows keywords in your prompt, and says so when a model can't do something.</p>
-              <div class="auto-panel" id="autoPlanPanel" hidden>
-                <h3>AI Auto نے یہ سمجھا</h3>
-                <div id="autoPlanSummary"></div>
-                <div id="autoPlanConflicts"></div>
-                <p class="auto-cost" id="autoPlanCost"></p>
-                <p class="lang-hint" id="autoPlanNotes"></p>
-                <div class="row-actions">
-                  <button type="button" class="btn primary" id="autoPlanConfirmBtn">اسی طرح بنائیں</button>
-                  <button type="button" class="btn ghost" id="autoPlanCancelBtn">منسوخ — ترتیبات خود رکھوں</button>
-                </div>
+            <div class="composer-chips" aria-label="Quick video settings">
+              <div class="chip-group">
+                <span class="chip-group-label">Format</span>
+                <div class="seg chip-seg" id="aspectSeg" role="group" aria-label="Aspect ratio"></div>
+              </div>
+              <div class="chip-group">
+                <span class="chip-group-label">Length</span>
+                <div class="seg chip-seg" id="durationSeg" role="group" aria-label="Duration"></div>
+              </div>
+              <label class="auto-switch" title="AI Auto plans the settings from your prompt and asks before extra-cost choices">
+                <input type="checkbox" id="aiAutoToggle" checked aria-label="AI Auto" />
+                <span>Auto</span>
+              </label>
+            </div>
+
+            <div class="auto-panel studio-auto-panel" id="autoPlanPanel" hidden>
+              <h3>AI Auto نے یہ سمجھا</h3>
+              <div id="autoPlanSummary"></div>
+              <div id="autoPlanConflicts"></div>
+              <p class="auto-cost" id="autoPlanCost"></p>
+              <p class="lang-hint" id="autoPlanNotes"></p>
+              <div class="row-actions">
+                <button type="button" class="btn primary" id="autoPlanConfirmBtn">اسی طرح بنائیں</button>
+                <button type="button" class="btn ghost" id="autoPlanCancelBtn">منسوخ — ترتیبات خود رکھوں</button>
               </div>
             </div>
 
-            <!-- Phase E (AUTO-FIRST): every manual control — mode, character,
-                 start image, style/aspect/duration/quality, Voice, Sound,
-                 Watermark — lives in this ONE container, collapsed by
-                 default. AI Auto above + Generate below are all most users
-                 ever touch. All element ids inside are unchanged, and the
-                 generate flow reads their values exactly as before. -->
+            <section class="recent-strip" aria-label="Recent generations" hidden>
+              <div class="recent-head"><h2>Recent</h2><span>Tap to open History</span></div>
+              <div class="recent-list"></div>
+            </section>
+
+            <!-- Phase E/F: the remaining manual controls — mode, character,
+                 start image, style/quality, Voice, Sound, Watermark — live
+                 in this ONE container, collapsed by default. Aspect and
+                 duration are the same controls in the quick chip row above.
+                 All element ids are unchanged, and the generate flow reads
+                 their values exactly as before. -->
             <div class="card collapsible is-collapsed" id="advancedCard">
               <button type="button" class="collapse-head" data-collapse-head aria-expanded="false" aria-controls="advancedCardBody">
                 <span class="collapse-title">Advanced settings<span class="opt-tag">optional</span> · مزید ترتیبات (اختیاری)</span>
@@ -786,12 +918,6 @@
 
               <div class="field-label"><span>Visual style</span></div>
               <div class="style-grid" id="styleGrid"></div>
-
-              <div class="field-label"><span>Aspect ratio</span></div>
-              <div class="seg" id="aspectSeg" role="group" aria-label="Aspect ratio"></div>
-
-              <div class="field-label"><span>Duration</span></div>
-              <div class="seg" id="durationSeg" role="group" aria-label="Duration"></div>
 
               <div class="field-label"><span>Quality</span></div>
               <div class="seg" id="qualitySeg" role="group" aria-label="Quality">
@@ -2408,6 +2534,7 @@
           var empty = $("#historyEmpty");
           var btn = $("#historyEmptyBtn");
           $("#jobList").innerHTML = "";
+          if (mode !== "list") renderRecent([]);
           if (mode === "signedout") {
             empty.style.display = "block";
             $("#historyEmptyText").textContent = "Sign in to see your generation history — it is stored on the server with your account.";
@@ -2435,6 +2562,52 @@
           return "chip other";
         }
         var LANG_NAMES = { en: "English", ur: "Urdu", ks: "Kashmiri", ar: "Arabic", fa: "Persian", hi: "Hindi", zh: "Chinese" };
+        function renderRecent(gens) {
+          var strip = $(".recent-strip");
+          if (!strip) return;
+          var list = $(".recent-list", strip);
+          if (!list) return;
+          list.innerHTML = "";
+          if (!token || !gens || !gens.length) { strip.hidden = true; return; }
+          strip.hidden = false;
+          gens.slice(0, 3).forEach(function (g) {
+            var item = document.createElement("button");
+            item.type = "button";
+            item.className = "recent-item";
+            item.setAttribute("aria-label", "Open History: " + (g.prompt || "generation"));
+            var status = String(g.status || "").toLowerCase();
+            if (status === "completed" && g.video_url && !isAudioOnlyGen(g)) {
+              var thumb = document.createElement("video");
+              thumb.className = "recent-thumb";
+              thumb.muted = true;
+              thumb.playsInline = true;
+              thumb.preload = "metadata";
+              var src = resolveUrl(g.video_url);
+              thumb.src = src + (src.indexOf("#") === -1 ? "#t=0.1" : "");
+              item.appendChild(thumb);
+            } else {
+              var icon = document.createElement("span");
+              icon.className = "recent-icon";
+              icon.textContent = status === "completed" ? "✓" :
+                status === "failed" ? "!" :
+                (status === "processing" || status === "in_progress") ? "…" : "•";
+              item.appendChild(icon);
+            }
+            var text = document.createElement("span");
+            text.className = "recent-text";
+            var prompt = document.createElement("span");
+            prompt.className = "recent-prompt";
+            prompt.textContent = g.prompt || "(no prompt)";
+            var stateLine = document.createElement("span");
+            stateLine.className = "recent-status";
+            stateLine.textContent = g.status || "";
+            text.appendChild(prompt);
+            text.appendChild(stateLine);
+            item.appendChild(text);
+            item.addEventListener("click", function () { showView("history"); });
+            list.appendChild(item);
+          });
+        }
         function loadHistory() {
           if (!token) { renderHistoryState("signedout"); return; }
           api("/api/history").then(function (res) {
@@ -2445,6 +2618,7 @@
             var gens = res.data.generations || [];
             fillVoiceSources(gens);
             if (!gens.length) { renderHistoryState("empty"); return; }
+            renderRecent(gens);
             renderHistoryState("list");
             var list = $("#jobList");
             gens.forEach(function (g) {
