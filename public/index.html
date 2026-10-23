@@ -700,6 +700,10 @@
             <img src="/nayapay-qr.jpg" alt="NayaPay QR code — pay rajashahidiqbal@nayapay (Shahid Iqbal)" />
             <p class="sub">Scan this QR with your NayaPay app to pay <strong>rajashahidiqbal@nayapay</strong> (Shahid Iqbal).</p>
           </div>
+          <div class="buy-qr" id="buyQrEp" hidden>
+            <img src="/easypaisa-qr.jpg" alt="Easypaisa QR code — pay Shahid Iqbal via RAAST" />
+            <p class="sub">Scan this QR with your easypaisa app (RAAST) to pay <strong>Shahid Iqbal</strong>.</p>
+          </div>
           <h2 style="margin-top:22px;">3 · Tell us the transaction ID</h2>
           <p class="sub">After paying, enter the transaction ID from your easypaisa / JazzCash / NayaPay / bank receipt so we can verify it.</p>
           <div class="field-label"><span>Pack</span></div>
@@ -1979,6 +1983,7 @@
         }
         function updateBuyQr() {
           $("#buyQr").hidden = $("#buyMethod").value !== "nayapay";
+          $("#buyQrEp").hidden = $("#buyMethod").value !== "easypaisa";
         }
         $("#buyMethod").addEventListener("change", updateBuyQr);
         function loadBuy() {
