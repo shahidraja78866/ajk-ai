@@ -259,6 +259,32 @@ const CONFIG = {
   // config flag off; the analyzer itself remains available for the Studio.
   autoDirectorEnabled: process.env.AUTO_DIRECTOR_ENABLED !== '0',
   autoDirectorVersion: 1,
+  // --- Speaking engine (Phase E: Gemini Omni Flash 1.1) -------------------
+  // One-step talking-video engine on fal: the endpoint below generates the
+  // video WITH synchronized native audio/dialogue from one prompt (fal tags
+  // it "lipsync"). Schema verified against fal's own llms.txt for
+  // google/gemini-omni-flash/v1.1/text-to-video (2026-10-23): the request
+  // body has exactly four fields — prompt (string, required), aspect_ratio
+  // ("16:9" | "9:16", default "16:9"), resolution ("360p" | "720p" |
+  // "1080p" | "4k", default "720p") and duration (integer 3-10, default 8).
+  // There is NO safety-checker or audio-toggle field, so none is sent.
+  // Output is { video: File }. Prices (fal, per second of output): 360p
+  // $0.03, 720p $0.10, 1080p $0.15, 4K $0.30 — a 10s clip at our routed
+  // 720p costs $1.00 ≈ Rs 277, safely inside the flat 50-credit price
+  // (floor revenue Rs 700 at the cheapest Rs 14/credit). Dialogue
+  // languages are NOT stated by fal — Urdu speech on this engine is
+  // UNVERIFIED and is never promised to users. This engine REPLACES the
+  // Veo talking-clip route, which was never wired: Google is retiring
+  // Veo 3.1 (preview IDs shut down 2026-10-22; GA IDs flagged for
+  // retirement from 2026-11-17) and Omni is its designated successor on
+  // fal. The plan entitlement keeps its historical flag name (can_veo);
+  // it now gates THIS engine. Flat price: exactly the existing
+  // speaking-clip rate of 50 credits (owner pricing decision), for both
+  // our durations (5s and 10s).
+  modelOmni: (process.env.FAL_MODEL_OMNI || 'google/gemini-omni-flash/v1.1/text-to-video').trim(),
+  speakingCost: 50,
+  speakingAspects: ['16:9', '9:16'],
+  speakingResolution: '720p',
 };
 
 // ---------- Prompt languages ----------
@@ -864,10 +890,10 @@ function publicPlan(p) {
     quality: p.quality,
     quality_label: p.quality_label, resolution: p.resolution,
     // Entitlement descriptor. can_lipsync gates POST /api/voice/lipsync
-    // (the talking-character engine, Phase B). can_veo is still an
-    // entitlement flag only — the Veo talking-clip engine is not wired
-    // yet and the UI must not present it as available. max_quality is
-    // the plan's routed quality ceiling.
+    // (the talking-character engine, Phase B). can_veo gates the one-step
+    // speaking-video engine (Phase E, Gemini Omni — it replaced the
+    // never-wired Veo route; the flag keeps its historical name).
+    // max_quality is the plan's routed quality ceiling.
     features: { can_veo: !!p.can_veo, can_lipsync: !!p.can_lipsync,
       max_quality: p.quality },
     // Google Play subscription product ids (set in Play Console; editable
@@ -1048,6 +1074,13 @@ app.get('/api/config', (req, res) => res.json({
   // flag. The plan endpoint is free; confirmed plans are re-analyzed and
   // repriced server-side inside /api/generate before anything is charged.
   auto: { enabled: CONFIG.autoDirectorEnabled, version: CONFIG.autoDirectorVersion },
+  // Speaking engine (Phase E): one-step talking videos on Gemini Omni —
+  // the Veo route was retired before it was ever wired. Flat 50 credits,
+  // Pro/Extra Pro only (the can_veo entitlement), 16:9 / 9:16 only,
+  // routed at 720p; the engine generates its own synchronized dialogue
+  // audio, so no voice/sound add-ons combine with it.
+  speaking_engine: { provider: 'gemini-omni', model: CONFIG.modelOmni,
+    price_credits: CONFIG.speakingCost, aspects: CONFIG.speakingAspects },
   // Advertising preparation (AdMob groundwork): flags and placement names
   // only — the publisher id itself is never exposed here. `enabled` is
   // true ONLY when ADS_ENABLED=1 and a valid publisher id are both set;
@@ -1396,9 +1429,12 @@ function autoRoutedQuality(userId, { wantedResolution = null, aspectRatio = '16:
 // lip-sync, `voice_route` names the existing lip-sync endpoint that runs
 // on the finished video. Server-side routing in /api/generate always wins:
 // the applied plan records the route the server actually used.
-function autoEngineRoute({ character = null, hasSourceImage = false, resolution = '768P', plan = null, voice = null } = {}) {
+function autoEngineRoute({ character = null, hasSourceImage = false, resolution = '768P', plan = null, voice = null, speaking = false } = {}) {
   let route, model, reason;
-  if (character) {
+  if (speaking) {
+    route = 'omni_speaking'; model = CONFIG.modelOmni;
+    reason = 'dialogue detected → one-step speaking video engine';
+  } else if (character) {
     route = 'h3_reference_to_video'; model = CONFIG.modelRef;
     reason = 'Character selected → reference-to-video route for character consistency.';
   } else if (hasSourceImage) {
@@ -1507,6 +1543,14 @@ function autoDetectSfx(text) {
   return { events, labels };
 }
 
+// Base cost for an auto plan: the speaking route is a flat price (the
+// rate-card tier does not apply — the engine is billed per clip), every
+// other route uses the routed tier cost. Used by BOTH the analyzer and
+// the canonicalizer so plan math and charge math can never diverge.
+function autoBaseCost(routed, speaking) {
+  return speaking ? CONFIG.speakingCost : routed.cost;
+}
+
 // The pure analyzer. Callers supply the translated prompt, the validated
 // selections and a costForAspect(aspect) closure (server-side routing).
 function analyzeAutoDirector(opts) {
@@ -1588,6 +1632,27 @@ function analyzeAutoDirector(opts) {
   const dialogue = autoDetectDialogue(original, effectivePrompt, languageCode);
   const routedHere = costForAspect(finalAspect);
   const canLipsync = !!(routedHere.plan && routedHere.plan.can_lipsync);
+  // Speaking-engine preference (Phase E): fresh text-to-video human/news
+  // scenes with usable dialogue on a speaking-eligible plan (can_veo =
+  // Pro/Extra Pro) route to the one-step Gemini Omni engine FIRST — it
+  // makes the video, its synchronized audio and the dialogue together at
+  // the flat speaking price, so no voiceover/lip-sync add-on is stacked.
+  // Character and image jobs keep the reference/image routes below.
+  const canSpeaking = !!(routedHere.plan && routedHere.plan.can_veo);
+  const speakingScene = contentClass === 'human' || contentClass === 'news';
+  const omniRoute = !!(dialogue && !dialogue.from_translation &&
+    ['ur', 'hi', 'en'].includes(dialogue.language) && !isDraft &&
+    canSpeaking && !character && !hasSourceImage && speakingScene &&
+    !voiceSelection && !existingSound &&
+    CONFIG.speakingAspects.includes(finalAspect));
+  if (dialogue && canSpeaking && !character && !hasSourceImage && !isDraft &&
+      speakingScene && !dialogue.from_translation &&
+      ['ur', 'hi', 'en'].includes(dialogue.language) && !omniRoute) {
+    if (!CONFIG.speakingAspects.includes(finalAspect))
+      notes.push('The speaking engine only makes 16:9 or 9:16 videos, so this dialogue uses the voice route instead.');
+    else if (existingSound)
+      notes.push('You selected a sound add-on yourself, so the one-step speaking engine was not used — its own synchronized audio would clash with the add-on. The dialogue uses the voice route instead.');
+  }
   let voice = null;
   if (dialogue) {
     if (dialogue.from_translation) {
@@ -1596,6 +1661,11 @@ function analyzeAutoDirector(opts) {
       notes.push(`Dialogue in "${dialogue.language}" cannot use the voice route — the voice catalog covers Urdu, Hindi and English only — so no voice add-on was proposed.`);
     } else if (isDraft) {
       notes.push('Drafts cannot take voice add-ons, so the detected dialogue was not routed to a voice. Upgrade the draft to full quality to add it.');
+    } else if (omniRoute) {
+      // voice stays null — the speaking engine IS the voice.
+      notes.push('Speaking engine: the video, its synchronized audio and the dialogue are generated in one step (Gemini Omni) at the flat speaking price — no separate voiceover or lip-sync add-on is charged.');
+      if (dialogue.language === 'ur')
+        notes.push('Urdu speech on the speaking engine is not officially documented — judge it on the real generated sample. The separate Urdu voice + lip-sync route remains available on character and image videos.');
     } else if (voiceSelection && voiceSelection.kind) {
       const kind = voiceSelection.kind === 'lipsync' ? 'lipsync' : 'voiceover';
       voice = { kind, language: dialogue.language,
@@ -1643,6 +1713,9 @@ function analyzeAutoDirector(opts) {
   } else if (isDraft) {
     if (sfxEvents.length || musicAsk)
       notes.push('Drafts cannot take sound add-ons, so the detected sounds were not added. Upgrade the draft to full quality to add them.');
+  } else if (omniRoute) {
+    if (sfxEvents.length || musicAsk)
+      notes.push('Scene sounds are part of the speaking engine\'s own synchronized audio, so no separate sound add-on was proposed.');
   } else if (!soundConfigured()) {
     if (sfxEvents.length || musicAsk)
       notes.push('Sounds were detected, but the sound engines are not configured on this server, so no sound add-on was proposed.');
@@ -1660,11 +1733,11 @@ function analyzeAutoDirector(opts) {
 
   // --- costs + engine ---------------------------------------------------------
   const routed = costForAspect(finalAspect);
-  const baseCost = routed.cost;
-  const addonsCost = (sound ? sound.cost : 0) + (voice ? voice.cost : 0);
-  const engine = autoEngineRoute({ character, hasSourceImage, resolution: routed.resolution, plan: routed.plan, voice });
+  const baseCost = autoBaseCost(routed, omniRoute);
+  const addonsCost = omniRoute ? 0 : (sound ? sound.cost : 0) + (voice ? voice.cost : 0);
+  const engine = autoEngineRoute({ character, hasSourceImage, resolution: routed.resolution, plan: routed.plan, voice, speaking: omniRoute });
   const needsConfirmation = conflicts.length > 0 ||
-    finalAspect !== selectedAspect ||
+    finalAspect !== selectedAspect || omniRoute ||
     (!!sound && !existingSound) || (!!voice && !(voiceSelection && voiceSelection.kind));
 
   return {
@@ -1681,6 +1754,11 @@ function analyzeAutoDirector(opts) {
       style_suffix: styleSuffix,
       aspect_ratio: finalAspect,
       sound, voice,
+      // Phase E: true when this plan routes to the one-step speaking
+      // engine; speaking_dialogue carries the exact line the engine
+      // should speak (server-derived, re-validated on generate).
+      speaking_engine: omniRoute,
+      ...(omniRoute && dialogue ? { speaking_dialogue: { text: dialogue.text, language: dialogue.language } } : {}),
     },
     engine,
     conflicts,
@@ -1734,16 +1812,29 @@ function canonicalizeAutoPlan(fresh, echo, { character = null, hasSourceImage = 
       e.voice.language === fresh.apply.voice.language && e.voice.text === fresh.apply.voice.text)
     voice = { ...fresh.apply.voice,
       cost: fresh.apply.voice.kind === 'lipsync' ? CONFIG.lipsyncCost : CONFIG.voiceoverCost };
+  // Speaking route (Phase E): applies ONLY when the fresh analysis AND
+  // the echoed plan both carry the speaking route — a client can never
+  // forge it, and when it applies, voice/sound add-ons stay null (the
+  // engine's own synchronized audio replaces them) and the base cost is
+  // the flat speaking price. The dialogue line is the server-derived one.
+  const speaking = fresh.apply.speaking_engine === true && e.speaking_engine === true &&
+    fresh.engine && fresh.engine.route === 'omni_speaking' &&
+    echo.engine && echo.engine.route === 'omni_speaking';
+  if (speaking) { sound = null; voice = null; }
   const routed = costForAspect(aspect);
+  const baseCost = autoBaseCost(routed, speaking);
   const addonsCost = (sound ? sound.cost : 0) + (voice ? voice.cost : 0);
-  const engine = autoEngineRoute({ character, hasSourceImage, resolution: routed.resolution, plan: routed.plan, voice });
+  const engine = autoEngineRoute({ character, hasSourceImage, resolution: routed.resolution, plan: routed.plan, voice, speaking });
   return {
     ...fresh,
-    apply: { mode, style_suffix: suffix, aspect_ratio: aspect, sound, voice },
+    apply: { mode, style_suffix: suffix, aspect_ratio: aspect, sound, voice,
+      speaking_engine: speaking,
+      ...(speaking && fresh.apply.speaking_dialogue
+        ? { speaking_dialogue: fresh.apply.speaking_dialogue } : {}) },
     engine,
-    base_cost: routed.cost,
+    base_cost: baseCost,
     addons_cost: addonsCost,
-    total_cost: routed.cost + addonsCost,
+    total_cost: baseCost + addonsCost,
     confirmed: true,
   };
 }
@@ -2076,6 +2167,44 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
     }
   }
 
+  // --- Speaking engine (Phase E: Gemini Omni) ------------------------------
+  // Selected directly via engine:'speaking' (alias 'omni_speaking') or via
+  // a confirmed AI Auto plan whose canonicalized apply carries
+  // speaking_engine:true. The engine generates the video WITH its own
+  // synchronized dialogue audio in one step, so voice/sound add-ons that
+  // would duplicate that audio are REJECTED with 400 (clearer than
+  // silently dropping a paid selection), as are drafts, characters and
+  // source images (text-to-video only) and non-16:9/9:16 aspects — all
+  // BEFORE any charge. Entitlement: plans with can_veo (Pro/Extra Pro).
+  const wantsSpeaking = ['speaking', 'omni_speaking']
+    .includes(String(req.body?.engine || '').toLowerCase());
+  const planSpeaking = !!(autoPlanToStore && autoPlanToStore.apply &&
+    autoPlanToStore.apply.speaking_engine === true);
+  let isSpeaking = false;
+  let speakingDialogue = null;
+  if (wantsSpeaking || planSpeaking) {
+    if (isDraft)
+      return res.status(400).json({ error: 'The speaking engine makes full-quality videos only — it cannot be combined with a draft.' });
+    if (character)
+      return res.status(400).json({ error: 'The speaking engine is text-to-video only — saved-character videos keep the reference route with its voice options.' });
+    if (sourceImagePath)
+      return res.status(400).json({ error: 'The speaking engine is text-to-video only — videos from a starting image keep the image-to-video route with its voice options.' });
+    if (!CONFIG.speakingAspects.includes(aspect_ratio))
+      return res.status(400).json({ error: `The speaking engine only makes ${CONFIG.speakingAspects.join(' or ')} videos — pick one of those aspect ratios, or generate without the speaking engine.` });
+    if (soundSpec)
+      return res.status(400).json({ error: 'The speaking engine generates its own synchronized audio, so sound add-ons cannot be combined with it. Remove the sound add-on, or generate without the speaking engine.' });
+    if (autoVoiceSpec)
+      return res.status(400).json({ error: 'The speaking engine speaks the dialogue itself, so voiceover/lip-sync add-ons cannot be combined with it.' });
+    refreshSubscriptionState(req.user.id);
+    const speakSub = currentSubscription(req.user.id);
+    const speakPlan = speakSub ? getPlan(speakSub.plan_id) : null;
+    if (!speakPlan || !speakPlan.can_veo)
+      return res.status(403).json({ error: 'Speaking video clips are included with the Pro and Extra Pro plans.' });
+    isSpeaking = true;
+    if (planSpeaking && autoPlanToStore.apply.speaking_dialogue)
+      speakingDialogue = autoPlanToStore.apply.speaking_dialogue;
+  }
+
   // --- Plan routing -------------------------------------------------------
   // The user's current plan sets the maximum quality (resolution + model).
   // A lower resolution may be requested explicitly; a higher one is capped
@@ -2126,9 +2255,15 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
     model = character ? CONFIG.modelRef
           : sourceImagePath ? CONFIG.modelI2V : CONFIG.model;
   }
+  // Speaking override (Phase E): the one-step Gemini Omni route at 720p.
+  // The structural gates above guarantee no character/image/draft/add-ons
+  // reach this point, so the override is unconditional here.
+  if (isSpeaking) { model = CONFIG.modelOmni; resolution = '720P'; }
   // Rate card (v9): the credit cost comes from the ROUTED quality's own
-  // row — 768P 10/20, 2K 15/30, native 4K 40/80 for 5s/10s.
-  const cost = isDraft ? (CONFIG.draftCost[Number(duration)] ?? 7)
+  // row — 768P 10/20, 2K 15/30, native 4K 40/80 for 5s/10s. Speaking jobs
+  // are the flat speaking price instead (50 credits, either duration).
+  const cost = isSpeaking ? CONFIG.speakingCost
+             : isDraft ? (CONFIG.draftCost[Number(duration)] ?? 7)
                        : generationCost(resolution, Number(duration));
   // The sound add-on is charged together with the video in the same
   // atomic transaction (exactly once). If the video fails, the whole
@@ -2142,7 +2277,7 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
   // H3 route the server really took).
   if (autoPlanToStore) {
     const actualEngine = autoEngineRoute({ character, hasSourceImage: !!sourceImagePath,
-      resolution, plan, voice: autoVoiceSpec });
+      resolution, plan, voice: autoVoiceSpec, speaking: isSpeaking });
     if (actualEngine.route !== autoPlanToStore.engine?.route ||
         actualEngine.voice_route !== autoPlanToStore.engine?.voice_route)
       autoPlanToStore = { ...autoPlanToStore, engine: actualEngine };
@@ -2205,7 +2340,23 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
   // in reference_image_urls as a base64 data URI (fal accepts data URIs
   // for file inputs, as with image_url elsewhere), and the prompt names
   // it "Image 1" — the documented way to cite a reference in the text.
-  const falBody = character
+  // Speaking body (Phase E): EXACTLY the four fields of the verified
+  // Gemini Omni schema — prompt, aspect_ratio, resolution, duration —
+  // and nothing else (the endpoint has no safety-checker/audio fields).
+  // The prompt carries the dialogue the user wrote; when a confirmed
+  // auto plan detected the spoken line, it is appended explicitly so
+  // the engine speaks those exact words.
+  let speakingPrompt = null;
+  if (isSpeaking) {
+    speakingPrompt = `${effectivePrompt} — style: ${style}`;
+    if (speakingDialogue && speakingDialogue.text &&
+        !effectivePrompt.includes(speakingDialogue.text))
+      speakingPrompt = `${effectivePrompt} — the speaker says: "${speakingDialogue.text}" — style: ${style}`;
+  }
+  const falBody = isSpeaking
+    ? { prompt: speakingPrompt, aspect_ratio,
+        resolution: CONFIG.speakingResolution, duration: Number(duration) }
+    : character
     ? { prompt: `Image 1 is the main character. ${effectivePrompt} — style: ${style}`,
         duration: Number(duration), aspect_ratio, resolution,
         enable_safety_checker: true,
@@ -2247,6 +2398,10 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
                                        auto_voice_cost: autoVoiceCost } : {}),
                ...(autoVoiceSpec ? { voice_mode: autoVoiceSpec.kind,
                                      voice_cost_credits: autoVoiceCost } : {}),
+               ...(isSpeaking ? { engine: 'speaking',
+                   speaking_engine: { provider: 'gemini-omni', model: CONFIG.modelOmni,
+                                      price_credits: CONFIG.speakingCost },
+                   note: 'Speaking engine: the dialogue and audio are generated by the model in one step. Speech quality — including Urdu — is unverified; judge it on this sample.' } : {}),
                ...(fallbackNote ? { note: fallbackNote } : {}) });
   } catch (e) {
     failAndRefund(jobId, `Provider submission failed (${e.message})`);

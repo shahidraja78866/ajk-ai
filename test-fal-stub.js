@@ -21,6 +21,9 @@
 //        containing "FAILME" gets an HTTP 500 — extend failure tests)
 //   POST /minimax/h3/reference-to-video           (queue submit — the
 //        character-library route, Phase C2)
+//   POST /google/gemini-omni-flash/v1.1/text-to-video (queue submit — the
+//        speaking engine, Phase E; a prompt containing "FAILME" gets an
+//        HTTP 500 so the speaking refund path is testable)
 //   POST /mirelo-ai/sfx2.0/video-to-audio         (queue submit)
 //   POST <any other path>                         (queue submit — covers
 //        the video models on instances that complete generations here)
@@ -75,7 +78,9 @@ const SFX_PATH = '/fal-ai/elevenlabs/sound-effects/v2';
 const MUSIC_PATH = '/cassetteai/music-generator';
 const QUEUE_PATHS = new Set(['/minimax/h3-max/lip-sync/image-to-video', '/fal-ai/latentsync',
                              '/fal-ai/mmaudio-v2', '/mirelo-ai/sfx2.0/video-to-audio',
-                             '/minimax/h3/reference-to-video']);
+                             '/minimax/h3/reference-to-video',
+                             '/google/gemini-omni-flash/v1.1/text-to-video']);
+const OMNI_PATH = '/google/gemini-omni-flash/v1.1/text-to-video';
 
 http.createServer((req, res) => {
   const u = new URL(req.url, 'http://127.0.0.1');
@@ -130,6 +135,13 @@ http.createServer((req, res) => {
           String(body?.prompt || '').includes('FAILME')) {
         res.writeHead(500);
         return res.end('stub mmaudio failure');
+      }
+      // Speaking failure hook (Phase E): an Omni submit whose prompt
+      // contains "FAILME" fails, so the exactly-once refund path runs.
+      if (u.pathname === OMNI_PATH &&
+          String(body?.prompt || '').includes('FAILME')) {
+        res.writeHead(500);
+        return res.end('stub omni failure');
       }
       // Extend failure hook (Phase C1): an image-to-video submit whose
       // prompt contains "FAILME" fails, so the extend refund path runs.

@@ -465,6 +465,12 @@ compacted so the prompt box sits in the first screenful. No API, id,
 or pricing behaviour changed — this phase is layout only, and the
 full 506-check suite passes unchanged.
 
+*Phase E layout update:* the manual half of this form (mode,
+character, image, style/aspect/duration/quality) plus the Voice,
+Sound and Watermark cards now live inside ONE collapsed-by-default
+"Advanced settings (optional)" container — see "Frontend (AUTO-FIRST
+Studio)" under the Speaking engine section.
+
 ## Character library — save a character once, reuse it everywhere (Phase C2, migration v13)
 
 The pattern Kling Elements, Pika Character Studio and Google Flow
@@ -653,6 +659,89 @@ against local stubs only. `GET /api/config` exposes
 `auto: { enabled, version }`; set `AUTO_DIRECTOR_ENABLED=0` to turn
 the feature off server-side.
 
+*Phase E update:* for speaking-eligible plans (Pro/Extra Pro), a fresh
+text-to-video human/news scene with detected dialogue now routes to
+the one-step speaking engine below FIRST; the separate voice/lip-sync
+route above still serves free/Normal plans, character jobs and
+image-to-video jobs.
+
+## Speaking engine — one-step talking videos (Phase E, Gemini Omni)
+
+The talking-clip route is now a real engine: **Gemini Omni Flash 1.1**
+on fal (`google/gemini-omni-flash/v1.1/text-to-video`, configurable via
+`FAL_MODEL_OMNI`). It generates the video **with synchronized native
+audio and dialogue in one step** from a single prompt — no separate
+TTS or lip-sync pass.
+
+**Why not Veo?** The plan flag is still called `can_veo`, but the Veo
+talking-clip engine was **never wired** — it existed only as an
+entitlement flag. Google is retiring Veo 3.1 (its preview model IDs
+shut down 2026-10-22 and the GA IDs are flagged for retirement from
+2026-11-17), and Omni is Google's designated successor on fal. At the
+flat 50-credit speaking price, Veo's $0.40/s would also have lost
+money on longer clips; Omni at 720p does not (see the cost check).
+
+**Verified schema** (fal's own llms.txt for the endpoint, 2026-10-23).
+The request body has exactly four fields — anything else is a bug:
+`prompt` (string, required; carries the dialogue text the user wrote),
+`aspect_ratio` (`"16:9"` | `"9:16"` only, default `"16:9"`),
+`resolution` (`"360p"` | `"720p"` | `"1080p"` | `"4k"`, default
+`"720p"` — the app routes `"720p"` and records the job as `720P`), and
+`duration` (integer 3–10, default 8 — the app sends its usual 5 or 10).
+There is **no** safety-checker or audio-toggle field, so none is sent.
+Output is `{ video: File }`. Prices (fal, per second of output): 360p
+$0.03, 720p $0.10, 1080p $0.15, 4K $0.30.
+
+**How it is sold.** Flat **50 credits** per clip (5s or 10s — the
+existing speaking-clip rate), **Pro and Extra Pro only** (the
+`can_veo` entitlement; everyone else gets 403). Select it directly
+with `engine: "speaking"` (alias `"omni_speaking"`) on
+`POST /api/generate`, or let AI Auto choose it: when the analyzer
+detects dialogue on a speaking-eligible plan and the job is a fresh
+text-to-video human/news scene (no character, no starting image), the
+plan's engine route is `omni_speaking` with base cost 50 and **no**
+voiceover/lip-sync add-on stacked; confirmed plans generate through
+the speaking route at that same flat 50. Character and image jobs keep
+the Phase D reference/image + lip-sync routes. Because the engine
+speaks itself, combining it with voice or sound add-ons is **rejected
+with 400** (never silently dropped), as are drafts and any aspect
+ratio other than 16:9 / 9:16 — all before charging. Provider failures
+use the same exactly-once refund as every other route.
+`GET /api/config` exposes `speaking_engine: { provider: "gemini-omni",
+model, price_credits: 50, aspects: ["16:9", "9:16"] }`.
+
+**Cost check.** 10s at 720p = 10 × $0.10 = **$1.00 ≈ Rs 277**; 50
+credits at the cheapest acquisition (Rs 14/credit) = **Rs 700**
+revenue — safely profitable at every duration the app offers.
+
+**Honest limits.** fal does **not** state which dialogue languages
+this engine speaks — **Urdu speech on it is UNVERIFIED**, exactly like
+every other model's native audio; judge it on real generated samples
+before believing any claim about it. Only 16:9 and 9:16 exist. Omni's
+"4k" tier is not claimed to be native 4K (that claim belongs only to
+the Kling O3 route), and the app does not route it. As with every
+engine here, the test suite verifies request shape, charging, gating
+and refunds against a local stub — output quality is proven only by
+real samples on a funded fal.ai balance.
+
+**Frontend (AUTO-FIRST Studio).** The Studio's primary surface is now
+just the Templates strip, the prompt card (with the AI Auto toggle)
+and the sticky cost/Generate bar. **All** manual controls — Video Mode
+cards, Character picker, Starting image, Style / Aspect / Duration /
+Quality, the Voice & Dialogue card, the Sound & Effects card and the
+Watermark card — live in **one** collapsible container,
+`#advancedCard` ("Advanced settings (optional) · مزید ترتیبات
+(اختیاری)"), **collapsed by default**. It reuses the existing collapse
+mechanism; every element id inside is unchanged and the generate flow
+reads the values exactly as before, collapsed or not. Picking any
+template chip opens the container (its presets live inside, so the
+user sees what was set), turning AI Auto **off** opens it once, and
+the AI Auto confirmation panel stays where it was — inside the prompt
+card, above the action bar, never inside the container. The long
+explanatory paragraphs (Templates intro, Describe guidance, the AI
+Auto description, the modes' audio note) were shortened to one short
+line each.
+
 ## Test results (backend, 2026-10-20)
 Run locally with `bash test.sh` — **19/19 tests passed** with a dummy key (no paid calls):
 - ✅ health + config endpoint exposes no secrets
@@ -724,8 +813,8 @@ they are edited in the Admin Panel and boot never overwrites an admin's edits.
 |---|---|---|---|---|---|
 | Weekly | Rs 1,800 / **week** | 80 / week | 768P | H3 model, resolution `768P` | — (H3 modes only) |
 | Normal | Rs 5,600 / mo (Rs 56,000 / yr) | 400 / mo | 768P | H3 model, resolution `768P` | — |
-| Pro | Rs 9,500 / mo (Rs 95,000 / yr) | 500 / mo | 2K | H3 model, resolution `2K` | Veo + lip-sync flags |
-| Extra Pro | Rs 14,000 / mo (Rs 140,000 / yr) | 600 / mo | Native 4K | Kling O3 4K native-4K endpoint (no `resolution` param; 16:9/9:16/1:1 only) | Veo + lip-sync flags, all premium |
+| Pro | Rs 9,500 / mo (Rs 95,000 / yr) | 500 / mo | 2K | H3 model, resolution `2K` | Speaking video + lip-sync |
+| Extra Pro | Rs 14,000 / mo (Rs 140,000 / yr) | 600 / mo | Native 4K | Kling O3 4K native-4K endpoint (no `resolution` param; 16:9/9:16/1:1 only) | Speaking video + lip-sync, all premium |
 
 **Allowance rationale (brief):** each tier's credits were sized from the
 worst case — the subscriber spends every credit at the tier's most
@@ -748,12 +837,14 @@ weekly period). On Google Play it maps to its own subscription product
 (`ajk_weekly` by default) — Play supports weekly base plans, so the same
 verify-then-activate pipeline handles it.
 
-**Feature flags (Phase B groundwork):** plans carry `can_veo` and
-`can_lipsync` entitlements, exposed by `/api/plans` in each plan's
-`features` descriptor (with `max_quality`) and shown on the plan cards.
-They are **flags only in this wave** — the Veo talking-clip engine and
-the Urdu lip-sync add-on are Phase B and are not wired into generation
-yet; nothing about generation behavior changes based on them today.
+**Feature flags:** plans carry `can_veo` and `can_lipsync`
+entitlements, exposed by `/api/plans` in each plan's `features`
+descriptor (with `max_quality`) and shown on the plan cards.
+`can_lipsync` gates the lip-sync add-on (wired in Phase B).
+`can_veo` — the name is historical — gates the one-step **speaking
+video engine** (Gemini Omni, wired in Phase E; the Veo engine it was
+named for was never wired and Veo 3.1 is being retired by Google).
+See "Speaking engine" below.
 
 **Quality honesty:** on the H3 model, fal's own docs describe 2K/4K as
 upscaling a 768P base — the UI labels Pro's quality simply "2K". Extra Pro's

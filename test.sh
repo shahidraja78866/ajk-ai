@@ -1709,7 +1709,12 @@ PT16=$(echo $PR16 | python3 -c 'import sys,json;print(json.load(sys.stdin)["toke
 PID16=$(curl -s $B16/api/me -H "Authorization: Bearer $PT16" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 curl -s -o /dev/null -X POST $B16/api/admin/users/$PID16/activate -H "Authorization: Bearer $AT16" -H 'Content-Type: application/json' -d '{"plan_id":"pro","period":"monthly"}'
 AP8=$(curl -s -X POST $B16/api/generate/plan -H "Authorization: Bearer $PT16" -H 'Content-Type: application/json' -d "{\"prompt\":\"$URDU_DLG\",\"prompt_language\":\"ur\",\"mode\":\"realistic\",\"style\":\"realistic\",\"duration\":5}")
-check "auto plan (Pro): urdu dialogue on a human -> lipsync +30 via the video lip-sync route" "lipsync/30/latentsync_video/45" "$(echo $AP8 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["apply"]["voice"]["kind"]+"/"+str(p["apply"]["voice"]["cost"])+"/"+p["engine"]["voice_route"]+"/"+str(p["total_cost"]))')"
+# Phase E preference order: a speaking-eligible plan (Pro) + dialogue on a
+# FRESH text-to-video human scene routes to the one-step Omni speaking
+# engine FIRST (flat 50, no voice add-on stacked) — the Phase D lipsync
+# expectation was updated for exactly this case; character/image jobs
+# still take the lipsync route (see the Phase E section at the end).
+check "auto plan (Pro): urdu dialogue on a fresh human scene -> omni speaking engine, flat 50, no voice add-on" "omni_speaking/None/50/50" "$(echo $AP8 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["engine"]["route"]+"/"+str(p["apply"]["voice"])+"/"+str(p["base_cost"])+"/"+str(p["total_cost"]))')"
 CR16=$(curl -s -X POST $B16/api/auth/register -H 'Content-Type: application/json' -d '{"email":"autochar@example.com","password":"password123"}')
 CT16=$(echo $CR16 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 PNG_B64_A=$(python3 -c "import base64; print(base64.b64encode(bytes.fromhex('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c636000000000020001e221bc330000000049454e44ae426082')).decode())")
@@ -1877,6 +1882,70 @@ const mig = db.prepare('SELECT COUNT(*) AS c FROM schema_migrations WHERE versio
 console.log(cols === 'auto_plan,auto_voice_cost,auto_voice_status' && Number(mig) === 1 ? 'ok' : 'bad');
 ")"
 kill $SRV18_PID $AUTO3STUB_PID $AUTO3TSTUB_PID 2>/dev/null
+
+echo "--- Speaking engine (Phase E: Gemini Omni, stub instance) ---"
+SPK_STUB_PORT=18065
+SPK_TSTUB_PORT=18064
+B19=http://127.0.0.1:18066
+rm -f /tmp/myvideoai-speaking-test.db; rm -rf /tmp/spkgen /tmp/spkvoice; mkdir -p /tmp/spkgen /tmp/spkvoice
+FAL_STUB_PORT=$SPK_STUB_PORT node "$(dirname "$0")/test-fal-stub.js" > /tmp/fal-stub-spk.log 2>&1 &
+SPKSTUB_PID=$!
+TRANSLATE_STUB_PORT=$SPK_TSTUB_PORT node "$(dirname "$0")/test-translate-stub.js" > /tmp/translate-stub-spk.log 2>&1 &
+SPKTSTUB_PID=$!
+for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:$SPK_STUB_PORT/__calls && break || sleep 0.25; done
+for i in $(seq 1 40); do curl -s -o /dev/null http://127.0.0.1:$SPK_TSTUB_PORT/__count && break || sleep 0.25; done
+SPK_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-speaking-test.db PORT=18066 FAL_KEY=dummy_test_key "$SPK_JWT_NAME=speaking-instance-dummy-value" \
+  ADMIN_EMAIL=spkadmin@example.com TEST_RECORD_FAL_BODY=1 \
+  FAL_API_BASE_URL=http://127.0.0.1:$SPK_STUB_PORT FAL_QUEUE_BASE_URL=http://127.0.0.1:$SPK_STUB_PORT \
+  FAL_POLL_INTERVAL_MS=100 TRANSLATE_API_BASE=http://127.0.0.1:$SPK_TSTUB_PORT \
+  GENERATED_DIR=/tmp/spkgen VOICE_DIR=/tmp/spkvoice \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-speaking-test.log 2>&1 &
+SRV19_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B19/api/health && break || sleep 0.25; done
+AR19=$(curl -s -X POST $B19/api/auth/register -H 'Content-Type: application/json' -d '{"email":"spkadmin@example.com","password":"password123"}')
+AT19=$(echo $AR19 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+PR19=$(curl -s -X POST $B19/api/auth/register -H 'Content-Type: application/json' -d '{"email":"spkpro@example.com","password":"password123"}')
+PT19=$(echo $PR19 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+PID19=$(curl -s $B19/api/me -H "Authorization: Bearer $PT19" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+curl -s -o /dev/null -X POST $B19/api/admin/users/$PID19/activate -H "Authorization: Bearer $AT19" -H 'Content-Type: application/json' -d '{"plan_id":"pro","period":"monthly"}'
+FR19=$(curl -s -X POST $B19/api/auth/register -H 'Content-Type: application/json' -d '{"email":"spkfree@example.com","password":"password123"}')
+FT19=$(echo $FR19 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+poll19() { # jobId token -> echoes the final generation JSON
+  local st=""
+  for i in $(seq 1 40); do
+    st=$(curl -s $B19/api/generations/$1 -H "Authorization: Bearer $2")
+    [[ "$(echo "$st" | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])' 2>/dev/null)" == "completed" ]] && break || sleep 0.3
+  done
+  echo "$st"
+}
+check "config: speaking_engine block (gemini-omni, flat 50, 16:9+9:16)" "gemini-omni/google/gemini-omni-flash/v1.1/text-to-video/50/16:9,9:16" "$(curl -s $B19/api/config | python3 -c 'import sys,json;s=json.load(sys.stdin)["speaking_engine"];print(s["provider"]+"/"+s["model"]+"/"+str(s["price_credits"])+"/"+",".join(s["aspects"]))')"
+# NOTE: exactly 8 plan/generate calls on this instance (shared limiter).
+SPG1=$(curl -s -X POST $B19/api/generate -H "Authorization: Bearer $PT19" -H 'Content-Type: application/json' -d '{"prompt":"a man smiles at the camera and says: \"Welcome to my shop, everything is fresh today\"","engine":"speaking","aspect_ratio":"16:9","duration":10,"mode":"realistic","style":"realistic"}')
+check "speaking gen: flat 50 charged, omni model, 720P, engine speaking" "50/550/google/gemini-omni-flash/v1.1/text-to-video/720P/speaking" "$(echo $SPG1 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"])+"/"+g["model"]+"/"+g["resolution"]+"/"+g["engine"])')"
+SPJ1=$(echo $SPG1 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+SPP1=$(poll19 $SPJ1 $PT19)
+check "speaking gen: completes on the stub with the omni model recorded" "completed/google/gemini-omni-flash/v1.1/text-to-video/720P" "$(echo $SPP1 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["model"]+"/"+g["resolution"])')"
+SPCALLS=$(curl -s http://127.0.0.1:$SPK_STUB_PORT/__calls)
+check "speaking gen: fal body is exactly the verified Omni schema (4 fields, prompt carries the dialogue)" "720p/10/16:9/4/yes" "$(echo $SPCALLS | python3 -c 'import sys,json;cs=[c for c in json.load(sys.stdin)["calls"] if c["path"]=="/google/gemini-omni-flash/v1.1/text-to-video"];b=cs[-1]["body"];print(b["resolution"]+"/"+str(b["duration"])+"/"+b["aspect_ratio"]+"/"+str(len(b))+"/"+("yes" if "Welcome to my shop" in b["prompt"] else "no"))')"
+check "speaking gen: free plan -> 403, no charge" "403/100" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B19/api/generate -H "Authorization: Bearer $FT19" -H 'Content-Type: application/json' -d '{"prompt":"a man says hello to the camera","engine":"speaking","aspect_ratio":"16:9","duration":5}')/$(curl -s $B19/api/me -H "Authorization: Bearer $FT19" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "speaking gen: aspect 1:1 -> 400 before charging" "400/550" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B19/api/generate -H "Authorization: Bearer $PT19" -H 'Content-Type: application/json' -d '{"prompt":"a man says hello to the camera","engine":"speaking","aspect_ratio":"1:1","duration":5}')/$(curl -s $B19/api/me -H "Authorization: Bearer $PT19" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "speaking gen: sound add-on combo -> 400 (rejected, not silently dropped), no charge" "400/550" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B19/api/generate -H "Authorization: Bearer $PT19" -H 'Content-Type: application/json' -d '{"prompt":"a man says hello to the camera","engine":"speaking","aspect_ratio":"16:9","duration":5,"sound":{"mode":"sync","prompt":"city ambience"}}')/$(curl -s $B19/api/me -H "Authorization: Bearer $PT19" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "speaking gen: provider failure -> 502 with full exactly-once refund" "502/550" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B19/api/generate -H "Authorization: Bearer $PT19" -H 'Content-Type: application/json' -d '{"prompt":"FAILME a man says: \"this will fail today\"","engine":"speaking","aspect_ratio":"16:9","duration":5}')/$(curl -s $B19/api/me -H "Authorization: Bearer $PT19" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+SPPL=$(curl -s -X POST $B19/api/generate/plan -H "Authorization: Bearer $PT19" -H 'Content-Type: application/json' -d '{"prompt":"a man stands in his shop and says: \"Welcome in, everything is fresh today\"","mode":"realistic","style":"realistic","duration":5}')
+check "auto plan (Pro): dialogue -> omni_speaking engine, speaking flag set, total = flat 50, confirmation needed" "omni_speaking/True/None/50/50/True" "$(echo $SPPL | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["engine"]["route"]+"/"+str(p["apply"]["speaking_engine"])+"/"+str(p["apply"]["voice"])+"/"+str(p["base_cost"])+"/"+str(p["total_cost"])+"/"+str(p["needs_confirmation"]))')"
+SPG2=$(curl -s -X POST $B19/api/generate -H "Authorization: Bearer $PT19" -H 'Content-Type: application/json' -d "$(echo $SPPL | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(json.dumps({"prompt":"a man stands in his shop and says: \"Welcome in, everything is fresh today\"","mode":"realistic","style":"realistic","duration":5,"auto_plan":p,"auto_confirmed":True}))')")
+check "auto omni gen: confirmed plan generates through the speaking route at flat 50" "50/500/google/gemini-omni-flash/v1.1/text-to-video/omni_speaking" "$(echo $SPG2 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"])+"/"+g["model"]+"/"+g["auto_plan"]["engine"]["route"])')"
+SPJ2=$(echo $SPG2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+SPP2=$(poll19 $SPJ2 $PT19)
+check "auto omni gen: completes on the stub" "completed" "$(echo $SPP2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])')"
+UPA19=$(curl -s -X POST $B19/api/uploads/image -H "Authorization: Bearer $PT19" -H 'Content-Type: application/json' -d "{\"image_base64\":\"$PNG_B64_A\",\"content_type\":\"image/png\"}")
+IMG19=$(echo $UPA19 | python3 -c 'import sys,json;print(json.load(sys.stdin)["image_path"])')
+CHA19=$(curl -s -X POST $B19/api/characters -H "Authorization: Bearer $PT19" -H 'Content-Type: application/json' -d "{\"name\":\"Captain Sara\",\"image_path\":\"$IMG19\"}")
+CID19=$(echo $CHA19 | python3 -c 'import sys,json;print(json.load(sys.stdin)["character"]["id"])')
+SPPC=$(curl -s -X POST $B19/api/generate/plan -H "Authorization: Bearer $PT19" -H 'Content-Type: application/json' -d "{\"prompt\":\"the captain says: \\\"Follow me now, we sail at dawn\\\"\",\"mode\":\"realistic\",\"style\":\"realistic\",\"duration\":5,\"character_id\":$CID19}")
+check "auto plan (Pro): character + dialogue -> still reference route + lipsync (omni is fresh-t2v only)" "h3_reference_to_video/lipsync/latentsync_video" "$(echo $SPPC | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["engine"]["route"]+"/"+p["apply"]["voice"]["kind"]+"/"+p["engine"]["voice_route"])')"
+kill $SRV19_PID $SPKSTUB_PID $SPKTSTUB_PID 2>/dev/null
 
 echo "--- rate limit: burst until 429 ---"
 FOUND429="no"
