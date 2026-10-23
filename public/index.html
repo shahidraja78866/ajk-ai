@@ -625,6 +625,78 @@
               </button>
               <p class="fineprint">Credits are charged by the server when it accepts your job. Failed generations are refunded automatically. Mode, a starting image and watermark text do not change the credit cost — the same duration and quality pricing applies.</p>
             </div>
+
+            <div class="card" id="voiceCard">
+              <h2>Voice &amp; Dialogue (optional)</h2>
+              <p class="sub">Write a script, hear the voice first — free — then turn a photo into a talking character, or re-voice a finished video. Voice quality is new and still being proven with real samples; listen to the preview before spending credits.</p>
+
+              <div class="form-error" id="voiceNotice" style="display:none;" role="alert"></div>
+
+              <div id="voiceControls">
+                <div class="field-label"><span>Script</span><span class="count"><span id="voiceCharCount">0</span> / 6000</span></div>
+                <textarea id="voiceScript" maxlength="6000" placeholder="The words the character should say — in Urdu, Hindi or English script, or in Roman letters (choose Roman below)."></textarea>
+
+                <div class="field-label"><span>Spoken language</span></div>
+                <select id="voiceLang">
+                  <option value="ur" selected>Urdu</option>
+                  <option value="hi">Hindi</option>
+                  <option value="en">English</option>
+                </select>
+
+                <div class="field-label"><span>Script you typed in</span></div>
+                <select id="voiceScriptMode">
+                  <option value="native" selected>Native script (اردو / हिन्दी / English)</option>
+                  <option value="roman">Roman letters (mera naam …)</option>
+                </select>
+                <p class="lang-hint">Roman input is converted to the native script on the server before speaking — a best-effort conversion; native script always gives the most reliable pronunciation.</p>
+
+                <div class="field-label"><span>Voice provider</span></div>
+                <select id="voiceProvider"></select>
+
+                <div class="field-label"><span>Voice</span></div>
+                <select id="voiceVoice"></select>
+
+                <div class="field-label"><span>Style</span></div>
+                <select id="voiceStyle">
+                  <option value="narration">Narration</option>
+                  <option value="conversation" selected>Conversation</option>
+                  <option value="news">News reader</option>
+                  <option value="energetic">Energetic</option>
+                  <option value="emotional">Emotional</option>
+                </select>
+
+                <div class="field-label"><span>Speed</span></div>
+                <select id="voiceSpeed">
+                  <option value="slow">Slow</option>
+                  <option value="normal" selected>Normal</option>
+                  <option value="fast">Fast</option>
+                </select>
+
+                <div class="cost-row">
+                  <span>Voice preview</span>
+                  <strong>Free</strong>
+                </div>
+                <p class="lang-hint" id="voicePreviewCap">Free preview — no credits charged.</p>
+                <button type="button" class="btn" id="voicePreviewBtn">Preview voice</button>
+                <audio id="voicePreviewAudio" controls style="display:none;width:100%;margin-top:10px;"></audio>
+                <p class="lang-hint" id="voicePreviewStatus"></p>
+
+                <div class="field-label" style="margin-top:18px;"><span>Talking character (lip-sync)</span></div>
+                <label class="check-row"><input type="radio" name="lipsyncSource" value="image" checked /> <span>Animate the starting image above (upload one first)</span></label>
+                <label class="check-row"><input type="radio" name="lipsyncSource" value="video" /> <span>Lip-sync a finished video (picked below)</span></label>
+                <button type="button" class="btn primary generate-btn" id="lipsyncBtn" style="margin-top:10px;">Create talking character</button>
+                <p class="lang-hint" id="lipsyncNote">Lip-sync needs the Pro or Extra Pro plan.</p>
+
+                <div class="field-label" style="margin-top:18px;"><span>Voiceover for a finished video</span></div>
+                <div class="field-label"><span>Finished video</span></div>
+                <select id="voiceGenSelect"></select>
+                <p class="lang-hint">The voiceover <strong>replaces</strong> the video's original audio with the synthesized voice.</p>
+                <button type="button" class="btn primary generate-btn" id="voiceoverBtn">Add voiceover</button>
+
+                <div class="form-error" id="voiceError" role="alert"></div>
+                <p class="fineprint">Costs are shown on the buttons before you confirm. If a voice job fails, its credits are refunded automatically. Finished voice jobs appear in your History.</p>
+              </div>
+            </div>
           </div>
 
           <div class="card preview-card">
@@ -1334,6 +1406,7 @@
               setBanner("ok", "Backend connected", "API at " + apiBase + " · model " + modelName + ". Generation, credits, and history are live.");
               setConnStatus('<span class="ok">Connected</span> — ' + apiBase + " · model " + modelName);
               fillAccountMeta();
+              fillVoiceUI();
               return true;
             }
             setBanner("bad", "Backend not connected",
@@ -1392,6 +1465,7 @@
               $("#meSince").textContent = fmtDate(me.created_at);
               setCredits(me.credits);
               fillPlanUI();
+              fillVoiceGate();
               fillAccountMeta();
               setSignedInUI();
               return true;
@@ -1781,6 +1855,7 @@
             if (!res.ok || !res.data) { renderHistoryState("unreachable"); return; }
             if (res.data.credits !== undefined) setCredits(res.data.credits);
             var gens = res.data.generations || [];
+            fillVoiceSources(gens);
             if (!gens.length) { renderHistoryState("empty"); return; }
             renderHistoryState("list");
             var list = $("#jobList");
@@ -1807,6 +1882,8 @@
               modeBadge.textContent = MODE_LABELS[g.mode] || "Realistic Human";
               modeLine.appendChild(modeBadge);
               var extras = [];
+              if (g.kind === "lipsync") extras.push("Talking / Lip-Sync");
+              if (g.kind === "voiceover") extras.push("Voiceover");
               if (g.source_image_path) extras.push("image-to-video");
               if (g.watermark_text) extras.push("watermark: " + (g.watermark_status || "pending"));
               modeLine.appendChild(document.createTextNode(extras.join(" · ")));
@@ -2326,6 +2403,211 @@
             closeModal("reportModal");
             $("#reportDetails").value = "";
             toast("Report submitted — thank you. The generation is flagged for review.");
+          });
+        });
+
+        /* ---------- voice & dialogue (Phase B) ---------- */
+        var voiceCfg = null;
+        function voiceShowError(msg) {
+          var e = $("#voiceError");
+          e.textContent = msg || "";
+          e.classList.toggle("show", !!msg);
+        }
+        function voiceSettingsBody() {
+          return {
+            script: $("#voiceScript").value,
+            spoken_language: $("#voiceLang").value,
+            script_mode: $("#voiceScriptMode").value,
+            provider: $("#voiceProvider").value || undefined,
+            voice: $("#voiceVoice").value || undefined,
+            style: $("#voiceStyle").value,
+            speed: $("#voiceSpeed").value
+          };
+        }
+        function fillVoiceOptions() {
+          if (!voiceCfg) return;
+          var prov = $("#voiceProvider").value;
+          var lang = $("#voiceLang").value;
+          var entry = (voiceCfg.voices || []).filter(function (p) { return p.provider === prov; })[0];
+          var sel = $("#voiceVoice");
+          sel.innerHTML = "";
+          ((entry && entry.voices) || []).filter(function (v) {
+            return !v.languages || v.languages.indexOf(lang) !== -1;
+          }).forEach(function (v) {
+            var o = document.createElement("option");
+            o.value = v.id;
+            o.textContent = v.label + " (" + v.gender + ")";
+            sel.appendChild(o);
+          });
+        }
+        function fillVoiceUI() {
+          voiceCfg = (cfg && cfg.voice) ? cfg.voice : null;
+          var notice = $("#voiceNotice");
+          var controls = $("#voiceControls");
+          var anyProvider = !!(voiceCfg && voiceCfg.providers &&
+            (voiceCfg.providers.gemini || voiceCfg.providers.elevenlabs || voiceCfg.providers.azure));
+          if (!anyProvider) {
+            notice.style.display = "block";
+            notice.textContent = "Voice features are not configured on this server yet — no voice provider is available, so previews and voice jobs are disabled and nothing can be charged for them.";
+            controls.style.display = "none";
+            return;
+          }
+          notice.style.display = "none";
+          controls.style.display = "block";
+          var provSel = $("#voiceProvider");
+          provSel.innerHTML = "";
+          (voiceCfg.voices || []).forEach(function (p) {
+            var o = document.createElement("option");
+            o.value = p.provider;
+            o.textContent = p.label;
+            provSel.appendChild(o);
+          });
+          if (voiceCfg.default_provider) provSel.value = voiceCfg.default_provider;
+          var langSel = $("#voiceLang");
+          langSel.innerHTML = "";
+          (voiceCfg.languages || []).forEach(function (l) {
+            var o = document.createElement("option");
+            o.value = l.code;
+            o.textContent = l.name;
+            langSel.appendChild(o);
+          });
+          langSel.value = "ur";
+          fillVoiceOptions();
+          if (voiceCfg.costs) {
+            $("#lipsyncBtn").textContent = "Create talking character — " + voiceCfg.costs.lipsync_credits + " credits";
+            $("#voiceoverBtn").textContent = "Add voiceover — " + voiceCfg.costs.voiceover_credits + " credits";
+          }
+          if (voiceCfg.preview) {
+            $("#voicePreviewCap").textContent = "Free preview — no credits charged. Speaks the first " +
+              voiceCfg.preview.max_chars + " characters; up to " + voiceCfg.preview.daily_cap + " previews a day.";
+          }
+          fillVoiceGate();
+        }
+        function fillVoiceGate() {
+          var note = $("#lipsyncNote");
+          if (!note) return;
+          var plan = (typeof me !== "undefined" && me && me.plan) ? me.plan : null;
+          var can = !!(plan && plan.features && plan.features.can_lipsync);
+          note.textContent = can
+            ? "Your " + plan.name + " plan includes lip-sync."
+            : "Lip-sync (talking characters) needs the Pro or Extra Pro plan" +
+              (plan ? " — your current plan is " + plan.name + "." : ".") +
+              " The server checks your plan before charging anything.";
+        }
+        function fillVoiceSources(gens) {
+          var sel = $("#voiceGenSelect");
+          if (!sel) return;
+          var prev = sel.value;
+          sel.innerHTML = "";
+          var done = (gens || []).filter(function (g) {
+            return String(g.status).toLowerCase() === "completed" && g.video_url;
+          });
+          if (!done.length) {
+            var o = document.createElement("option");
+            o.value = "";
+            o.textContent = "No finished videos yet";
+            sel.appendChild(o);
+            return;
+          }
+          done.forEach(function (g) {
+            var o = document.createElement("option");
+            o.value = g.id;
+            o.textContent = "Job " + g.id + " — " + String(g.prompt || "").slice(0, 44);
+            sel.appendChild(o);
+          });
+          if (prev) sel.value = prev;
+          if (state && state.lastStudioJob && state.lastStudioJob.id) sel.value = state.lastStudioJob.id;
+        }
+        function voiceRequireSignIn() {
+          if (token) return true;
+          voiceShowError("Please sign in first — voice jobs are tied to your account and credits.");
+          openAuth("login");
+          return false;
+        }
+        function voiceDone(gen, title, text) {
+          setCredits(undefined); // balance refreshed below via loadMe
+          loadMe();
+          loadHistory();
+          if (gen && gen.video_url) {
+            state.lastStudioJob = gen;
+            showPlayer(resolveUrl(gen.video_url));
+            var acts = showResult("ok", title, text, "Job " + gen.id);
+            acts.innerHTML = "";
+            addVideoActions(acts, gen);
+          }
+          toast(title + " — see it in the preview and your History.");
+        }
+        $("#voiceScript").addEventListener("input", function () {
+          $("#voiceCharCount").textContent = this.value.length;
+        });
+        $("#voiceProvider").addEventListener("change", fillVoiceOptions);
+        $("#voiceLang").addEventListener("change", fillVoiceOptions);
+        $("#voicePreviewBtn").addEventListener("click", function () {
+          voiceShowError("");
+          if (!voiceRequireSignIn()) return;
+          var body = voiceSettingsBody();
+          if (!body.script.trim()) { voiceShowError("Write a script first, then preview the voice."); return; }
+          var btn = this;
+          btn.disabled = true;
+          $("#voicePreviewStatus").textContent = "Synthesizing the preview…";
+          api("/api/voice/preview", { method: "POST", body: body }).then(function (res) {
+            btn.disabled = false;
+            if (!res.ok || !res.data) {
+              $("#voicePreviewStatus").textContent = "";
+              voiceShowError(errText(res, "The voice preview failed"));
+              return;
+            }
+            var a = $("#voicePreviewAudio");
+            a.src = resolveUrl(res.data.audio_url);
+            a.style.display = "block";
+            a.play().catch(function () {});
+            var note = "Voice: " + res.data.voice + " · provider: " + res.data.provider + ".";
+            if (res.data.script_mode === "roman")
+              note += " Spoken text after Roman→native conversion: “" + res.data.synthesized_text + "”";
+            $("#voicePreviewStatus").textContent = note;
+          });
+        });
+        $("#lipsyncBtn").addEventListener("click", function () {
+          voiceShowError("");
+          if (!voiceRequireSignIn()) return;
+          var body = voiceSettingsBody();
+          if (!body.script.trim()) { voiceShowError("Write the script the character should say first."); return; }
+          var source = ($('input[name="lipsyncSource"]:checked') || {}).value || "image";
+          if (source === "image") {
+            if (!state.imagePath) {
+              voiceShowError("Upload a starting image in the form above first — the talking character is animated from it.");
+              return;
+            }
+            body.image_path = state.imagePath;
+          } else {
+            var gid = $("#voiceGenSelect").value;
+            if (!gid) { voiceShowError("Pick a finished video for lip-sync first."); return; }
+            body.generation_id = Number(gid);
+          }
+          var btn = this;
+          btn.disabled = true;
+          api("/api/voice/lipsync", { method: "POST", body: body }).then(function (res) {
+            btn.disabled = false;
+            if (!res.ok || !res.data) { voiceShowError(errText(res, "The lip-sync job failed")); return; }
+            if (res.data.credits_left !== undefined) setCredits(res.data.credits_left);
+            voiceDone(res.data.generation, "Talking character ready", "Your lip-synced video is ready.");
+          });
+        });
+        $("#voiceoverBtn").addEventListener("click", function () {
+          voiceShowError("");
+          if (!voiceRequireSignIn()) return;
+          var body = voiceSettingsBody();
+          if (!body.script.trim()) { voiceShowError("Write the voiceover script first."); return; }
+          var gid = $("#voiceGenSelect").value;
+          if (!gid) { voiceShowError("Pick a finished video for the voiceover first."); return; }
+          body.generation_id = Number(gid);
+          var btn = this;
+          btn.disabled = true;
+          api("/api/voice/voiceover", { method: "POST", body: body }).then(function (res) {
+            btn.disabled = false;
+            if (!res.ok || !res.data) { voiceShowError(errText(res, "The voiceover job failed")); return; }
+            if (res.data.credits_left !== undefined) setCredits(res.data.credits_left);
+            voiceDone(res.data.generation, "Voiceover added", "The video now carries the synthesized voice instead of its original audio.");
           });
         });
 
