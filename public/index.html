@@ -556,6 +556,43 @@
           <button type="button" class="btn small" data-goto="settings">API settings</button>
         </div>
 
+        <div class="card" id="templateCard">
+          <h2>Start from a template</h2>
+          <p class="sub">One tap fills in the mode, format and a starter prompt below — edit the words freely before generating. You can write your prompt in any supported language (English, اردو, کشمیری, العربية, فارسی, हिन्दी, 中文) — the app translates it automatically.</p>
+          <div class="mode-grid" id="templateGrid" role="group" aria-label="Templates">
+            <button type="button" class="mode-card" data-template="talking-photo">
+              <strong>Talking Photo</strong>
+              <span>Turn a photo into a talking character with a voice and lip-sync.</span>
+              <small>Opens the Voice &amp; Dialogue card below.</small>
+            </button>
+            <button type="button" class="mode-card" data-template="kids-story">
+              <strong>Kids Story</strong>
+              <span>A gentle cartoon story scene for children.</span>
+              <small>Cartoon mode · story starter prompt.</small>
+            </button>
+            <button type="button" class="mode-card" data-template="product-ad">
+              <strong>Product Ad</strong>
+              <span>A vertical product showcase made for social feeds.</span>
+              <small>Realistic mode · 9:16.</small>
+            </button>
+            <button type="button" class="mode-card" data-template="breaking-news">
+              <strong>Breaking-News Short</strong>
+              <span>A vertical news-style short with a studio look.</span>
+              <small>Realistic mode · 9:16 · AI visuals, always labelled.</small>
+            </button>
+            <button type="button" class="mode-card" data-template="music-video">
+              <strong>Music Video</strong>
+              <span>A performance scene with a background music bed.</span>
+              <small>Realistic mode · music sound preselected.</small>
+            </button>
+            <button type="button" class="mode-card" data-template="cartoon-episode">
+              <strong>Cartoon Episode</strong>
+              <span>An episode opening scene with recurring cartoon characters.</span>
+              <small>Cartoon mode · episode starter prompt.</small>
+            </button>
+          </div>
+        </div>
+
         <div class="studio-grid">
           <div>
             <div class="card">
@@ -614,6 +651,13 @@
 
               <div class="field-label"><span>Duration</span></div>
               <div class="seg" id="durationSeg" role="group" aria-label="Duration"></div>
+
+              <div class="field-label"><span>Quality</span></div>
+              <div class="seg" id="qualitySeg" role="group" aria-label="Quality">
+                <button type="button" class="sel" data-quality="full">Full quality<small>your plan's quality</small></button>
+                <button type="button" data-quality="draft">Draft · 480P<small><span id="draftCostHint">7 / 14</span> credits</small></button>
+              </div>
+              <p class="lang-hint" id="draftHint" style="display:none;">Draft = a cheap 480P preview of your idea. Sound and voice add-ons are not available on drafts — upgrade the draft from your History to full quality first, then add them there.</p>
 
               <label class="check-row"><input type="checkbox" id="watermarkEnabled" /> <span>Add watermark text</span></label>
               <input type="text" class="text-input" id="watermarkText" maxlength="30" placeholder="e.g. SMT Movies" disabled style="margin-top:9px;" />
@@ -1130,6 +1174,7 @@
         var credits = null;        // last known balance (server-sourced)
         var state = {
           aspect: "16:9", duration: 5, style: "realistic", mode: "realistic",
+          quality: "full",
           imagePath: null, imageName: "",
           generating: false, currentJobId: null, pollTimer: null, pollCount: 0,
           reportTarget: null, lastStudioJob: null
@@ -1262,6 +1307,13 @@
           return q;
         }
         function costFor(d) {
+          // Draft quality is a flat cheap rate (480P preview), read from
+          // the server's config like everything else.
+          if (state.quality === "draft") {
+            var dt = (cfg && cfg.draft && cfg.draft.cost_by_duration) || { "5": 7, "10": 14 };
+            var dv = dt[String(d)];
+            return (dv === undefined || dv === null) ? 7 : dv;
+          }
           // The server charges by the routed quality's own rate card
           // (768P 10/20, 2K 15/30, native 4K 40/80 for 5s/10s) — read the
           // row for the signed-in user's quality so the hint is exact.
@@ -1274,10 +1326,30 @@
         function updateCost() {
           var total = costFor(state.duration);
           var sm = $("#soundMode");
-          if (sm && soundCfg && soundCfg.configured && sm.value && sm.value !== "none" && soundCfg.costs)
+          // Drafts cannot take sound add-ons — the hint never adds them.
+          if (state.quality !== "draft" && sm && soundCfg && soundCfg.configured && sm.value && sm.value !== "none" && soundCfg.costs)
             total += Number(soundCfg.costs[sm.value] || 0);
           $("#costNum").textContent = total;
+          // The duration buttons show per-duration prices — refresh them
+          // when the quality (and therefore the price row) changes.
+          $$("#durationSeg button").forEach(function (b, i) {
+            var durs = (cfg && cfg.durations) || FALLBACK.durations;
+            var small = b.querySelector("small");
+            if (small && durs[i] !== undefined) small.textContent = costFor(durs[i]) + " credits";
+          });
         }
+        // Quality seg (Full / Draft 480P): drafts hide the sound add-on
+        // choices in effect — currentSoundSpec returns null for drafts —
+        // and say so in the hint line.
+        $$("#qualitySeg button").forEach(function (b) {
+          b.addEventListener("click", function () {
+            state.quality = b.getAttribute("data-quality") || "full";
+            $$("#qualitySeg button").forEach(function (x) { x.classList.toggle("sel", x === b); });
+            var hint = $("#draftHint");
+            if (hint) hint.style.display = state.quality === "draft" ? "block" : "none";
+            updateCost();
+          });
+        });
 
         function renderControls(source) {
           var allStyles = (source.styles && source.styles.length) ? source.styles : FALLBACK.styles;
@@ -1386,6 +1458,59 @@
           });
         });
 
+        /* ---------- template gallery (Phase C1) ---------- */
+        // Pure presets over the existing controls — no new capabilities:
+        // each card sets the mode/style/aspect, fills an editable starter
+        // prompt, and (Music Video) preselects the existing music sound
+        // mode. Talking Photo just opens the existing voice card.
+        var TEMPLATES = {
+          "kids-story": { mode: "cartoon", style: "cartoon", aspect: "16:9",
+            prompt: "A kind cartoon fox helps a lost baby bird find its way home through a sunny forest, gentle storybook colours, soft camera movement" },
+          "product-ad": { mode: "realistic", style: "realistic", aspect: "9:16",
+            prompt: "A stylish product showcase: [your product] on a clean studio background, slow rotating close-up, bright commercial lighting, space for text at the top" },
+          "breaking-news": { mode: "realistic", style: "realistic", aspect: "9:16",
+            prompt: "A news presenter in a modern TV studio introduces a top story, lower-third headline space, professional broadcast lighting. Note: these are AI-generated visuals, not real news footage" },
+          "music-video": { mode: "realistic", style: "cinematic", aspect: "16:9", sound: "music",
+            prompt: "A singer performs on a small stage with warm spotlights and a happy crowd, cinematic camera moves, music-video energy" },
+          "cartoon-episode": { mode: "cartoon", style: "cartoon", aspect: "16:9",
+            prompt: "Episode opening: two cartoon friends arrive in a colourful village square and wave at the camera, cheerful animation, bright morning light" }
+        };
+        function applyTemplate(key) {
+          if (key === "talking-photo") {
+            var vc = $("#voiceCard");
+            if (vc) vc.scrollIntoView({ behavior: "smooth", block: "start" });
+            toast("Talking Photo: in the Voice & Dialogue card, add a photo and a script — preview the voice free, then create the talking video.");
+            return;
+          }
+          var t = TEMPLATES[key];
+          if (!t) return;
+          state.mode = t.mode;
+          if (MODE_STYLES[state.mode].indexOf(t.style) !== -1) state.style = t.style;
+          state.aspect = t.aspect;
+          state.quality = "full";
+          $$("#qualitySeg button").forEach(function (x) {
+            x.classList.toggle("sel", x.getAttribute("data-quality") === "full");
+          });
+          var hint = $("#draftHint");
+          if (hint) hint.style.display = "none";
+          renderControls(cfg || FALLBACK);
+          promptEl.value = t.prompt;
+          promptEl.dispatchEvent(new Event("input"));
+          if (t.sound) {
+            var sm = $("#soundMode");
+            if (sm && soundCfg && soundCfg.configured) {
+              sm.value = t.sound;
+              sm.dispatchEvent(new Event("change"));
+            }
+          }
+          updateCost();
+          promptEl.scrollIntoView({ behavior: "smooth", block: "center" });
+          toast("Template loaded — edit the prompt in your own words (any supported language works), then press Generate.");
+        }
+        $$("#templateGrid [data-template]").forEach(function (b) {
+          b.addEventListener("click", function () { applyTemplate(b.getAttribute("data-template")); });
+        });
+
         /* ---------- source image upload ---------- */
         function readFileAsDataUrl(file) {
           return new Promise(function (resolve, reject) {
@@ -1457,6 +1582,10 @@
               fillAccountMeta();
               fillVoiceUI();
               fillSoundUI();
+              if (cfg && cfg.draft && cfg.draft.cost_by_duration) {
+                var dh = $("#draftCostHint");
+                if (dh) dh.textContent = (cfg.draft.cost_by_duration["5"] || 7) + " / " + (cfg.draft.cost_by_duration["10"] || 14);
+              }
               return true;
             }
             setBanner("bad", "Backend not connected",
@@ -1765,6 +1894,7 @@
             headers: { "Idempotency-Key": idemKey },
             body: { prompt: prompt, aspect_ratio: state.aspect, duration: state.duration, style: state.style,
                     mode: state.mode,
+                    ...(state.quality === "draft" ? { quality: "draft" } : {}),
                     language: ($("#promptLang") ? $("#promptLang").value : "en"),
                     ...(state.imagePath ? { image_path: state.imagePath } : {}),
                     ...(sndSpec ? { sound: sndSpec } : {}),
@@ -1941,6 +2071,13 @@
               var extras = [];
               if (g.kind === "lipsync") extras.push("Talking / Lip-Sync");
               if (g.kind === "voiceover") extras.push("Voiceover");
+              if (g.kind === "reframe") extras.push("Reframed" + (g.source_generation_id ? " from job " + g.source_generation_id : ""));
+              if (g.kind === "captions") extras.push("Captions burned in" + (g.source_generation_id ? " from job " + g.source_generation_id : ""));
+              if (g.kind === "extend") extras.push("Extended version" + (g.source_generation_id ? " of job " + g.source_generation_id : ""));
+              if (g.kind === "upscale") extras.push("Upscaled" + (g.resolution ? " to " + g.resolution : "") + (g.source_generation_id ? " from job " + g.source_generation_id : ""));
+              if (g.stage === "draft") extras.push("Draft · 480P preview — upgrade it from the Finish panel");
+              if (g.kind === "video" && g.source_generation_id && g.stage !== "draft")
+                extras.push("Upgraded from draft job " + g.source_generation_id);
               if (g.kind === "sound" && g.source_generation_id)
                 extras.push("Sound added: " + (SOUND_MODE_LABELS[g.sound_mode] || g.sound_mode || ""));
               if (g.kind === "sound" && !g.source_generation_id)
@@ -1982,6 +2119,7 @@
               var actions = document.createElement("div");
               actions.className = "job-actions";
               var soundPanel = null;
+              var finishPanel = null;
               if (String(g.status).toLowerCase() === "completed" && g.video_url && isAudioOnlyGen(g)) {
                 var au = document.createElement("audio");
                 au.controls = true;
@@ -2037,12 +2175,21 @@
                   });
                 })(soundPanel);
                 actions.appendChild(asb);
+                finishPanel = buildFinishPanel(g);
+                var fnb = makeBtn(g.stage === "draft" ? "Upgrade / Finish" : "Finish");
+                (function (panel) {
+                  fnb.addEventListener("click", function () {
+                    panel.style.display = panel.style.display === "none" ? "block" : "none";
+                  });
+                })(finishPanel);
+                actions.appendChild(fnb);
               }
               var rp = makeBtn("Report");
               rp.addEventListener("click", function () { openReport(g.id, g.prompt); });
               actions.appendChild(rp);
               item.appendChild(actions);
               if (soundPanel) item.appendChild(soundPanel);
+              if (finishPanel) item.appendChild(finishPanel);
               list.appendChild(item);
             });
           });
@@ -2719,6 +2866,7 @@
           e.classList.toggle("show", !!msg);
         }
         function currentSoundSpec() {
+          if (state.quality === "draft") return null; // drafts take no sound add-ons
           if (!soundCfg || !soundCfg.configured) return null;
           var mode = $("#soundMode").value;
           if (!mode || mode === "none") return null;
@@ -2844,6 +2992,133 @@
           });
           return panel;
         }
+        /* ---------- finishers + draft upgrade (Phase C1) ---------- */
+        var FINISH_LABELS = { reframe: "Reframe (new aspect ratio) — free",
+                              captions: "Add captions — 5 credits",
+                              extend: "Extend video (AI continuation)",
+                              upscale: "Upscale (AI, higher resolution)" };
+        // The per-video "Finish" panel in History: one-tap finishers that
+        // each create a NEW History entry, plus the draft Upgrade action.
+        // Prices come from /api/config (finishers + draft blocks) so the
+        // button labels never drift from what the server charges.
+        function buildFinishPanel(g) {
+          var fin = (cfg && cfg.finishers) || null;
+          var capCost = (fin && fin.prices && fin.prices.captions !== undefined) ? fin.prices.captions : 5;
+          var panel = document.createElement("div");
+          panel.className = "sound-apply-panel";
+          panel.style.display = "none";
+          var err = document.createElement("div");
+          err.className = "form-error";
+          function fail(msg) { err.textContent = msg; err.classList.add("show"); }
+          function clearErr() { err.textContent = ""; err.classList.remove("show"); }
+
+          if (g.stage === "draft") {
+            var upTitle = document.createElement("p");
+            upTitle.className = "lang-hint";
+            upTitle.textContent = "This is a 480P draft. Upgrade re-runs the same prompt and settings at full quality for the standard rate — a new generation linked to this draft:";
+            panel.appendChild(upTitle);
+            var upRow = document.createElement("div");
+            var qSel = document.createElement("select");
+            ["768P", "2K", "4K"].forEach(function (q) {
+              var o = document.createElement("option");
+              o.value = q;
+              var row = (cfg && cfg.cost_by_quality && cfg.cost_by_quality[q]) || {};
+              var c = row[String(g.duration)];
+              o.textContent = q + (c !== undefined ? " — " + c + " credits" : "");
+              qSel.appendChild(o);
+            });
+            upRow.appendChild(qSel);
+            var upBtn = makeBtn("Upgrade draft", true);
+            upRow.appendChild(upBtn);
+            panel.appendChild(upRow);
+            upBtn.addEventListener("click", function () {
+              clearErr();
+              if (!token) { openAuth("login"); return; }
+              upBtn.disabled = true;
+              api("/api/generations/" + g.id + "/upgrade", { method: "POST",
+                body: { quality: qSel.value } }).then(function (res) {
+                upBtn.disabled = false;
+                if (!res.ok || !res.data) { fail(errText(res, "The upgrade failed")); return; }
+                if (res.data.credits_left !== undefined) setCredits(res.data.credits_left);
+                toast("Upgrade started — the full-quality version is rendering and will appear in your History.");
+                loadMe();
+                loadHistory();
+              });
+            });
+          }
+
+          var actionSel = document.createElement("select");
+          Object.keys(FINISH_LABELS).forEach(function (a) {
+            var o = document.createElement("option");
+            o.value = a;
+            o.textContent = a === "captions" ? "Add captions — " + capCost + " credits" : FINISH_LABELS[a];
+            actionSel.appendChild(o);
+          });
+          panel.appendChild(actionSel);
+          var targetSel = document.createElement("select");
+          ["16:9", "9:16", "1:1", "4:5"].forEach(function (t) {
+            var o = document.createElement("option");
+            o.value = t; o.textContent = "Aspect " + t.replace(":", " : ");
+            targetSel.appendChild(o);
+          });
+          targetSel.value = g.aspect_ratio === "16:9" ? "9:16" : "16:9";
+          panel.appendChild(targetSel);
+          var extraSel = document.createElement("select");
+          [5, 10].forEach(function (d) {
+            var o = document.createElement("option");
+            o.value = d;
+            var row = (cfg && cfg.cost_by_quality && cfg.cost_by_quality[g.resolution || "768P"]) || {};
+            var c = row[String(d)];
+            o.textContent = "Add " + d + " seconds" + (c !== undefined ? " — " + c + " credits" : "");
+            extraSel.appendChild(o);
+          });
+          panel.appendChild(extraSel);
+          var hint = document.createElement("p");
+          hint.className = "lang-hint";
+          panel.appendChild(hint);
+          var runBtn = makeBtn("Run finisher", true);
+          panel.appendChild(runBtn);
+          panel.appendChild(err);
+          function syncPanel() {
+            var a = actionSel.value;
+            targetSel.style.display = a === "reframe" ? "block" : "none";
+            extraSel.style.display = a === "extend" ? "block" : "none";
+            if (a === "reframe") {
+              hint.textContent = "Reframe keeps the whole picture and fills the new frame with a blurred background — no hard crop. Free.";
+              runBtn.textContent = "Reframe — free";
+            } else if (a === "captions") {
+              hint.textContent = "Captions are transcribed from the video's own audio by an AI model and burned into the picture. Accuracy depends on the transcription — check the result before publishing. A video with no audio cannot be captioned.";
+              runBtn.textContent = "Add captions — " + capCost + " credits";
+            } else if (a === "extend") {
+              hint.textContent = "Extend generates a NEW AI continuation from the video's last frame and joins it on. It is charged at the standard rate for this video's quality. Continuity is the model's best effort — the join may not be perfectly seamless.";
+              runBtn.textContent = "Extend video";
+            } else {
+              hint.textContent = "Upscale raises the resolution with an AI upscaler (Topaz). The price is calculated by the server from the video's real length and output size (minimum 10 credits) and your plan must include the target quality. The result is an enhanced upscale — it is labelled with the tier it reaches, not native capture.";
+              runBtn.textContent = "Upscale video";
+            }
+          }
+          actionSel.addEventListener("change", syncPanel);
+          syncPanel();
+          runBtn.addEventListener("click", function () {
+            clearErr();
+            if (!token) { openAuth("login"); return; }
+            var a = actionSel.value;
+            var body = { generation_id: g.id };
+            if (a === "reframe") body.aspect_ratio = targetSel.value;
+            if (a === "extend") body.extra_seconds = Number(extraSel.value);
+            runBtn.disabled = true;
+            api("/api/finish/" + a, { method: "POST", body: body }).then(function (res) {
+              runBtn.disabled = false;
+              if (!res.ok || !res.data) { fail(errText(res, "The finisher failed")); if (res.status === 402 || res.status === 429) loadMe(); return; }
+              if (res.data.credits_left !== undefined) setCredits(res.data.credits_left);
+              toast("Done — the finished version is the newest entry in your History.");
+              loadMe();
+              loadHistory();
+            });
+          });
+          return panel;
+        }
+
         $("#soundMode").addEventListener("change", function () {
           var d = (soundCfg && soundCfg.default_volume && soundCfg.default_volume[this.value]) ||
                   SOUND_DEFAULT_VOL[this.value];
