@@ -138,12 +138,14 @@ toggle** — so this backend never sends one for H3 text- or
 image-to-video calls. If a prompt asks for spoken dialogue, the model
 may generate speech that follows the prompt, but the dialogue
 **language is not guaranteed**, and Urdu dialogue is **not officially
-documented** for this (or any) fal model. This build adds no separate
-dialogue/TTS or dedicated lip-sync stage, and no lip-sync quality is
-promised: the owner's rule stands that realistic samples (a person
-walking and speaking, a talking close-up, natural gestures) and cartoon
-samples must be generated and reviewed before these experiences are
-called complete — that review needs a funded fal.ai balance and has
+documented** for this (or any) fal model. Urdu dialogue is instead
+produced by the separate voice system (next section): a dedicated TTS
+stage synthesizes the speech, and the lip-sync endpoints animate the
+mouth to that audio. No lip-sync or pronunciation quality is promised:
+the owner's rule stands that realistic samples (a person walking and
+speaking, a talking close-up, natural gestures) and cartoon samples
+must be generated and reviewed before these experiences are called
+complete — that review needs a funded fal.ai balance and has
 not happened yet.
 
 **Image-to-video.** `POST /api/uploads/image` (signed-in users only)
@@ -187,6 +189,113 @@ contract, and no system ffmpeg dependency (a system ffmpeg cannot be
 assumed on the host). Generated files live on local disk, like joined
 clips: on ephemeral hosting they disappear on restart/redeploy, so
 users should download watermarked videos promptly.
+
+## Voice system — TTS, voice preview, lip-sync & voiceover (Phase B, migration v10)
+
+The Studio's **Voice & Dialogue** card adds spoken Urdu / Hindi /
+English to videos. Everything runs server-side; provider keys never
+reach the client. Generations gain a `kind` column (`video` |
+`lipsync` | `voiceover`), the synthesized track's path
+(`voice_audio_path`) and their source generation
+(`source_generation_id`); every voice operation (including free
+previews) is recorded in the `voice_jobs` table.
+
+**Providers.** Three TTS providers sit behind one interface
+(`synthesize({ text, language, voice, style, speed })`):
+
+| Provider | Route | Voices | Cost to us | Activation |
+|---|---|---|---|---|
+| `gemini` (default) | fal `fal-ai/gemini-3.1-flash-tts` | 10 of the 30 documented Gemini voices (5 female, 5 male), one multilingual set | $0.05 / 1K chars | the existing `FAL_KEY` |
+| `elevenlabs` (premium) | fal `fal-ai/elevenlabs/tts/eleven-v3` | 8 documented ElevenLabs voices | $0.10 / 1K chars | the existing `FAL_KEY` |
+| `azure` | Azure Speech REST (direct) | **ur-PK-UzmaNeural (F) / ur-PK-AsadNeural (M)** — the only dedicated Pakistani Urdu voices anywhere — plus hi-IN Swara/Madhur, en-US Jenny/Guy | $15 / 1M chars (500K chars/month free tier) | the owner's own `AZURE_SPEECH_KEY` + `AZURE_SPEECH_REGION` |
+
+Both fal schemas were verified against fal's API docs on 2026-10-23
+(`prompt`/`voice`/`language_code`/`style_instructions`/`output_format`
+for Gemini — its `language_code` enum literally lists "Urdu
+(Pakistan)" and "Hindi (India)"; `text`/`voice`/`stability`/
+`language_code` (ISO 639-1) for ElevenLabs v3). Style maps to Gemini's
+documented natural-language `style_instructions` and to ElevenLabs
+`stability`. **Speed honesty:** neither fal schema has a speed field —
+Gemini's pace is steered through `style_instructions` (documented),
+ElevenLabs v3 accepts the speed setting but cannot apply it (noted,
+not faked); Azure takes a real SSML `prosody rate` (0.85 / 1 / 1.15).
+Azure SSML style expressions (`mstts:express-as`) are NOT sent for the
+ur-PK voices because their style support is not documented — the style
+setting is accepted and noted for Azure, as with ElevenLabs speed.
+`TTS_PROVIDERS` can restrict the enabled set (e.g. `gemini,azure`, or
+`none`); `TTS_DEFAULT_PROVIDER` picks the default. **Fail closed:**
+with no provider enabled, all voice endpoints answer 503
+(`voice_not_configured`) and charge nothing, and the app shows a
+notice instead of dead buttons. `/api/config` exposes the catalog and
+configured-provider booleans only — never keys.
+
+**Voice settings** on every voice request: `spoken_language`
+(`ur` | `hi` | `en`), `script_mode` (`native` | `roman`), `voice`
+(a catalog id for the chosen provider + language), `style`
+(`narration` | `conversation` | `news` | `energetic` | `emotional`),
+`speed` (`slow` | `normal` | `fast`).
+
+**Roman script.** No commercial TTS provider documents Roman Urdu or
+Roman Hindi input, so Roman text is transliterated to the native
+script on the server *before* synthesis — the script choice never
+changes the spoken language. The converter is **best-effort and
+conservative**: a built-in dictionary of common words (mera → میرا /
+मेरा, naam → نام / नाम, hai → ہے / है …) plus a character-mapping
+fallback (Urdu letter mapping; a syllabic Devanagari converter with
+matras/halants). It is not a linguistic transliterator — ambiguous
+spellings will sometimes come out wrong, and **native script is always
+the recommended input**. The exact text that was synthesized is
+returned to the user (preview response) and stored on the job.
+
+**Endpoints.**
+
+- `POST /api/voice/preview` (signed in) — synthesizes at most the
+  first **150 characters** of the script with the chosen settings and
+  returns a playable URL (audio stored under `data/voice/`, served at
+  `/files/voice/...`). **Free — no credits are ever charged**, and it
+  is never stored as a generation. Rate-limited twice: **5 previews
+  per user per day** plus a global daily guard
+  (`VOICE_PREVIEW_DAILY_CAP` / `VOICE_PREVIEW_GLOBAL_DAILY_CAP`).
+  Provider errors return a clear 502; nothing is charged either way.
+- `POST /api/voice/lipsync` (signed in, **Pro / Extra Pro only** — the
+  plan's existing `can_lipsync` flag; Weekly/Normal get 403 with an
+  upgrade message). Inputs: an uploaded image (`image_path`, the same
+  owned-upload route as image-to-video) **or** a completed generation
+  (`generation_id`), plus a `script` — or `voice_job_id`, a previous
+  completed voice job whose audio is reused. The full script is
+  synthesized (chunked at sentence boundaries, ~3,000 characters per
+  request, one consistent voice; chunks are concatenated in order),
+  then submitted to fal: image route
+  `minimax/h3-max/lip-sync/image-to-video` (`image_url` + `audio_url`,
+  resolution 768P), video route `fal-ai/latentsync` (`video_url` +
+  `audio_url`) — both schemas verified against fal's docs 2026-10-23,
+  both overridable via `FAL_LIPSYNC_IMAGE_MODEL` /
+  `FAL_LIPSYNC_VIDEO_MODEL`. Note: fal fetches the audio itself, so the
+  server must be publicly reachable at `PUBLIC_BASE_URL` (or the
+  request host) for the audio URL. The H3 lip-sync endpoint documents
+  that its audio should be **at least 5 seconds** long. **Charge: +30
+  credits exactly once** (the owner's locked add-on rate), refunded
+  exactly once on any failure via the standard refund path. The result
+  lands in History labelled **Talking / Lip-Sync**.
+- `POST /api/voice/voiceover` (signed in, all plans) — takes a
+  completed generation + script/settings, synthesizes the voice, and
+  muxes it over the video with ffmpeg, **replacing the video's
+  original audio track** (the model's native audio is not kept; if the
+  voice is longer than the video it is trimmed to the video's length).
+  The result is stored under `data/generated/` and lands in History
+  labelled **Voiceover**. **Charge: +10 credits**, refunded on failure.
+
+**Honesty note (owner's rule).** Voice and lip-sync *quality is
+unproven*: no real sample has been generated or listened to yet,
+because that needs a funded fal.ai balance (and, for the Azure ur-PK
+voices, the owner's own Azure account). Until the owner's sample
+audition (Urdu conversation, Urdu newsreader, Hindi speech, a talking
+Urdu character with lip sync, a long multilingual script) has been
+generated and approved, these features must **not** be marketed as
+"perfect" pronunciation or lip-sync — the app copy says exactly that.
+The test suite covers all of the above with stubbed providers only
+(`test-fal-stub.js`); the Azure path is code-complete but untested
+until the owner's key exists.
 
 ## Test results (backend, 2026-10-20)
 Run locally with `bash test.sh` — **19/19 tests passed** with a dummy key (no paid calls):
@@ -649,12 +758,13 @@ Publishing also needs a Play Console account and your app's privacy policy URL �
 the privacy policy page is included in the web app.
 
 ## Files
-- `server.js` — auth, generate (idempotent, plan-routed, video modes + image-to-video + watermark post-processing), status polling, history, reports, config, plans/subscriptions/payments, credit packs, clip joining (ffmpeg-static), Google Play Billing verification + RTDN + voided-purchase clawback, PayFast gateway checkout + signed IPN, admin API
-- `public/index.html` — the AJK AI web app (Studio, History with clip joining, Plans & pricing, Buy Credits with Google Play + gateway instant checkout when available, Settings, Privacy)
+- `server.js` — auth, generate (idempotent, plan-routed, video modes + image-to-video + watermark post-processing), status polling, history, reports, config, plans/subscriptions/payments, credit packs, clip joining (ffmpeg-static), Google Play Billing verification + RTDN + voided-purchase clawback, PayFast gateway checkout + signed IPN, admin API, voice system (TTS providers, preview, lip-sync, voiceover)
+- `public/index.html` — the AJK AI web app (Studio with the Voice & Dialogue card, History with clip joining, Plans & pricing, Buy Credits with Google Play + gateway instant checkout when available, Settings, Privacy)
 - `public/admin.html` — the Admin Panel, served at `/admin` (includes credit-pack editing, pack-purchase approval, Play product IDs, credit-deficit display, billing/transactions)
 - `public/nayapay-qr.jpg` — the owner's NayaPay QR code, shown on the Buy Credits page when NayaPay is selected
 - `schema.sql` — schema reference (`server.js` applies migrations automatically on boot)
-- `test.sh` — the automated test battery (original + monetization + prompt-language + credit-pack + clip-join + Play Billing/gateway + video-mode/image-to-video/watermark/migration tests; see its header for the server env it needs)
+- `test.sh` — the automated test battery (original + monetization + prompt-language + credit-pack + clip-join + Play Billing/gateway + video-mode/image-to-video/watermark/migration + voice-system tests; see its header for the server env it needs)
 - `test-translate-stub.js` — local Google Translate stub used by `test.sh` (tests never call the real translate endpoint)
 - `test-gateway-stub.js` — signs PayFast-shaped webhook bodies for `test.sh` (tests never call the real gateway)
+- `test-fal-stub.js` — local fal.ai stub (TTS endpoints + lip-sync queue + media files) used by the voice tests in `test.sh` (tests never call the real fal API)
 - `.env.example` — copy to `.env` and fill in (never commit the real one)

@@ -141,6 +141,44 @@ const CONFIG = {
     securedKey: (process.env.PAYFAST_SECURED_KEY || '').trim(),
     baseUrl: (process.env.PAYFAST_BASE_URL || 'https://ipguat.apps.net.pk').replace(/\/+$/, ''),
   },
+  // --- fal.ai base URLs -----------------------------------------------------
+  // Split so tests can point BOTH at one local stub (test-fal-stub.js) and
+  // the suite never makes a real provider call. Production defaults are
+  // fal's real hosts: the queue API for async jobs and the sync API host
+  // for text-to-speech.
+  falQueueBase: (process.env.FAL_QUEUE_BASE_URL || 'https://queue.fal.run').replace(/\/+$/, ''),
+  falApiBase: (process.env.FAL_API_BASE_URL || 'https://fal.run').replace(/\/+$/, ''),
+  falPollMs: Number(process.env.FAL_POLL_INTERVAL_MS || 3000),
+  // --- Voice system (Phase B: TTS + lip-sync + voiceover) -------------------
+  // Synthesized audio files live here and are served from /files/voice/.
+  voiceDir: process.env.VOICE_DIR || path.join(__dirname, 'data', 'voice'),
+  // Which TTS providers are enabled. Empty list = every provider whose
+  // credentials exist. Set TTS_PROVIDERS=none (or a comma list like
+  // "gemini,azure") to restrict — with NO provider enabled the voice
+  // endpoints fail closed with 503 and charge nothing.
+  ttsProviders: (process.env.TTS_PROVIDERS || '').split(',')
+    .map(s => s.trim().toLowerCase()).filter(Boolean),
+  // Preferred provider when a request doesn't choose one. Default order:
+  // gemini (fal) -> elevenlabs (fal) -> azure.
+  ttsDefaultProvider: (process.env.TTS_DEFAULT_PROVIDER || '').trim().toLowerCase(),
+  // Azure Speech (the only provider with dedicated Pakistani Urdu voices,
+  // ur-PK-UzmaNeural / ur-PK-AsadNeural). Activates ONLY when BOTH the key
+  // and region are set — the key is the OWNER's own Azure key.
+  azureSpeechKey: (process.env.AZURE_SPEECH_KEY || '').trim(),
+  azureSpeechRegion: (process.env.AZURE_SPEECH_REGION || '').trim(),
+  azureSpeechBase: (process.env.AZURE_SPEECH_BASE_URL || '').trim().replace(/\/+$/, ''),
+  // Lip-sync endpoints on fal (verified against fal's API docs 2026-10-23):
+  // image route takes image_url + audio_url; video route (LatentSync)
+  // takes video_url + audio_url. Both env-overridable.
+  lipsyncImageModel: (process.env.FAL_LIPSYNC_IMAGE_MODEL || 'minimax/h3-max/lip-sync/image-to-video').trim(),
+  lipsyncVideoModel: (process.env.FAL_LIPSYNC_VIDEO_MODEL || 'fal-ai/latentsync').trim(),
+  // Locked owner rates for the voice add-ons (credits).
+  lipsyncCost: 30,
+  voiceoverCost: 10,
+  // Voice previews are free but rate-limited: per user per day, plus a
+  // global daily guard so previews can't run up provider cost.
+  voicePreviewDailyCap: Number(process.env.VOICE_PREVIEW_DAILY_CAP || 5),
+  voicePreviewGlobalDailyCap: Number(process.env.VOICE_PREVIEW_GLOBAL_DAILY_CAP || 500),
 };
 
 // ---------- Prompt languages ----------
@@ -442,6 +480,34 @@ const MIGRATIONS = [
         sort_order, price_weekly, credits_weekly, play_product_weekly)
       VALUES ('weekly', 'Weekly', 0, 0, 'PKR', 0, '768P', '768P', '768P',
         '${CONFIG.model}', 1, 0, 1800, 80, 'ajk_weekly');` },
+  // v10 — voice system (Phase B): generations gain a `kind` discriminator
+  // ('video' for normal generations, 'lipsync' for talking-character jobs,
+  // 'voiceover' for re-voiced videos), the path of the synthesized voice
+  // track a job used, and the source generation it derived from. voice_jobs
+  // records every voice operation (including free previews, which are NOT
+  // generations) for quota accounting and debugging.
+  { version: 10, up: `
+    ALTER TABLE generations ADD COLUMN kind TEXT NOT NULL DEFAULT 'video';
+    ALTER TABLE generations ADD COLUMN voice_audio_path TEXT;
+    ALTER TABLE generations ADD COLUMN source_generation_id INTEGER;
+    CREATE TABLE IF NOT EXISTS voice_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      kind TEXT NOT NULL,
+      provider TEXT,
+      voice TEXT,
+      language TEXT,
+      script_mode TEXT,
+      style TEXT,
+      speed TEXT,
+      script_text TEXT,
+      char_count INTEGER NOT NULL DEFAULT 0,
+      audio_path TEXT,
+      generation_id INTEGER REFERENCES generations(id),
+      status TEXT NOT NULL DEFAULT 'completed',
+      error TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );` },
 ];
 {
   const applied = new Set(db.prepare('SELECT version FROM schema_migrations').all().map(r => r.version));
@@ -659,9 +725,11 @@ function publicPlan(p) {
     credits_weekly: weekly ? p.credits_weekly : null,
     quality: p.quality,
     quality_label: p.quality_label, resolution: p.resolution,
-    // Entitlement descriptor (Phase B engines — Veo talking clips and the
-    // lip-sync add-on — are gated on these flags; generation itself is
-    // not wired yet). max_quality is the plan's routed quality ceiling.
+    // Entitlement descriptor. can_lipsync gates POST /api/voice/lipsync
+    // (the talking-character engine, Phase B). can_veo is still an
+    // entitlement flag only — the Veo talking-clip engine is not wired
+    // yet and the UI must not present it as available. max_quality is
+    // the plan's routed quality ceiling.
     features: { can_veo: !!p.can_veo, can_lipsync: !!p.can_lipsync,
       max_quality: p.quality },
     // Google Play subscription product ids (set in Play Console; editable
@@ -702,6 +770,11 @@ const generateLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 10,
 const joinLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 10,
   keyGenerator: (req) => String(req.user?.id || req.ip),
   message: { error: 'Rate limit: max 10 joins per hour.' } });
+// Voice endpoints call paid TTS providers — limited per signed-in user on
+// top of the preview-specific daily caps enforced in the handlers.
+const voiceLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 30,
+  keyGenerator: (req) => String(req.user?.id || req.ip),
+  message: { error: 'Rate limit: max 30 voice requests per hour.' } });
 
 function auth(req, res, next) {
   const token = (req.headers.authorization || '').replace('Bearer ', '');
@@ -749,6 +822,26 @@ app.get('/api/config', (req, res) => res.json({
   // is configured. Both stay false until the owner's accounts exist.
   play_billing_configured: playBillingConfigured(),
   gateway_configured: gatewayConfigured(),
+  // Voice system (Phase B): which TTS providers are configured (booleans
+  // only, never keys), the voice catalog for the CONFIGURED providers,
+  // and the locked credit costs of the voice add-ons. When no provider is
+  // configured the app shows a notice instead of dead buttons.
+  voice: {
+    providers: {
+      gemini: voiceProviderAvailable('gemini'),
+      elevenlabs: voiceProviderAvailable('elevenlabs'),
+      azure: voiceProviderAvailable('azure'),
+    },
+    default_provider: defaultVoiceProvider(),
+    languages: VOICE_LANGUAGES,
+    scripts: ['native', 'roman'],
+    styles: VOICE_STYLES,
+    speeds: VOICE_SPEEDS,
+    voices: publicVoiceCatalog(),
+    costs: { lipsync_credits: CONFIG.lipsyncCost, voiceover_credits: CONFIG.voiceoverCost },
+    preview: { max_chars: VOICE_PREVIEW_MAX_CHARS, daily_cap: CONFIG.voicePreviewDailyCap },
+    lipsync_models: { image: CONFIG.lipsyncImageModel, video: CONFIG.lipsyncVideoModel },
+  },
 }));
 app.get('/api/health', (req, res) => res.json({ ok: true, model: CONFIG.model }));
 
@@ -1064,7 +1157,7 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
         enable_safety_checker: true };
   lastFalBody = falBody; // test hook (recorded only, never sent anywhere else)
   try {
-    const r = await fetch(`https://queue.fal.run/${model}`, {
+    const r = await fetch(`${CONFIG.falQueueBase}/${model}`, {
       method: 'POST',
       headers: { 'Authorization': `Key ${FAL_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(falBody),
@@ -1187,12 +1280,12 @@ app.get('/api/generations/:id', auth, async (req, res) => {
     return res.json(job);
   const jobModel = job.model || CONFIG.model; // jobs remember their routed model
   try {
-    const sr = await fetch(`https://queue.fal.run/${jobModel}/requests/${job.fal_request_id}/status`,
+    const sr = await fetch(`${CONFIG.falQueueBase}/${jobModel}/requests/${job.fal_request_id}/status`,
       { headers: { 'Authorization': `Key ${FAL_KEY}` } });
     if (sr.ok) {
       const s = await sr.json();
       if (s.status === 'COMPLETED') {
-        const rr = await fetch(`https://queue.fal.run/${jobModel}/requests/${job.fal_request_id}`,
+        const rr = await fetch(`${CONFIG.falQueueBase}/${jobModel}/requests/${job.fal_request_id}`,
           { headers: { 'Authorization': `Key ${FAL_KEY}` } });
         const result = await rr.json();
         const url = result?.video?.url || result?.data?.video?.url || null;
@@ -1354,6 +1447,710 @@ app.post('/api/generations/join', auth, joinLimiter, async (req, res) => {
   } catch (e) {
     console.error('join failed:', e.message);
     res.status(500).json({ error: `Could not join those clips. ${e.message}` });
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+});
+
+// ==========================================================================
+// Voice system (Phase B) — TTS providers, voice preview, lip-sync, voiceover
+// ==========================================================================
+// Providers (all server-side; keys never leave the server):
+//   gemini     — Gemini 3.1 Flash TTS on fal (fal-ai/gemini-3.1-flash-tts).
+//                Schema verified against fal's API docs 2026-10-23:
+//                { prompt, style_instructions, voice, language_code,
+//                output_format } -> { audio: { url } }. language_code uses
+//                fal's documented names ("Urdu (Pakistan)", ...). There
+//                is NO speed parameter — pace is steered through the
+//                natural-language style_instructions, as documented.
+//   elevenlabs — ElevenLabs v3 on fal (fal-ai/elevenlabs/tts/eleven-v3),
+//                the premium option. Verified schema: { text, voice,
+//                stability, language_code (ISO 639-1),
+//                apply_text_normalization } -> { audio: { url } }. The v3
+//                schema has NO speed control: speed is accepted and
+//                noted, not faked (see README). Style maps to stability.
+//   azure      — Azure Speech REST (direct). The ONLY provider with
+//                dedicated Pakistani Urdu voices (ur-PK-UzmaNeural F /
+//                ur-PK-AsadNeural M). Active ONLY when the owner's own
+//                AZURE_SPEECH_KEY + AZURE_SPEECH_REGION are set.
+// FAIL CLOSED: when no provider is enabled the voice endpoints answer 503
+// and charge nothing.
+const VOICE_LANGUAGES = [
+  { code: 'ur', name: 'Urdu' },
+  { code: 'hi', name: 'Hindi' },
+  { code: 'en', name: 'English' },
+];
+const VOICE_STYLES = ['narration', 'conversation', 'news', 'energetic', 'emotional'];
+const VOICE_SPEEDS = ['slow', 'normal', 'fast'];
+const VOICE_PREVIEW_MAX_CHARS = 150;
+const VOICE_SCRIPT_MAX_CHARS = 6000;
+const TTS_CHUNK_MAX_CHARS = 3000; // per-request cap; longer scripts chunk
+
+const VOICE_CATALOG = {
+  gemini: {
+    label: 'Gemini 3.1 Flash TTS (via fal.ai)',
+    premium: false,
+    model: 'fal-ai/gemini-3.1-flash-tts',
+    // fal's documented language_code enum values for our three languages.
+    languageNames: { ur: 'Urdu (Pakistan)', hi: 'Hindi (India)', en: 'English (US)' },
+    // One voice set serves every language (the model is multilingual).
+    voices: [
+      { id: 'Kore', gender: 'female' }, { id: 'Zephyr', gender: 'female' },
+      { id: 'Aoede', gender: 'female' }, { id: 'Leda', gender: 'female' },
+      { id: 'Callirrhoe', gender: 'female' }, { id: 'Charon', gender: 'male' },
+      { id: 'Puck', gender: 'male' }, { id: 'Fenrir', gender: 'male' },
+      { id: 'Orus', gender: 'male' }, { id: 'Iapetus', gender: 'male' },
+    ],
+    defaultVoice: 'Kore',
+  },
+  elevenlabs: {
+    label: 'ElevenLabs v3 (via fal.ai) — premium',
+    premium: true,
+    model: 'fal-ai/elevenlabs/tts/eleven-v3',
+    languageNames: { ur: 'ur', hi: 'hi', en: 'en' }, // ISO 639-1 per schema
+    voices: [
+      { id: 'Rachel', gender: 'female' }, { id: 'Sarah', gender: 'female' },
+      { id: 'Charlotte', gender: 'female' }, { id: 'Alice', gender: 'female' },
+      { id: 'George', gender: 'male' }, { id: 'Brian', gender: 'male' },
+      { id: 'Liam', gender: 'male' }, { id: 'Eric', gender: 'male' },
+    ],
+    defaultVoice: 'Rachel',
+  },
+  azure: {
+    label: 'Azure Speech (dedicated Pakistani Urdu voices)',
+    premium: false,
+    // Voices are per-language on Azure (named neural voices per locale).
+    locales: { ur: 'ur-PK', hi: 'hi-IN', en: 'en-US' },
+    voicesByLanguage: {
+      ur: [ { id: 'ur-PK-UzmaNeural', gender: 'female' },
+            { id: 'ur-PK-AsadNeural', gender: 'male' } ],
+      hi: [ { id: 'hi-IN-SwaraNeural', gender: 'female' },
+            { id: 'hi-IN-MadhurNeural', gender: 'male' } ],
+      en: [ { id: 'en-US-JennyNeural', gender: 'female' },
+            { id: 'en-US-GuyNeural', gender: 'male' } ],
+    },
+  },
+};
+
+function voiceProviderAvailable(id) {
+  if (!VOICE_CATALOG[id]) return false;
+  if (CONFIG.ttsProviders.length && !CONFIG.ttsProviders.includes(id)) return false;
+  if (id === 'azure') return !!CONFIG.azureSpeechKey && !!CONFIG.azureSpeechRegion;
+  return !!FAL_KEY; // the fal-routed providers ride the server's fal key
+}
+function defaultVoiceProvider() {
+  if (CONFIG.ttsDefaultProvider && voiceProviderAvailable(CONFIG.ttsDefaultProvider))
+    return CONFIG.ttsDefaultProvider;
+  for (const id of ['gemini', 'elevenlabs', 'azure'])
+    if (voiceProviderAvailable(id)) return id;
+  return null;
+}
+// The provider's voices for one spoken language (azure is per-language;
+// the fal providers share one multilingual set).
+function providerVoicesFor(providerId, language) {
+  const cat = VOICE_CATALOG[providerId];
+  if (!cat) return [];
+  if (cat.voicesByLanguage) return cat.voicesByLanguage[language] || [];
+  return cat.voices || [];
+}
+function defaultVoiceFor(providerId, language) {
+  const cat = VOICE_CATALOG[providerId];
+  if (cat.voicesByLanguage) return (cat.voicesByLanguage[language] || [])[0] || null;
+  return (cat.voices || []).find(v => v.id === cat.defaultVoice) || (cat.voices || [])[0] || null;
+}
+function publicVoiceCatalog() {
+  const out = [];
+  for (const [providerId, cat] of Object.entries(VOICE_CATALOG)) {
+    if (!voiceProviderAvailable(providerId)) continue;
+    const voices = [];
+    for (const lang of VOICE_LANGUAGES.map(l => l.code)) {
+      for (const v of providerVoicesFor(providerId, lang)) {
+        const existing = voices.find(x => x.id === v.id);
+        if (existing) { if (!existing.languages.includes(lang)) existing.languages.push(lang); }
+        else voices.push({ id: v.id, label: v.id.replace(/^(ur-PK|hi-IN|en-US)-/, '').replace(/Neural$/, ''),
+                           gender: v.gender, languages: [lang] });
+      }
+    }
+    out.push({ provider: providerId, label: cat.label, premium: !!cat.premium, voices });
+  }
+  return out;
+}
+
+// ---------- Roman -> native script transliteration -----------------------
+// No commercial TTS provider documents Roman Urdu / Roman Hindi input, so
+// Roman scripts are transliterated to the native script on the server
+// BEFORE synthesis — the spoken language never changes with the script
+// choice. This is a conservative, deterministic best-effort converter:
+// a dictionary of common words first, then a character mapping fallback.
+// It is NOT a linguistic transliterator — native script is always the
+// recommended input (see README).
+const ROMAN_URDU_WORDS = {
+  mera: 'میرا', meri: 'میری', mere: 'میرے', naam: 'نام', hai: 'ہے', hain: 'ہیں',
+  mein: 'میں', main: 'میں', aur: 'اور', ka: 'کا', ki: 'کی', ke: 'کے', ko: 'کو',
+  se: 'سے', ne: 'نے', par: 'پر', bhi: 'بھی', nahin: 'نہیں', nahi: 'نہیں',
+  aap: 'آپ', tum: 'تم', yeh: 'یہ', ye: 'یہ', woh: 'وہ', wo: 'وہ', kya: 'کیا',
+  kyun: 'کیوں', kyunki: 'کیونکہ', kaise: 'کیسے', kahan: 'کہاں', kab: 'کب',
+  ahmed: 'احمد', ali: 'علی', salam: 'سلام', alaikum: 'علیکم', shukriya: 'شکریہ',
+  khuda: 'خدا', hafiz: 'حافظ', allah: 'اللہ', pakistan: 'پاکستان', urdu: 'اردو',
+  hindi: 'ہندی', acha: 'اچھا', theek: 'ٹھیک', bahut: 'بہت', dost: 'دوست',
+  ghar: 'گھر', pani: 'پانی', khana: 'کھانا', aaj: 'آج', kal: 'کل', subah: 'صبح',
+  raat: 'رات', din: 'دن', log: 'لوگ', admi: 'آدمی', aurat: 'عورت', bacha: 'بچہ',
+  larka: 'لڑکا', larki: 'لڑکی', gaya: 'گیا', gayi: 'گئی', raha: 'رہا', rahi: 'رہی',
+  hota: 'ہوتا', hoti: 'ہوتی', chahiye: 'چاہیے', apna: 'اپنا', apni: 'اپنی',
+  us: 'اس', is: 'اس', ek: 'ایک', do: 'دو', teen: 'تین', koi: 'کوئی',
+  sab: 'سب', boht: 'بہت', zindagi: 'زندگی', mohabbat: 'محبت', dil: 'دل',
+  waqt: 'وقت', saal: 'سال', film: 'فلم', video: 'ویڈیو', kahani: 'کہانی',
+};
+const ROMAN_HINDI_WORDS = {
+  mera: 'मेरा', meri: 'मेरी', mere: 'मेरे', naam: 'नाम', hai: 'है', hain: 'हैं',
+  mein: 'में', main: 'मैं', aur: 'और', ka: 'का', ki: 'की', ke: 'के', ko: 'को',
+  se: 'से', ne: 'ने', par: 'पर', bhi: 'भी', nahin: 'नहीं', nahi: 'नहीं',
+  aap: 'आप', tum: 'तुम', yeh: 'यह', ye: 'यह', woh: 'वह', wo: 'वह', kya: 'क्या',
+  kyun: 'क्यों', kaise: 'कैसे', kahan: 'कहाँ', kab: 'कब', ram: 'राम',
+  namaste: 'नमस्ते', shukriya: 'शुक्रिया', dhanyavad: 'धन्यवाद', khuda: 'खुदा',
+  pakistan: 'पाकिस्तान', bharat: 'भारत', hindi: 'हिन्दी', urdu: 'उर्दू',
+  acha: 'अच्छा', theek: 'ठीक', bahut: 'बहुत', dost: 'दोस्त', ghar: 'घर',
+  pani: 'पानी', khana: 'खाना', aaj: 'आज', kal: 'कल', subah: 'सुबह', raat: 'रात',
+  din: 'दिन', log: 'लोग', admi: 'आदमी', aurat: 'औरत', bacha: 'बच्चा',
+  ladka: 'लड़का', ladki: 'लड़की', gaya: 'गया', gayi: 'गई', raha: 'रहा',
+  rahi: 'रही', hota: 'होता', hoti: 'होती', chahiye: 'चाहिए', apna: 'अपना',
+  apni: 'अपनी', us: 'उस', is: 'इस', ek: 'एक', do: 'दो', teen: 'तीन',
+  koi: 'कोई', sab: 'सब', zindagi: 'ज़िंदगी', mohabbat: 'मोहब्बत', dil: 'दिल',
+  waqt: 'वक़्त', saal: 'साल', film: 'फ़िल्म', video: 'वीडियो', kahani: 'कहानी',
+  duniya: 'दुनिया',
+};
+// Urdu character fallback (greedy longest match, applied per word).
+const URDU_DIGRAPHS = { kh: 'کھ', gh: 'گھ', ch: 'چ', jh: 'جھ', sh: 'ش', zh: 'ژ',
+  th: 'تھ', ph: 'پھ', bh: 'بھ', dh: 'دھ', aa: 'ا', ee: 'ی', oo: 'و', ai: 'ے', au: 'و' };
+const URDU_SINGLES = { a: 'ا', b: 'ب', p: 'پ', t: 'ت', d: 'د', r: 'ر', z: 'ز',
+  s: 'س', j: 'ج', f: 'ف', q: 'ق', k: 'ک', g: 'گ', l: 'ل', m: 'م', n: 'ن',
+  w: 'و', v: 'و', o: 'و', u: 'و', i: 'ی', e: 'ے', y: 'ی', h: 'ہ', c: 'ک', x: 'کس' };
+function urduWordFallback(word) {
+  let out = '', i = 0;
+  while (i < word.length) {
+    const two = word.slice(i, i + 2);
+    if (URDU_DIGRAPHS[two]) { out += URDU_DIGRAPHS[two]; i += 2; continue; }
+    out += URDU_SINGLES[word[i]] || word[i];
+    i += 1;
+  }
+  return out;
+}
+// Hindi (Devanagari) syllabic fallback: consonant tokens take the inherent
+// vowel unless a vowel token follows (which becomes its matra); a consonant
+// before another consonant takes a halant; word-initial vowels are
+// independent forms.
+const HINDI_CONSONANTS = { kh: 'ख', gh: 'घ', ch: 'च', jh: 'झ', th: 'थ', dh: 'ध',
+  ph: 'फ', bh: 'भ', sh: 'श', k: 'क', g: 'ग', j: 'ज', t: 'त', d: 'द', n: 'न',
+  p: 'प', f: 'फ', b: 'ब', m: 'म', y: 'य', r: 'र', l: 'ल', v: 'व', w: 'व',
+  s: 'स', h: 'ह', z: 'ज', q: 'क', c: 'क' };
+const HINDI_VOWELS = { aa: ['आ', 'ा'], ee: ['ई', 'ी'], oo: ['ऊ', 'ू'], ai: ['ऐ', 'ै'],
+  au: ['औ', 'ौ'], a: ['अ', ''], i: ['इ', 'ि'], u: ['उ', 'ु'], e: ['ए', 'े'], o: ['ओ', 'ो'] };
+function hindiWordFallback(word) {
+  const tokens = [];
+  let i = 0;
+  while (i < word.length) {
+    const two = word.slice(i, i + 2), one = word[i];
+    if (HINDI_CONSONANTS[two]) { tokens.push({ c: HINDI_CONSONANTS[two] }); i += 2; }
+    else if (HINDI_VOWELS[two]) { tokens.push({ v: HINDI_VOWELS[two] }); i += 2; }
+    else if (HINDI_CONSONANTS[one]) { tokens.push({ c: HINDI_CONSONANTS[one] }); i += 1; }
+    else if (HINDI_VOWELS[one]) { tokens.push({ v: HINDI_VOWELS[one] }); i += 1; }
+    else { tokens.push({ raw: one }); i += 1; }
+  }
+  let out = '';
+  for (let k = 0; k < tokens.length; k++) {
+    const tok = tokens[k], next = tokens[k + 1];
+    if (tok.raw) { out += tok.raw; continue; }
+    if (tok.v) { out += tok.v[0]; continue; } // independent vowel form
+    if (next && next.v) { out += tok.c + next.v[1]; k++; continue; } // matra
+    if (next && next.c) { out += tok.c + '्'; continue; } // cluster halant
+    out += tok.c; // word-final consonant keeps the inherent vowel
+  }
+  return out;
+}
+function transliterateRoman(text, language) {
+  const dict = language === 'hi' ? ROMAN_HINDI_WORDS : ROMAN_URDU_WORDS;
+  const fallback = language === 'hi' ? hindiWordFallback : urduWordFallback;
+  return String(text).replace(/[A-Za-z]+/g, (w) => {
+    const lower = w.toLowerCase();
+    return dict[lower] || fallback(lower);
+  });
+}
+
+// ---------- Script preparation & chunking --------------------------------
+function chunkScript(text, maxChars = TTS_CHUNK_MAX_CHARS) {
+  const clean = String(text).replace(/\s+/g, ' ').trim();
+  if (clean.length <= maxChars) return clean ? [clean] : [];
+  const sentences = clean.match(/[^.!?।۔\n]+[.!?।۔]*\s*/g) || [clean];
+  const chunks = [];
+  let cur = '';
+  for (const s of sentences) {
+    if (s.length > maxChars) {
+      if (cur.trim()) { chunks.push(cur.trim()); cur = ''; }
+      let rest = s.trim();
+      while (rest.length > maxChars) {
+        let cut = rest.lastIndexOf(' ', maxChars);
+        if (cut < maxChars * 0.5) cut = maxChars;
+        chunks.push(rest.slice(0, cut).trim());
+        rest = rest.slice(cut).trim();
+      }
+      cur = rest;
+    } else if ((cur + s).length > maxChars) {
+      chunks.push(cur.trim()); cur = s;
+    } else cur += s;
+  }
+  if (cur.trim()) chunks.push(cur.trim());
+  return chunks.filter(Boolean);
+}
+
+// Validate + normalize a voice request body into synthesis settings.
+// Throws { status, error } on bad input. `provider: null` in the result
+// means NO provider is configured — callers answer 503 before charging.
+function parseVoiceSettings(body, { scriptRequired = true } = {}) {
+  const bad = (msg) => Object.assign(new Error(msg), { status: 400 });
+  const language = String(body?.spoken_language || 'ur').toLowerCase();
+  if (!VOICE_LANGUAGES.some(l => l.code === language))
+    throw bad(`spoken_language must be one of: ${VOICE_LANGUAGES.map(l => l.code).join(', ')}`);
+  const scriptMode = String(body?.script_mode || body?.script_type || 'native').toLowerCase();
+  if (!['native', 'roman'].includes(scriptMode))
+    throw bad('script_mode must be "native" or "roman"');
+  const style = String(body?.style || 'conversation').toLowerCase();
+  if (!VOICE_STYLES.includes(style))
+    throw bad(`style must be one of: ${VOICE_STYLES.join(', ')}`);
+  const speed = String(body?.speed || 'normal').toLowerCase();
+  if (!VOICE_SPEEDS.includes(speed))
+    throw bad(`speed must be one of: ${VOICE_SPEEDS.join(', ')}`);
+  let provider = null;
+  const requested = String(body?.provider || '').toLowerCase();
+  if (requested) {
+    if (!VOICE_CATALOG[requested])
+      throw bad(`provider must be one of: ${Object.keys(VOICE_CATALOG).join(', ')}`);
+    if (!voiceProviderAvailable(requested))
+      throw bad(`The "${requested}" voice provider is not configured on this server.`);
+    provider = requested;
+  } else provider = defaultVoiceProvider();
+  let voice = null;
+  if (provider) {
+    if (body?.voice) {
+      voice = providerVoicesFor(provider, language).find(v => v.id === String(body.voice)) || null;
+      if (!voice) throw bad(`voice "${body.voice}" is not available for ${provider} / ${language}.`);
+    } else voice = defaultVoiceFor(provider, language);
+  }
+  const rawScript = body?.script === undefined || body?.script === null ? '' : String(body.script);
+  if (scriptRequired && (rawScript.trim().length < 1 || rawScript.length > VOICE_SCRIPT_MAX_CHARS))
+    throw bad(`script must be 1–${VOICE_SCRIPT_MAX_CHARS} characters.`);
+  const text = scriptMode === 'roman' && rawScript
+    ? transliterateRoman(rawScript, language) : rawScript;
+  return { language, scriptMode, style, speed, provider,
+           voiceId: voice ? voice.id : null, rawScript, text };
+}
+
+// ---------- Provider calls -------------------------------------------------
+// Test hook: with TEST_RECORD_FAL_BODY=1 every outgoing voice-provider and
+// lip-sync request body is recorded so test.sh can assert the exact shapes
+// without a real provider call (same pattern as /api/_test/fal-body).
+const voiceCallLog = [];
+function recordVoiceCall(entry) {
+  if (process.env.TEST_RECORD_FAL_BODY === '1') voiceCallLog.push(entry);
+}
+if (process.env.TEST_RECORD_FAL_BODY === '1') {
+  app.get('/api/_test/voice-calls', (req, res) => res.json({ calls: voiceCallLog }));
+}
+
+const GEMINI_STYLE_TEXT = {
+  narration: 'Read this as a calm, clear narration.',
+  conversation: 'Say this in a warm, natural conversational tone.',
+  news: 'Read this as a professional television news broadcast, with gravitas.',
+  energetic: 'Say this energetically and cheerfully.',
+  emotional: 'Say this with heartfelt emotion.',
+};
+const ELEVEN_STABILITY = { narration: 0.6, conversation: 0.5, news: 0.75, energetic: 0.4, emotional: 0.3 };
+const AZURE_PROSODY_RATE = { slow: '0.85', normal: '1', fast: '1.15' };
+function escapeXml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
+
+// Synthesize ONE chunk (<= TTS_CHUNK_MAX_CHARS) with the chosen provider.
+// Returns the audio bytes (MP3 from every provider).
+async function synthesizeChunkBytes({ provider, text, language, voiceId, style, speed }) {
+  if (provider === 'azure') {
+    const cat = VOICE_CATALOG.azure;
+    const locale = cat.locales[language];
+    const ssml = `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="${locale}">` +
+      `<voice name="${voiceId}"><prosody rate="${AZURE_PROSODY_RATE[speed] || '1'}">${escapeXml(text)}</prosody></voice></speak>`;
+    recordVoiceCall({ kind: 'tts', provider, model: 'azure-speech', body: { ssml } });
+    const base = CONFIG.azureSpeechBase ||
+      `https://${CONFIG.azureSpeechRegion}.tts.speech.microsoft.com`;
+    const r = await fetch(`${base}/cognitiveservices/v1`, {
+      method: 'POST',
+      headers: { 'Ocp-Apim-Subscription-Key': CONFIG.azureSpeechKey,
+                 'Content-Type': 'application/ssml+xml',
+                 'X-Microsoft-OutputFormat': 'audio-24khz-96kbitrate-mono-mp3' },
+      body: ssml, signal: AbortSignal.timeout(60000),
+    });
+    if (!r.ok) throw new Error(`Azure Speech returned ${r.status}`);
+    return Buffer.from(await r.arrayBuffer());
+  }
+  const cat = VOICE_CATALOG[provider];
+  let body;
+  if (provider === 'gemini') {
+    // Documented schema: pace/style are natural-language instructions —
+    // speed rides style_instructions (there is no numeric speed field).
+    let instructions = GEMINI_STYLE_TEXT[style] || GEMINI_STYLE_TEXT.conversation;
+    if (speed === 'slow') instructions += ' Speak slowly and clearly.';
+    if (speed === 'fast') instructions += ' Speak at a brisk, fast pace.';
+    body = { prompt: text, voice: voiceId,
+             language_code: cat.languageNames[language],
+             style_instructions: instructions, output_format: 'mp3' };
+  } else { // elevenlabs — v3 schema: no speed field (accepted, noted); style -> stability
+    body = { text, voice: voiceId, language_code: cat.languageNames[language],
+             stability: ELEVEN_STABILITY[style] ?? 0.5,
+             apply_text_normalization: 'auto' };
+  }
+  recordVoiceCall({ kind: 'tts', provider, model: cat.model, body });
+  const r = await fetch(`${CONFIG.falApiBase}/${cat.model}`, {
+    method: 'POST',
+    headers: { 'Authorization': `Key ${FAL_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body), signal: AbortSignal.timeout(120000),
+  });
+  if (!r.ok) throw new Error(`TTS provider returned ${r.status}`);
+  const data = await r.json();
+  const url = data?.audio?.url;
+  if (!url) throw new Error('TTS provider returned no audio');
+  const ar = await fetch(url, { signal: AbortSignal.timeout(60000) });
+  if (!ar.ok) throw new Error('Could not download the synthesized audio');
+  return Buffer.from(await ar.arrayBuffer());
+}
+
+// Synthesize a full script: chunk at sentence boundaries (consistent voice
+// on every chunk), synthesize in order, and concatenate the parts into one
+// MP3 under data/voice/. Returns { audioPath (public), absPath, parts }.
+async function synthesizeScript(settings, fullText) {
+  const chunks = chunkScript(fullText, TTS_CHUNK_MAX_CHARS);
+  if (!chunks.length) throw new Error('Nothing to synthesize.');
+  fs.mkdirSync(CONFIG.voiceDir, { recursive: true });
+  const name = `${randomUUID()}.mp3`;
+  const finalAbs = path.join(CONFIG.voiceDir, name);
+  if (chunks.length === 1) {
+    const bytes = await synthesizeChunkBytes({ ...settings, text: chunks[0] });
+    fs.writeFileSync(finalAbs, bytes);
+  } else {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ajk-tts-'));
+    try {
+      const parts = [];
+      for (let i = 0; i < chunks.length; i++) {
+        const bytes = await synthesizeChunkBytes({ ...settings, text: chunks[i] });
+        const p = path.join(work, `part${i}.mp3`);
+        fs.writeFileSync(p, bytes);
+        parts.push(p);
+      }
+      const listFile = path.join(work, 'list.txt');
+      fs.writeFileSync(listFile, parts.map(p => `file '${p}'`).join('\n'));
+      try {
+        await runFfmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', listFile,
+                         '-c:a', 'libmp3lame', '-q:a', '4', finalAbs]);
+      } catch {
+        await runFfmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', listFile,
+                         '-c', 'copy', finalAbs]);
+      }
+    } finally { fs.rmSync(work, { recursive: true, force: true }); }
+  }
+  if (!fs.existsSync(finalAbs) || fs.statSync(finalAbs).size === 0)
+    throw new Error('Synthesis produced no audio');
+  return { audioPath: `/files/voice/${name}`, absPath: finalAbs, parts: chunks.length };
+}
+
+// Duration of an audio file, parsed from `ffmpeg -i` (no ffprobe binary).
+async function probeAudioDuration(file) {
+  const info = await new Promise((resolve) => {
+    execFile(ffmpegStatic, ['-i', file], { timeout: 30000 },
+      (_err, _stdout, stderr) => resolve(String(stderr || '')));
+  });
+  const dur = info.match(/Duration:\s*(\d+):(\d+):([\d.]+)/);
+  return dur ? Number(dur[1]) * 3600 + Number(dur[2]) * 60 + Number(dur[3]) : 0;
+}
+
+function recordVoiceJob({ userId, kind, settings, text, status, audioPath = null, generationId = null, error = null }) {
+  const info = db.prepare(
+    `INSERT INTO voice_jobs (user_id, kind, provider, voice, language, script_mode,
+       style, speed, script_text, char_count, audio_path, generation_id, status, error)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(userId, kind, settings?.provider || null, settings?.voiceId || null,
+         settings?.language || null, settings?.scriptMode || null,
+         settings?.style || null, settings?.speed || null,
+         text || null, (text || '').length, audioPath, generationId, status, error);
+  return Number(info.lastInsertRowid);
+}
+
+// Charge + insert a generations row atomically (same rules as /api/generate:
+// daily cap, balance check, plan-bucket-first spend). Throws {status,error}.
+function chargeVoiceGeneration(userId, { cost, prompt, aspectRatio, duration, style, model, kind, sourceGenerationId = null, sourceImagePath = null, promptLanguage = null, translatedPrompt = null }) {
+  return tx(() => {
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+    if (!user) throw Object.assign(new Error('Account not found.'), { status: 404 });
+    const spentToday = db.prepare(
+      `SELECT COALESCE(SUM(cost_credits),0) AS s FROM generations
+       WHERE user_id = ? AND date(created_at) = date('now') AND status != 'failed'`).get(userId).s;
+    if (spentToday + cost > CONFIG.maxDailyCredits)
+      throw Object.assign(new Error('Daily spending limit reached. Try again tomorrow.'), { status: 429 });
+    if (creditBuckets(user).total < cost)
+      throw Object.assign(new Error('Not enough credits.'), { status: 402 });
+    spendBuckets(user, cost);
+    const info = db.prepare(
+      `INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status,
+         cost_credits, resolution, model, prompt_language, translated_prompt,
+         mode, source_image_path, kind, source_generation_id)
+       VALUES (?, ?, ?, ?, ?, 'in_progress', ?, '768P', ?, ?, ?, 'realistic', ?, ?, ?)`)
+      .run(userId, prompt, aspectRatio, duration, style, cost, model,
+           promptLanguage, translatedPrompt, sourceImagePath, kind, sourceGenerationId);
+    return Number(info.lastInsertRowid);
+  });
+}
+
+// Submit a job to a fal queue endpoint and poll until it completes —
+// the same queue contract the video poller uses, driven synchronously
+// (like clip joining) so failures can refund inside the same request.
+async function runFalQueueJob(model, body, timeoutMs = 600000) {
+  recordVoiceCall({ kind: 'queue', model, body });
+  lastFalBody = body; // shared test hook, as with /api/generate
+  const submit = await fetch(`${CONFIG.falQueueBase}/${model}`, {
+    method: 'POST',
+    headers: { 'Authorization': `Key ${FAL_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body), signal: AbortSignal.timeout(30000),
+  });
+  if (!submit.ok) throw new Error(`fal.ai returned ${submit.status}`);
+  const sd = await submit.json();
+  const requestId = sd?.request_id;
+  if (!requestId) throw new Error('fal.ai did not return a request id');
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, CONFIG.falPollMs));
+    const sr = await fetch(`${CONFIG.falQueueBase}/${model}/requests/${requestId}/status`,
+      { headers: { 'Authorization': `Key ${FAL_KEY}` }, signal: AbortSignal.timeout(15000) });
+    if (!sr.ok) continue;
+    const s = await sr.json();
+    if (s.status === 'COMPLETED') {
+      const rr = await fetch(`${CONFIG.falQueueBase}/${model}/requests/${requestId}`,
+        { headers: { 'Authorization': `Key ${FAL_KEY}` }, signal: AbortSignal.timeout(30000) });
+      if (!rr.ok) throw new Error(`fal.ai result returned ${rr.status}`);
+      return await rr.json();
+    }
+    if (s.status === 'FAILED' || s.status === 'ERROR')
+      throw new Error('fal.ai reported the job as failed');
+  }
+  throw new Error('fal.ai job timed out');
+}
+
+const VOICE_NOT_CONFIGURED_MSG =
+  'Voice features are not configured on this server yet — no voice provider is available, so nothing was charged.';
+
+// ---------- Voice preview (free, capped, never a generation) --------------
+app.post('/api/voice/preview', auth, voiceLimiter, async (req, res) => {
+  let settings;
+  try { settings = parseVoiceSettings(req.body || {}); }
+  catch (e) { return res.status(e.status || 400).json({ error: e.message }); }
+  if (!settings.provider)
+    return res.status(503).json({ error: 'voice_not_configured', message: VOICE_NOT_CONFIGURED_MSG });
+  if (moderated(settings.rawScript))
+    return res.status(400).json({ error: 'This script was blocked by content moderation. Please rephrase it.' });
+  const mine = db.prepare(
+    `SELECT COUNT(*) AS c FROM voice_jobs WHERE user_id = ? AND kind = 'preview'
+     AND date(created_at) = date('now')`).get(req.user.id).c;
+  if (Number(mine) >= CONFIG.voicePreviewDailyCap)
+    return res.status(429).json({ error: `Voice preview limit reached (${CONFIG.voicePreviewDailyCap} per day). Previews reset tomorrow.` });
+  const globalCount = db.prepare(
+    `SELECT COUNT(*) AS c FROM voice_jobs WHERE kind = 'preview'
+     AND date(created_at) = date('now')`).get().c;
+  if (Number(globalCount) >= CONFIG.voicePreviewGlobalDailyCap)
+    return res.status(429).json({ error: 'Voice previews are busy right now — please try again later.' });
+  const text = settings.text.slice(0, VOICE_PREVIEW_MAX_CHARS);
+  try {
+    const out = await synthesizeScript(settings, text);
+    recordVoiceJob({ userId: req.user.id, kind: 'preview', settings, text,
+                     status: 'completed', audioPath: out.audioPath });
+    const me = db.prepare('SELECT credits FROM users WHERE id = ?').get(req.user.id);
+    res.json({ audio_url: out.audioPath, provider: settings.provider,
+               voice: settings.voiceId, language: settings.language,
+               script_mode: settings.scriptMode, synthesized_text: text,
+               chars: text.length, credits_left: me.credits });
+  } catch (e) {
+    recordVoiceJob({ userId: req.user.id, kind: 'preview', settings, text,
+                     status: 'failed', error: e.message });
+    res.status(502).json({ error: `Voice preview failed (${e.message}). No credits were charged.` });
+  }
+});
+
+// ---------- Talking character / lip-sync (Pro+ plans, +30 credits) ---------
+app.post('/api/voice/lipsync', auth, voiceLimiter, async (req, res) => {
+  const b = req.body || {};
+  // Entitlement first: the existing plan flag gates the feature.
+  refreshSubscriptionState(req.user.id);
+  const sub = currentSubscription(req.user.id);
+  const plan = sub ? getPlan(sub.plan_id) : null;
+  if (!plan || !plan.can_lipsync)
+    return res.status(403).json({ error: 'Talking / Lip-Sync videos need the Pro or Extra Pro plan. Upgrade your plan to create a talking character.' });
+  // Exactly one visual source: an owned uploaded image OR a completed
+  // generation's video.
+  const hasImage = b.image_path !== undefined && b.image_path !== null && b.image_path !== '';
+  const hasGen = b.generation_id !== undefined && b.generation_id !== null && b.generation_id !== '';
+  if (hasImage === hasGen)
+    return res.status(400).json({ error: 'Provide exactly one of image_path (an uploaded image) or generation_id (a finished video).' });
+  let owned = null, sourceGen = null;
+  if (hasImage) {
+    owned = resolveOwnedUpload(req.user.id, b.image_path);
+    if (!owned)
+      return res.status(400).json({ error: 'image_path must be an image you uploaded (POST /api/uploads/image).' });
+  } else {
+    sourceGen = db.prepare('SELECT * FROM generations WHERE id = ? AND user_id = ?')
+      .get(Number(b.generation_id), req.user.id);
+    if (!sourceGen) return res.status(404).json({ error: 'Generation not found.' });
+    if (sourceGen.status !== 'completed' || !sourceGen.video_url)
+      return res.status(400).json({ error: 'Only a completed video can be lip-synced.' });
+  }
+  // Audio source: a fresh script (synthesized now) or a previous voice job.
+  let settings = null, audioJob = null;
+  if (b.voice_job_id !== undefined && b.voice_job_id !== null && b.voice_job_id !== '') {
+    audioJob = db.prepare(
+      `SELECT * FROM voice_jobs WHERE id = ? AND user_id = ? AND status = 'completed' AND audio_path IS NOT NULL`)
+      .get(Number(b.voice_job_id), req.user.id);
+    if (!audioJob) return res.status(400).json({ error: 'voice_job_id must be one of your completed voice jobs.' });
+  } else {
+    try { settings = parseVoiceSettings(b); }
+    catch (e) { return res.status(e.status || 400).json({ error: e.message }); }
+    if (!settings.provider)
+      return res.status(503).json({ error: 'voice_not_configured', message: VOICE_NOT_CONFIGURED_MSG });
+    if (moderated(settings.rawScript))
+      return res.status(400).json({ error: 'This script was blocked by content moderation. Please rephrase it.' });
+  }
+  const model = hasImage ? CONFIG.lipsyncImageModel : CONFIG.lipsyncVideoModel;
+  let jobId;
+  try {
+    jobId = chargeVoiceGeneration(req.user.id, {
+      cost: CONFIG.lipsyncCost,
+      prompt: (settings ? settings.rawScript : 'Talking / Lip-Sync').slice(0, 500),
+      aspectRatio: sourceGen ? sourceGen.aspect_ratio : '16:9',
+      duration: sourceGen ? sourceGen.duration : 5,
+      style: 'realistic', model, kind: 'lipsync',
+      sourceGenerationId: sourceGen ? sourceGen.id : null,
+      sourceImagePath: hasImage ? String(b.image_path).replace(/\\/g, '/').replace(/^\.\//, '') : null,
+      promptLanguage: settings ? settings.language : (audioJob ? audioJob.language : null),
+      translatedPrompt: settings && settings.scriptMode === 'roman' ? settings.text : null,
+    });
+  } catch (e) { return res.status(e.status || 500).json({ error: e.message }); }
+  const voiceJobId = recordVoiceJob({ userId: req.user.id, kind: 'lipsync',
+    settings: settings || { provider: audioJob.provider, voiceId: audioJob.voice,
+      language: audioJob.language, scriptMode: audioJob.script_mode,
+      style: audioJob.style, speed: audioJob.speed },
+    text: settings ? settings.text : audioJob.script_text,
+    status: 'processing', generationId: jobId });
+  try {
+    let audioAbs, audioPublicPath;
+    if (audioJob) {
+      audioPublicPath = audioJob.audio_path;
+      audioAbs = path.join(CONFIG.voiceDir, path.basename(audioJob.audio_path));
+      if (!fs.existsSync(audioAbs)) throw new Error('The referenced voice audio no longer exists.');
+    } else {
+      const out = await synthesizeScript(settings, settings.text);
+      audioAbs = out.absPath; audioPublicPath = out.audioPath;
+      db.prepare('UPDATE generations SET voice_audio_path = ? WHERE id = ?').run(audioPublicPath, jobId);
+    }
+    // fal fetches the audio itself, so it needs a public URL for it.
+    const base = CONFIG.publicBaseUrl || `${req.protocol}://${req.get('host')}`;
+    const audioUrl = `${base}${audioPublicPath}`;
+    let falBody;
+    if (hasImage) {
+      // Verified schema (minimax/h3-max/lip-sync/image-to-video):
+      // image_url + audio_url required; resolution optional.
+      falBody = { image_url: owned.dataUri, audio_url: audioUrl,
+                  resolution: '768P', enable_safety_checker: true };
+    } else {
+      // Verified schema (fal-ai/latentsync): video_url + audio_url.
+      const videoUrl = /^https?:\/\//i.test(sourceGen.video_url)
+        ? sourceGen.video_url : `${base}${sourceGen.video_url}`;
+      falBody = { video_url: videoUrl, audio_url: audioUrl, enable_safety_checker: true };
+    }
+    const result = await runFalQueueJob(model, falBody);
+    const videoUrl = result?.video?.url || result?.data?.video?.url || null;
+    if (!videoUrl) throw new Error('Lip-sync provider returned no video');
+    const audioSecs = await probeAudioDuration(audioAbs).catch(() => 0);
+    const duration = Math.max(1, Math.round(Number(result.duration) || audioSecs || 5));
+    db.prepare(`UPDATE generations SET status = 'completed', video_url = ?, duration = ?,
+                updated_at = datetime('now') WHERE id = ?`).run(videoUrl, duration, jobId);
+    db.prepare(`UPDATE voice_jobs SET status = 'completed', audio_path = ? WHERE id = ?`)
+      .run(audioPublicPath, voiceJobId);
+    const row = db.prepare('SELECT * FROM generations WHERE id = ?').get(jobId);
+    const me = db.prepare('SELECT credits FROM users WHERE id = ?').get(req.user.id);
+    res.status(201).json({ generation: row, credits_left: me.credits, cost_credits: CONFIG.lipsyncCost });
+  } catch (e) {
+    failAndRefund(jobId, `Lip-sync failed (${e.message})`);
+    db.prepare(`UPDATE voice_jobs SET status = 'failed', error = ? WHERE id = ?`).run(e.message, voiceJobId);
+    res.status(502).json({ error: `Lip-sync failed (${e.message}). Your ${CONFIG.lipsyncCost} credits were refunded.` });
+  }
+});
+
+// ---------- Voiceover (all plans, +10 credits) ------------------------------
+// Synthesizes the script and muxes it over a finished video, REPLACING the
+// video's original audio track (the model's native audio is not kept).
+app.post('/api/voice/voiceover', auth, voiceLimiter, async (req, res) => {
+  const b = req.body || {};
+  const sourceGen = db.prepare('SELECT * FROM generations WHERE id = ? AND user_id = ?')
+    .get(Number(b.generation_id), req.user.id);
+  if (!sourceGen) return res.status(404).json({ error: 'Generation not found.' });
+  if (sourceGen.status !== 'completed' || !sourceGen.video_url)
+    return res.status(400).json({ error: 'Only a completed video can get a voiceover.' });
+  let settings;
+  try { settings = parseVoiceSettings(b); }
+  catch (e) { return res.status(e.status || 400).json({ error: e.message }); }
+  if (!settings.provider)
+    return res.status(503).json({ error: 'voice_not_configured', message: VOICE_NOT_CONFIGURED_MSG });
+  if (moderated(settings.rawScript))
+    return res.status(400).json({ error: 'This script was blocked by content moderation. Please rephrase it.' });
+  let jobId;
+  try {
+    jobId = chargeVoiceGeneration(req.user.id, {
+      cost: CONFIG.voiceoverCost,
+      prompt: `Voiceover: ${sourceGen.prompt}`.slice(0, 500),
+      aspectRatio: sourceGen.aspect_ratio, duration: sourceGen.duration,
+      style: sourceGen.style, model: 'voiceover', kind: 'voiceover',
+      sourceGenerationId: sourceGen.id,
+      promptLanguage: settings.language,
+      translatedPrompt: settings.scriptMode === 'roman' ? settings.text : null,
+    });
+  } catch (e) { return res.status(e.status || 500).json({ error: e.message }); }
+  const voiceJobId = recordVoiceJob({ userId: req.user.id, kind: 'voiceover', settings,
+    text: settings.text, status: 'processing', generationId: jobId });
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ajk-vo-'));
+  try {
+    const out = await synthesizeScript(settings, settings.text);
+    db.prepare('UPDATE generations SET voice_audio_path = ? WHERE id = ?').run(out.audioPath, jobId);
+    const srcFile = path.join(work, 'source.mp4');
+    await downloadClip(sourceGen.video_url, srcFile, { left: JOIN_MAX_BYTES });
+    fs.mkdirSync(CONFIG.generatedDir, { recursive: true });
+    const name = `${randomUUID()}.mp4`;
+    const output = path.join(CONFIG.generatedDir, name);
+    const muxArgs = ['-y', '-i', srcFile, '-i', out.absPath,
+                     '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy',
+                     '-c:a', 'aac', '-shortest', output];
+    try { await runFfmpeg(muxArgs); }
+    catch { // stream copy can fail on exotic source codecs — re-encode
+      await runFfmpeg(['-y', '-i', srcFile, '-i', out.absPath,
+                       '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'libx264',
+                       '-preset', 'veryfast', '-crf', '20', '-c:a', 'aac',
+                       '-shortest', output]);
+    }
+    const probe = await probeMedia(output);
+    if (!probe.hasAudio) throw new Error('Voiceover render produced no audio track');
+    db.prepare(`UPDATE generations SET status = 'completed', video_url = ?,
+                updated_at = datetime('now') WHERE id = ?`).run(`/files/generated/${name}`, jobId);
+    db.prepare(`UPDATE voice_jobs SET status = 'completed', audio_path = ? WHERE id = ?`)
+      .run(out.audioPath, voiceJobId);
+    const row = db.prepare('SELECT * FROM generations WHERE id = ?').get(jobId);
+    const me = db.prepare('SELECT credits FROM users WHERE id = ?').get(req.user.id);
+    res.status(201).json({ generation: row, credits_left: me.credits, cost_credits: CONFIG.voiceoverCost });
+  } catch (e) {
+    failAndRefund(jobId, `Voiceover failed (${e.message})`);
+    db.prepare(`UPDATE voice_jobs SET status = 'failed', error = ? WHERE id = ?`).run(e.message, voiceJobId);
+    res.status(502).json({ error: `Voiceover failed (${e.message}). Your ${CONFIG.voiceoverCost} credits were refunded.` });
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
   }
@@ -2207,8 +3004,10 @@ app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'adm
 // here — mounted before the SPA fallback so the files win over index.html.
 fs.mkdirSync(CONFIG.joinedDir, { recursive: true });
 fs.mkdirSync(CONFIG.generatedDir, { recursive: true });
+fs.mkdirSync(CONFIG.voiceDir, { recursive: true });
 app.use('/files/joined', express.static(CONFIG.joinedDir));
 app.use('/files/generated', express.static(CONFIG.generatedDir));
+app.use('/files/voice', express.static(CONFIG.voiceDir));
 app.use(express.static(path.join(__dirname, 'public')));
 app.get(/^\/(?!api\/).*/, (req, res) =>
   res.sendFile(path.join(__dirname, 'public', 'index.html')));

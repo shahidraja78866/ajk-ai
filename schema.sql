@@ -157,3 +157,27 @@ CREATE TABLE IF NOT EXISTS pack_purchases (
 --   is inserted (Rs 1,800/week, 80 credits/week, 768P). Subscriptions gain
 --   nothing new: their period column now also accepts 'weekly' (period
 --   end = start + 7 days; grant = credits_weekly, once per period).
+--
+-- === Voice system (migration v10, applied automatically by server.js) ===
+-- generations gains:  kind ('video' | 'lipsync' | 'voiceover'),
+--                     voice_audio_path (the synthesized voice track a
+--                     job used, /files/voice/<file>), source_generation_id
+--                     (the finished video a lipsync/voiceover derived from).
+CREATE TABLE IF NOT EXISTS voice_jobs (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id       INTEGER NOT NULL REFERENCES users(id),
+  kind          TEXT NOT NULL,  -- preview | lipsync | voiceover
+  provider      TEXT,           -- gemini | elevenlabs | azure
+  voice         TEXT,           -- provider voice id used
+  language      TEXT,           -- ur | hi | en (spoken language)
+  script_mode   TEXT,           -- native | roman (roman is transliterated server-side)
+  style         TEXT,           -- narration | conversation | news | energetic | emotional
+  speed         TEXT,           -- slow | normal | fast
+  script_text   TEXT,           -- text actually synthesized (post-transliteration)
+  char_count    INTEGER NOT NULL DEFAULT 0,
+  audio_path    TEXT,           -- /files/voice/<file> when audio was produced
+  generation_id INTEGER REFERENCES generations(id),
+  status        TEXT NOT NULL DEFAULT 'completed', -- processing | completed | failed
+  error         TEXT,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);

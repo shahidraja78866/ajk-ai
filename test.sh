@@ -31,6 +31,14 @@
 # 18092, own DB) started by this script covers the Weekly plan lifecycle,
 # the per-quality rate card charges and the 400-credit daily cap, so the
 # main server's generation budget is not touched.
+# The voice-system tests (Phase B) use a seventh instance (port 18091,
+# own DB) whose fal bases (FAL_API_BASE_URL + FAL_QUEUE_BASE_URL) point
+# at a local fal stub (test-fal-stub.js, port 18090) that serves the TTS
+# endpoints and the lip-sync queue — no real provider calls. An eighth
+# instance (port 18089) runs with TTS_PROVIDERS=none to prove the voice
+# endpoints fail closed (503, no charges) when no provider is configured.
+# Outgoing provider request shapes are asserted via the TEST_RECORD-style
+# hook GET /api/_test/voice-calls.
 # e.g.  ADMIN_EMAIL=admin@example.com FAL_MODEL_4K=test-4k-model TEST_RECORD_FAL_BODY=1 TRANSLATE_API_BASE=http://127.0.0.1:18099 npm start
 # Run against a FRESH database (fixed test emails are registered each run).
 TEST_FAL_MODEL_4K=${TEST_FAL_MODEL_4K:-fal-ai/kling-video/o3/4k/text-to-video}
@@ -816,6 +824,179 @@ DCAP=$(curl -s -w '\n%{http_code}' -X POST $B6/api/generate -H "Authorization: B
 check "395 spent + 10 more exceeds the 400 daily cap -> 429" "429" "$(echo "$DCAP" | tail -1)"
 check "daily-cap error names the limit" "Daily spending limit reached. Try again tomorrow." "$(echo "$DCAP" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
 kill $SRV6_PID 2>/dev/null
+
+echo "--- voice system: config on the main server ---"
+CV=$(curl -s $B/api/config)
+check "voice: gemini provider configured (fal key present)" "True" "$(echo $CV | python3 -c 'import sys,json;print(json.load(sys.stdin)["voice"]["providers"]["gemini"])')"
+check "voice: azure provider NOT configured (no owner key yet)" "False" "$(echo $CV | python3 -c 'import sys,json;print(json.load(sys.stdin)["voice"]["providers"]["azure"])')"
+check "voice: default provider is gemini" "gemini" "$(echo $CV | python3 -c 'import sys,json;print(json.load(sys.stdin)["voice"]["default_provider"])')"
+check "voice: catalog lists Kore as a female gemini voice" "female" "$(echo $CV | python3 -c 'import sys,json;d=json.load(sys.stdin);g=[x for x in d["voice"]["voices"] if x["provider"]=="gemini"][0];print([v for v in g["voices"] if v["id"]=="Kore"][0]["gender"])')"
+check "voice: add-on costs lipsync 30 / voiceover 10" "30/10" "$(echo $CV | python3 -c 'import sys,json;d=json.load(sys.stdin)["voice"]["costs"];print(str(d["lipsync_credits"])+"/"+str(d["voiceover_credits"]))')"
+
+echo "--- voice system: NO provider configured -> fail closed (own instance) ---"
+B8=http://127.0.0.1:18089
+rm -f /tmp/myvideoai-voice-none-test.db
+VOICE_NONE_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-voice-none-test.db PORT=18089 FAL_KEY=dummy_test_key "$VOICE_NONE_JWT_NAME=voice-none-dummy-value" TTS_PROVIDERS=none node "$(dirname "$0")/server.js" > /tmp/myvideoai-voice-none-test.log 2>&1 &
+SRV8_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B8/api/health && break || sleep 0.25; done
+CFG8=$(curl -s $B8/api/config)
+check "unconfigured: all voice providers false" "False/False/False" "$(echo $CFG8 | python3 -c 'import sys,json;p=json.load(sys.stdin)["voice"]["providers"];print(str(p["gemini"])+"/"+str(p["elevenlabs"])+"/"+str(p["azure"]))')"
+check "unconfigured: default_provider is null" "None" "$(echo $CFG8 | python3 -c 'import sys,json;print(json.load(sys.stdin)["voice"]["default_provider"])')"
+check "unconfigured: voice catalog is empty" "0" "$(echo $CFG8 | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["voice"]["voices"]))')"
+UR8=$(curl -s -X POST $B8/api/auth/register -H 'Content-Type: application/json' -d '{"email":"voicenone@example.com","password":"password123"}')
+UT8=$(echo $UR8 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+UID8=$(curl -s $B8/api/me -H "Authorization: Bearer $UT8" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+PV8=$(curl -s -w '\n%{http_code}' -X POST $B8/api/voice/preview -H "Authorization: Bearer $UT8" -H 'Content-Type: application/json' -d '{"script":"mera naam ahmed hai","spoken_language":"ur","script_mode":"roman"}')
+check "unconfigured: preview -> 503" "503" "$(echo "$PV8" | tail -1)"
+check "unconfigured: preview error is voice_not_configured" "voice_not_configured" "$(echo "$PV8" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+check "unconfigured: preview charged nothing" "100" "$(curl -s $B8/api/me -H "Authorization: Bearer $UT8" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+SEED8=$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-voice-none-test.db');
+console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($UID8, 'seed clip', '16:9', 5, 'realistic', 'completed', 'http://127.0.0.1:18090/media/clip.mp4', 10).lastInsertRowid));
+")
+check "unconfigured: voiceover -> 503" "503" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B8/api/voice/voiceover -H "Authorization: Bearer $UT8" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEED8,\"script\":\"mera naam ahmed hai\",\"spoken_language\":\"ur\",\"script_mode\":\"roman\"}")"
+check "unconfigured: voiceover charged nothing" "100" "$(curl -s $B8/api/me -H "Authorization: Bearer $UT8" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+kill $SRV8_PID 2>/dev/null
+
+echo "--- voice system: preview, transliteration, lip-sync, voiceover (fal stub) ---"
+FAL_STUB_PORT=18090
+B7=http://127.0.0.1:18091
+rm -f /tmp/myvideoai-voice-test.db; rm -rf /tmp/voiceout /tmp/voicegen; mkdir -p /tmp/voiceout /tmp/voicegen
+FAL_STUB_PORT=$FAL_STUB_PORT node "$(dirname "$0")/test-fal-stub.js" > /tmp/fal-stub.log 2>&1 &
+FALSTUB_PID=$!
+for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:$FAL_STUB_PORT/__calls && break || sleep 0.25; done
+VOICE_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-voice-test.db PORT=18091 FAL_KEY=dummy_test_key "$VOICE_JWT_NAME=voice-instance-dummy-value" \
+  ADMIN_EMAIL=voiceadmin@example.com TEST_RECORD_FAL_BODY=1 \
+  FAL_API_BASE_URL=http://127.0.0.1:$FAL_STUB_PORT FAL_QUEUE_BASE_URL=http://127.0.0.1:$FAL_STUB_PORT \
+  FAL_POLL_INTERVAL_MS=100 VOICE_DIR=/tmp/voiceout GENERATED_DIR=/tmp/voicegen \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-voice-test.log 2>&1 &
+SRV7_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B7/api/health && break || sleep 0.25; done
+CFG7=$(curl -s $B7/api/config)
+check "voice instance: languages are en/hi/ur" "en,hi,ur" "$(echo $CFG7 | python3 -c 'import sys,json;print(",".join(sorted(l["code"] for l in json.load(sys.stdin)["voice"]["languages"])))')"
+check "voice instance: preview daily cap is 5" "5" "$(echo $CFG7 | python3 -c 'import sys,json;print(json.load(sys.stdin)["voice"]["preview"]["daily_cap"])')"
+AR7=$(curl -s -X POST $B7/api/auth/register -H 'Content-Type: application/json' -d '{"email":"voiceadmin@example.com","password":"password123"}')
+AT7=$(echo $AR7 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+
+# -- previews + transliteration (asserted via the recorded provider body) --
+PR7=$(curl -s -X POST $B7/api/auth/register -H 'Content-Type: application/json' -d '{"email":"preview@example.com","password":"password123"}')
+PT7=$(echo $PR7 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+PV=$(curl -s -w '\n%{http_code}' -X POST $B7/api/voice/preview -H "Authorization: Bearer $PT7" -H 'Content-Type: application/json' -d '{"script":"mera naam ahmed hai","spoken_language":"ur","script_mode":"roman"}')
+check "preview: roman urdu script -> 200" "200" "$(echo "$PV" | tail -1)"
+PVB=$(echo "$PV" | sed '$d')
+check "preview: audio_url under /files/voice/" "yes" "$(echo $PVB | python3 -c 'import sys,json;u=json.load(sys.stdin)["audio_url"];print("yes" if u.startswith("/files/voice/") else "no")')"
+check "preview: roman urdu transliterated (dictionary words)" "میرا نام احمد ہے" "$(echo $PVB | python3 -c 'import sys,json;print(json.load(sys.stdin)["synthesized_text"])')"
+check "preview: charges nothing (credits_left 100)" "100" "$(echo $PVB | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
+PVAUDIO=$(echo $PVB | python3 -c 'import sys,json;print(json.load(sys.stdin)["audio_url"])')
+check "preview: audio file is served (200)" "200" "$(curl -s -o /dev/null -w '%{http_code}' $B7$PVAUDIO)"
+VC=$(curl -s $B7/api/_test/voice-calls)
+check "preview: provider body = transliterated text + Urdu (Pakistan) + Kore" "میرا نام احمد ہے|Urdu (Pakistan)|Kore" "$(echo $VC | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x["kind"]=="tts"][-1];b=c["body"];print(b["prompt"]+"|"+b["language_code"]+"|"+b["voice"])')"
+PVH=$(curl -s -X POST $B7/api/voice/preview -H "Authorization: Bearer $PT7" -H 'Content-Type: application/json' -d '{"script":"mera naam ram hai","spoken_language":"hi","script_mode":"roman"}')
+check "preview: roman hindi transliterated (dictionary words)" "मेरा नाम राम है" "$(echo $PVH | python3 -c 'import sys,json;print(json.load(sys.stdin)["synthesized_text"])')"
+PVU=$(curl -s -X POST $B7/api/voice/preview -H "Authorization: Bearer $PT7" -H 'Content-Type: application/json' -d '{"script":"kitaab","spoken_language":"ur","script_mode":"roman"}')
+check "preview: urdu character-map fallback (kitaab)" "کیتاب" "$(echo $PVU | python3 -c 'import sys,json;print(json.load(sys.stdin)["synthesized_text"])')"
+PVK=$(curl -s -X POST $B7/api/voice/preview -H "Authorization: Bearer $PT7" -H 'Content-Type: application/json' -d '{"script":"kitaab","spoken_language":"hi","script_mode":"roman"}')
+check "preview: hindi syllabic fallback (kitaab)" "किताब" "$(echo $PVK | python3 -c 'import sys,json;print(json.load(sys.stdin)["synthesized_text"])')"
+PVN=$(curl -s -X POST $B7/api/voice/preview -H "Authorization: Bearer $PT7" -H 'Content-Type: application/json' -d '{"script":"یہ ایک خبر ہے","spoken_language":"ur","script_mode":"native"}')
+check "preview: native script passes through unchanged" "یہ ایک خبر ہے" "$(echo $PVN | python3 -c 'import sys,json;print(json.load(sys.stdin)["synthesized_text"])')"
+check "preview: still no charge after 5 previews" "100" "$(curl -s $B7/api/me -H "Authorization: Bearer $PT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+
+# -- preview daily cap --
+CR7=$(curl -s -X POST $B7/api/auth/register -H 'Content-Type: application/json' -d '{"email":"capuser@example.com","password":"password123"}')
+CT7=$(echo $CR7 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+for i in 1 2 3 4 5; do
+  curl -s -o /dev/null -X POST $B7/api/voice/preview -H "Authorization: Bearer $CT7" -H 'Content-Type: application/json' -d '{"script":"salam dost","spoken_language":"ur","script_mode":"roman"}'
+done
+check "preview: 6th preview of the day -> 429" "429" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B7/api/voice/preview -H "Authorization: Bearer $CT7" -H 'Content-Type: application/json' -d '{"script":"salam dost","spoken_language":"ur","script_mode":"roman"}')"
+check "preview cap: credits untouched" "100" "$(curl -s $B7/api/me -H "Authorization: Bearer $CT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+
+# -- preview provider failure --
+FR7=$(curl -s -X POST $B7/api/auth/register -H 'Content-Type: application/json' -d '{"email":"failuser@example.com","password":"password123"}')
+FT7=$(echo $FR7 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+check "preview: provider failure -> 502" "502" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B7/api/voice/preview -H "Authorization: Bearer $FT7" -H 'Content-Type: application/json' -d '{"script":"FAILME please","spoken_language":"en","script_mode":"native"}')"
+check "preview failure: credits untouched" "100" "$(curl -s $B7/api/me -H "Authorization: Bearer $FT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+
+# -- lip-sync gating: Normal plan -> 403 --
+LR7=$(curl -s -X POST $B7/api/auth/register -H 'Content-Type: application/json' -d '{"email":"lipnormal@example.com","password":"password123"}')
+LT7=$(echo $LR7 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+LSN=$(curl -s -w '\n%{http_code}' -X POST $B7/api/voice/lipsync -H "Authorization: Bearer $LT7" -H 'Content-Type: application/json' -d '{"image_path":"data/uploads/1/x.png","script":"mera naam ahmed hai","spoken_language":"ur","script_mode":"roman"}')
+check "lipsync: no Pro plan -> 403" "403" "$(echo "$LSN" | tail -1)"
+check "lipsync: 403 error names the Pro plan" "yes" "$(echo "$LSN" | sed '$d' | python3 -c 'import sys,json;print("yes" if "Pro" in json.load(sys.stdin)["error"] else "no")')"
+check "lipsync 403: credits untouched" "100" "$(curl -s $B7/api/me -H "Authorization: Bearer $LT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+
+# -- lip-sync success + failure (Pro user) --
+RR7=$(curl -s -X POST $B7/api/auth/register -H 'Content-Type: application/json' -d '{"email":"lippro@example.com","password":"password123"}')
+RT7=$(echo $RR7 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+RID7=$(curl -s $B7/api/me -H "Authorization: Bearer $RT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+curl -s -o /dev/null -X POST $B7/api/admin/users/$RID7/activate -H "Authorization: Bearer $AT7" -H 'Content-Type: application/json' -d '{"plan_id":"pro","period":"monthly"}'
+check "pro user balance after activation (100 free + 500 plan)" "600" "$(curl -s $B7/api/me -H "Authorization: Bearer $RT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+PNG_B64_V=$(python3 -c "import base64; print(base64.b64encode(bytes.fromhex('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c636000000000020001e221bc330000000049454e44ae426082')).decode())")
+UPV=$(curl -s -X POST $B7/api/uploads/image -H "Authorization: Bearer $RT7" -H 'Content-Type: application/json' -d "{\"image_base64\":\"$PNG_B64_V\",\"content_type\":\"image/png\"}")
+VIMG=$(echo $UPV | python3 -c 'import sys,json;print(json.load(sys.stdin)["image_path"])')
+LS=$(curl -s -w '\n%{http_code}' -X POST $B7/api/voice/lipsync -H "Authorization: Bearer $RT7" -H 'Content-Type: application/json' -d "{\"image_path\":\"$VIMG\",\"script\":\"mera naam ahmed hai\",\"spoken_language\":\"ur\",\"script_mode\":\"roman\"}")
+check "lipsync (image): -> 201" "201" "$(echo "$LS" | tail -1)"
+LSB=$(echo "$LS" | sed '$d')
+check "lipsync (image): generation kind is lipsync" "lipsync" "$(echo $LSB | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["kind"])')"
+check "lipsync (image): cost is 30 credits" "30" "$(echo $LSB | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["cost_credits"])')"
+check "lipsync (image): status completed" "completed" "$(echo $LSB | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["status"])')"
+check "lipsync (image): credits_left 570 (charged exactly once)" "570" "$(echo $LSB | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
+VC2=$(curl -s $B7/api/_test/voice-calls)
+check "lipsync (image): fal body has data-URI image_url + /files/voice/ audio_url" "ok" "$(echo $VC2 | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x["kind"]=="queue"][-1];b=c["body"];print("ok" if c["model"]=="minimax/h3-max/lip-sync/image-to-video" and b["image_url"].startswith("data:image/png") and "/files/voice/" in b["audio_url"] else "bad")')"
+check "lipsync (image): newest history entry is the lipsync job" "lipsync" "$(curl -s $B7/api/history -H "Authorization: Bearer $RT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["kind"])')"
+LSF=$(curl -s -w '\n%{http_code}' -X POST $B7/api/voice/lipsync -H "Authorization: Bearer $RT7" -H 'Content-Type: application/json' -d "{\"image_path\":\"$VIMG\",\"script\":\"FAILME bolna hai\",\"spoken_language\":\"ur\",\"script_mode\":\"native\"}")
+check "lipsync: TTS failure -> 502" "502" "$(echo "$LSF" | tail -1)"
+check "lipsync failure: full refund (back to 570)" "570" "$(curl -s $B7/api/me -H "Authorization: Bearer $RT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "lipsync failure: job row marked failed" "failed" "$(curl -s $B7/api/history -H "Authorization: Bearer $RT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["status"])')"
+SEED7=$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-voice-test.db');
+console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($RID7, 'seed talking source', '16:9', 5, 'realistic', 'completed', 'http://127.0.0.1:$FAL_STUB_PORT/media/clip.mp4', 10).lastInsertRowid));
+")
+LSV=$(curl -s -w '\n%{http_code}' -X POST $B7/api/voice/lipsync -H "Authorization: Bearer $RT7" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEED7,\"script\":\"mera naam ahmed hai\",\"spoken_language\":\"ur\",\"script_mode\":\"roman\"}")
+check "lipsync (video): -> 201" "201" "$(echo "$LSV" | tail -1)"
+LSVB=$(echo "$LSV" | sed '$d')
+check "lipsync (video): routed to the latentsync model" "fal-ai/latentsync" "$(echo $LSVB | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["model"])')"
+check "lipsync (video): credits_left 540" "540" "$(echo $LSVB | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
+
+# -- voiceover: failure refund, then success + mux, then chunking --
+VR7=$(curl -s -X POST $B7/api/auth/register -H 'Content-Type: application/json' -d '{"email":"voiceover@example.com","password":"password123"}')
+VT7=$(echo $VR7 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+VID7=$(curl -s $B7/api/me -H "Authorization: Bearer $VT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+SEEDV=$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-voice-test.db');
+console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($VID7, 'seed voiceover source', '16:9', 2, 'realistic', 'completed', 'http://127.0.0.1:$FAL_STUB_PORT/media/clip.mp4', 10).lastInsertRowid));
+")
+check "voiceover: TTS failure -> 502" "502" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B7/api/voice/voiceover -H "Authorization: Bearer $VT7" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDV,\"script\":\"FAILME bolna hai\",\"spoken_language\":\"ur\",\"script_mode\":\"native\"}")"
+check "voiceover failure: full refund (back to 100)" "100" "$(curl -s $B7/api/me -H "Authorization: Bearer $VT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+VO=$(curl -s -w '\n%{http_code}' -X POST $B7/api/voice/voiceover -H "Authorization: Bearer $VT7" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDV,\"script\":\"mera naam ahmed hai\",\"spoken_language\":\"ur\",\"script_mode\":\"roman\"}")
+check "voiceover: -> 201" "201" "$(echo "$VO" | tail -1)"
+VOB=$(echo "$VO" | sed '$d')
+check "voiceover: generation kind is voiceover" "voiceover" "$(echo $VOB | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["kind"])')"
+check "voiceover: cost 10, credits_left 90" "10/90" "$(echo $VOB | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "voiceover: output under /files/generated/" "yes" "$(echo $VOB | python3 -c 'import sys,json;u=json.load(sys.stdin)["generation"]["video_url"];print("yes" if u.startswith("/files/generated/") else "no")')"
+check "voiceover: voice_audio_path under /files/voice/" "yes" "$(echo $VOB | python3 -c 'import sys,json;u=json.load(sys.stdin)["generation"]["voice_audio_path"] or "";print("yes" if u.startswith("/files/voice/") else "no")')"
+VOURL=$(echo $VOB | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["video_url"])')
+curl -s -o /tmp/voiceover-out.mp4 $B7$VOURL
+FFBIN7=$(node --input-type=module -e "import f from 'ffmpeg-static'; console.log(f)" 2>/dev/null)
+check "voiceover: muxed output HAS an audio stream" "yes" "$("$FFBIN7" -i /tmp/voiceover-out.mp4 2>&1 | python3 -c 'import sys;print("yes" if "Audio:" in sys.stdin.read() else "no")')"
+check "voiceover: muxed output keeps the video stream" "yes" "$("$FFBIN7" -i /tmp/voiceover-out.mp4 2>&1 | python3 -c 'import sys;print("yes" if "Video:" in sys.stdin.read() else "no")')"
+# long script (>3000 chars after transliteration) -> exactly 2 TTS chunks,
+# concatenated in order into one audio file (~2 x 2s stub tones).
+TTS_BEFORE=$(curl -s $B7/api/_test/voice-calls | python3 -c 'import sys,json;print(len([x for x in json.load(sys.stdin)["calls"] if x["kind"]=="tts"]))')
+LONGSCRIPT=$(python3 -c "print('mera naam ahmed hai. ' * 170)")
+VOL=$(curl -s -w '\n%{http_code}' -X POST $B7/api/voice/voiceover -H "Authorization: Bearer $VT7" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDV,\"script\":\"$LONGSCRIPT\",\"spoken_language\":\"ur\",\"script_mode\":\"roman\"}")
+check "voiceover (long script): -> 201" "201" "$(echo "$VOL" | tail -1)"
+TTS_AFTER=$(curl -s $B7/api/_test/voice-calls | python3 -c 'import sys,json;print(len([x for x in json.load(sys.stdin)["calls"] if x["kind"]=="tts"]))')
+check "chunking: long script synthesized in exactly 2 chunks" "2" "$((TTS_AFTER - TTS_BEFORE))"
+VOLB=$(echo "$VOL" | sed '$d')
+CHUNK_AUDIO=$(echo $VOLB | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["voice_audio_path"])')
+curl -s -o /tmp/chunk-audio.mp3 $B7$CHUNK_AUDIO
+check "chunking: concatenated audio is ~4s (2 parts in order)" "ok" "$("$FFBIN7" -i /tmp/chunk-audio.mp3 2>&1 | python3 -c 'import sys,re; m=re.search(r"Duration: (\d+):(\d+):([\d.]+)", sys.stdin.read()); d=int(m.group(1))*3600+int(m.group(2))*60+float(m.group(3)) if m else -1; print("ok" if 3.4 <= d <= 4.8 else "bad")')"
+kill $SRV7_PID $FALSTUB_PID 2>/dev/null
 
 echo "--- rate limit: burst until 429 ---"
 FOUND429="no"
