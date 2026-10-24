@@ -33,7 +33,7 @@ import rateLimit from 'express-rate-limit';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
-import { randomUUID, randomBytes, createSign, createHash, timingSafeEqual } from 'node:crypto';
+import { randomUUID, randomBytes, randomInt, createSign, createHash, timingSafeEqual } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite'; // built into Node 22.5+/24 — no native build step
@@ -381,6 +381,36 @@ const CONFIG = {
     key: (process.env.MAILER_API_KEY || '').trim(),
     from: (process.env.MAILER_FROM || '').trim(),
   },
+  // --- Facebook Login + phone SMS OTP (Phase N2, same fail-closed pattern) --
+  //  - Facebook Login activates only when FACEBOOK_APP_ID AND
+  //    FACEBOOK_APP_SECRET (the owner's own Meta app) are BOTH set.
+  //    Access tokens are verified server-side with Graph's debug_token
+  //    using the app access token (APP_ID|APP_SECRET). THE SECRET IS
+  //    SERVER-SIDE ONLY: it never appears in /api/config, the frontend,
+  //    error messages or logs — only the App ID (a public identifier,
+  //    like the Google client id) is exposed, and only when configured.
+  //    FB_GRAPH_BASE overrides the Graph host (tests point it at a
+  //    local stub — production must never set it).
+  //  - Phone OTP activates only when SMS_API_BASE + SMS_API_KEY +
+  //    SMS_FROM are ALL set. The SMS adapter mirrors the mailer:
+  //    POST {base}/send with a Bearer key and a JSON {to,from,message}
+  //    body, on the OWNER's own SMS-provider account (per-SMS charges
+  //    are the provider's, on that account). OTP codes are 6 digits,
+  //    stored SHA-256-HASHED only (never logged, never in any admin
+  //    surface), expire after OTP_TTL_MS (default 1 minute — the
+  //    owner's decision, 2026-10-24; the 60-second resend cooldown below
+  //    aligns with it exactly), allow
+  //    at most 5 verification attempts, and sends are capped per phone
+  //    (1/minute, 5/day) inside the handlers.
+  facebookAppId: (process.env.FACEBOOK_APP_ID || '').trim(),
+  facebookAppSecret: (process.env.FACEBOOK_APP_SECRET || '').trim(),
+  fbGraphBase: (process.env.FB_GRAPH_BASE || 'https://graph.facebook.com').replace(/\/+$/, ''),
+  sms: {
+    base: (process.env.SMS_API_BASE || '').trim().replace(/\/+$/, ''),
+    key: (process.env.SMS_API_KEY || '').trim(),
+    from: (process.env.SMS_FROM || '').trim(),
+  },
+  otpTtlMs: Math.max(1000, Number(process.env.OTP_TTL_MS || 60 * 1000) || 60 * 1000),
 };
 
 // ---------- Prompt languages ----------
@@ -938,6 +968,29 @@ const MIGRATIONS = [
     UPDATE users SET signup_bonus_granted = 1;
     INSERT OR IGNORE INTO user_identities (user_id, provider, provider_user_id, email, verified)
       SELECT id, 'password', email, email, 1 FROM users;` },
+  // v20 — phone SMS OTP (Phase N2): one row per issued code. Mirrors the
+  // auth_tokens discipline: code_hash is the SHA-256 of "phone:code" —
+  // the raw 6-digit code exists only in the SMS itself and is never
+  // stored or logged. expires_at / created_at are epoch MILLISECONDS
+  // (the send-rate windows — 1/minute, 5/day — need sub-minute
+  // precision). attempts counts verification tries (the code burns at
+  // 5); used_at marks the code consumed, superseded or burned.
+  // purpose separates login codes (user_id NULL) from account-linking
+  // codes (user_id = the signed-in requester — a link code verifies
+  // ONLY for the account that asked for it).
+  { version: 20, up: `
+    CREATE TABLE IF NOT EXISTS phone_otps (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      phone TEXT NOT NULL,
+      code_hash TEXT NOT NULL,
+      purpose TEXT NOT NULL DEFAULT 'login',
+      user_id INTEGER,
+      expires_at INTEGER NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      used_at INTEGER,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_phone_otps_phone ON phone_otps(phone, purpose, id);` },
 ];
 {
   const applied = new Set(db.prepare('SELECT version FROM schema_migrations').all().map(r => r.version));
@@ -1342,6 +1395,205 @@ function userProviders(userId) {
     FROM user_identities WHERE user_id = ? ORDER BY id`).all(userId);
 }
 
+// ---------- Facebook Login + phone OTP (Phase N2, config-gated) ----------
+const socialAuthLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 60,
+  message: { error: 'Rate limit: too many sign-in attempts — please try again later.' } });
+const phoneStartLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 30,
+  message: { error: 'Rate limit: too many code requests — please try again later.' } });
+
+function facebookAuthConfigured() {
+  return !!(CONFIG.facebookAppId && CONFIG.facebookAppSecret);
+}
+function smsConfigured() {
+  return !!(CONFIG.sms.base && CONFIG.sms.key && CONFIG.sms.from);
+}
+
+// Generic HTTPS SMS-API adapter (the mailer pattern): POST
+// {SMS_API_BASE}/send with a Bearer key and a JSON {to,from,message}
+// body. Throws on any non-2xx so callers fail honestly.
+async function sendSms({ to, message }) {
+  const r = await fetch(`${CONFIG.sms.base}/send`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json',
+               Authorization: `Bearer ${CONFIG.sms.key}` },
+    body: JSON.stringify({ from: CONFIG.sms.from, to, message }),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!r.ok) throw Object.assign(new Error(`SMS_${r.status}`), { status: 502 });
+  return true;
+}
+
+// Verifies a Facebook user access token server-side exactly as Meta
+// prescribes: debug_token (with the app access token APP_ID|APP_SECRET)
+// must say the token is valid AND was minted for THIS app; /me must
+// then answer for the very same user id. The email is OPTIONAL in
+// Facebook's world (the user can decline that permission) — a missing
+// email is not a failure. Returns the profile, or null for ANY failure.
+// The app secret is used only inside the debug_token call and is never
+// returned, logged or exposed.
+async function verifyFacebookAccessToken(accessToken) {
+  if (!accessToken || typeof accessToken !== 'string') return null;
+  const appToken = `${CONFIG.facebookAppId}|${CONFIG.facebookAppSecret}`;
+  let dbg;
+  try {
+    const r = await fetch(
+      `${CONFIG.fbGraphBase}/debug_token?input_token=${encodeURIComponent(accessToken)}&access_token=${encodeURIComponent(appToken)}`,
+      { signal: AbortSignal.timeout(15000) });
+    if (!r.ok) return null;
+    dbg = await r.json();
+  } catch { return null; }
+  const d = dbg && dbg.data;
+  if (!d || d.is_valid !== true || String(d.app_id) !== CONFIG.facebookAppId || !d.user_id)
+    return null;
+  let me;
+  try {
+    const r = await fetch(
+      `${CONFIG.fbGraphBase}/me?fields=id,name,email,picture&access_token=${encodeURIComponent(accessToken)}`,
+      { signal: AbortSignal.timeout(15000) });
+    if (!r.ok) return null;
+    me = await r.json();
+  } catch { return null; }
+  if (!me || String(me.id) !== String(d.user_id)) return null;
+  return { id: String(me.id),
+           email: me.email ? String(me.email).toLowerCase() : null,
+           name: me.name ? String(me.name) : null,
+           picture: me.picture && me.picture.data ? String(me.picture.data.url || '') || null : null };
+}
+
+// The shared tail of a provider sign-in (Phase N2's Facebook + phone;
+// Google's Phase N handler predates this helper and is intentionally
+// untouched — its semantics are identical):
+//  - Known identity -> a session for ITS account.
+//  - New identity -> a NEW account is auto-created (spec: first login
+//    creates the account), the identity is bound, the bonus lands once.
+//  - NO AUTO-MERGE, ever: a provider email already owned by another
+//    account changes nothing — the new account gets a namespaced
+//    placeholder address and the real contact lives on its identity row.
+// Social accounts have no usable password (random placeholder hash, as
+// in the Google flow); having a password is defined by the 'password'
+// identity row, never by that column.
+async function socialLoginOrCreate({ provider, providerUserId, email, phone, accountEmailVerified }) {
+  const identity = db.prepare(
+    'SELECT * FROM user_identities WHERE provider = ? AND provider_user_id = ?')
+    .get(provider, providerUserId);
+  if (identity) {
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(identity.user_id);
+    if (!user) return { status: 401, body: { error: 'Please sign in again.' } };
+    return { status: 200, body: { token: signUserToken(user), credits: user.credits } };
+  }
+  const realEmail = email ? String(email).toLowerCase() : null;
+  const emailTaken = realEmail
+    ? db.prepare('SELECT id FROM users WHERE email = ?').get(realEmail) : null;
+  const accountEmail = realEmail && !emailTaken
+    ? realEmail : `${provider}-${providerUserId}@accounts.ajk-ai.local`;
+  const placeholderHash = await bcrypt.hash(randomBytes(32).toString('hex'), 10);
+  const isAdmin = CONFIG.adminEmail && accountEmail === CONFIG.adminEmail ? 1 : 0;
+  let userId;
+  try {
+    userId = tx(() => {
+      const info = db.prepare(
+        `INSERT INTO users (email, password_hash, credits, free_credits, plan_credits, is_admin, email_verified)
+         VALUES (?, ?, 0, 0, 0, ?, ?)`)
+        .run(accountEmail, placeholderHash, isAdmin, accountEmailVerified ? 1 : 0);
+      const id = Number(info.lastInsertRowid);
+      db.prepare(
+        `INSERT INTO user_identities (user_id, provider, provider_user_id, email, phone, verified)
+         VALUES (?, ?, ?, ?, ?, 1)`)
+        .run(id, provider, providerUserId, realEmail, phone || null);
+      return id;
+    });
+  } catch { return { status: 409, body: { error: 'Could not create the account.' } }; }
+  grantSignupBonus(userId);
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  return { status: 201, body: { token: signUserToken(user), credits: user.credits, created: true } };
+}
+
+// ---------- Phone OTP machinery (Phase N2) ----------
+// Codes are 6 digits from a CSPRNG, stored as sha256("phone:code").
+// One live code per (phone, purpose): issuing supersedes every still-
+// unused code. Sends are capped per phone across ALL purposes (so the
+// link flow can never bypass the login caps).
+const OTP_MAX_ATTEMPTS = 5;
+const OTP_RESEND_MS = 60 * 1000;
+const OTP_DAILY_MAX = 5;
+
+function normalizePhone(raw) {
+  const p = String(raw || '').replace(/[\s\-()]/g, '');
+  return /^\+92\d{10}$/.test(p) || /^\+[1-9]\d{9,14}$/.test(p) ? p : null;
+}
+function phoneSendLimitError(phone) {
+  const now = Date.now();
+  const row = db.prepare(`SELECT COUNT(*) AS c, MAX(created_at) AS last
+    FROM phone_otps WHERE phone = ? AND created_at > ?`).get(phone, now - 24 * 3600 * 1000);
+  if (row && row.last && now - Number(row.last) < OTP_RESEND_MS) return 'otp_resend_too_soon';
+  if (row && Number(row.c) >= OTP_DAILY_MAX) return 'otp_daily_limit';
+  return null;
+}
+function issuePhoneOtp(phone, purpose, userId) {
+  db.prepare('UPDATE phone_otps SET used_at = ? WHERE phone = ? AND purpose = ? AND used_at IS NULL')
+    .run(Date.now(), phone, purpose);
+  const code = String(randomInt(0, 1000000)).padStart(6, '0');
+  db.prepare(`INSERT INTO phone_otps (phone, code_hash, purpose, user_id, expires_at, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)`)
+    .run(phone, sha256Hex(`${phone}:${code}`), purpose, userId || null,
+      Date.now() + CONFIG.otpTtlMs, Date.now());
+  return code;
+}
+function discardPhoneOtp(phone, purpose) {
+  db.prepare('UPDATE phone_otps SET used_at = ? WHERE phone = ? AND purpose = ? AND used_at IS NULL')
+    .run(Date.now(), phone, purpose);
+}
+// Consumes one verification attempt against the latest live code for
+// (phone, purpose). Returns the OTP row on success, null otherwise —
+// wrong, expired, burned and superseded codes are indistinguishable
+// to the caller on purpose. A link-purpose code additionally requires
+// the code's user_id to be the caller (expectUserId).
+function consumePhoneOtp(phone, purpose, rawCode, expectUserId) {
+  const row = db.prepare(`SELECT * FROM phone_otps WHERE phone = ? AND purpose = ?
+    AND used_at IS NULL ORDER BY id DESC LIMIT 1`).get(phone, purpose);
+  if (!row) return null;
+  if (purpose === 'link' && Number(row.user_id) !== Number(expectUserId)) return null;
+  if (Number(row.expires_at) <= Date.now()) return null;
+  if (Number(row.attempts) >= OTP_MAX_ATTEMPTS) return null;
+  db.prepare('UPDATE phone_otps SET attempts = attempts + 1 WHERE id = ?').run(row.id);
+  const given = Buffer.from(sha256Hex(`${phone}:${String(rawCode || '').trim()}`));
+  const stored = Buffer.from(String(row.code_hash));
+  const match = given.length === stored.length && timingSafeEqual(given, stored);
+  if (!match) {
+    if (Number(row.attempts) + 1 >= OTP_MAX_ATTEMPTS)
+      db.prepare('UPDATE phone_otps SET used_at = ? WHERE id = ?').run(Date.now(), row.id);
+    return null;
+  }
+  db.prepare('UPDATE phone_otps SET used_at = ? WHERE id = ?').run(Date.now(), row.id);
+  return row;
+}
+// Issues a code and delivers it by SMS. Shared by the login and link
+// start endpoints: rate limits first (429 with a clear code), the send
+// itself last — a provider failure discards the stored code and
+// surfaces as a 502, never a fake "sent".
+async function startPhoneOtp(req, res, purpose, userId) {
+  const phone = normalizePhone((req.body || {}).phone);
+  if (!phone) return res.status(400).json({ error: 'invalid_phone',
+    message: 'Enter the number in international format, e.g. +92 300 1234567.' });
+  const limit = phoneSendLimitError(phone);
+  if (limit) return res.status(429).json({ error: limit,
+    message: limit === 'otp_resend_too_soon'
+      ? 'A code was just sent to this number — wait a minute before asking for another.'
+      : 'Too many codes requested for this number today — please try again tomorrow.' });
+  const code = issuePhoneOtp(phone, purpose, userId);
+  const minutes = Math.max(1, Math.round(CONFIG.otpTtlMs / 60000));
+  const expiryText = minutes === 1 ? '1 minute' : `${minutes} minutes`;
+  try {
+    await sendSms({ to: phone,
+      message: `Your AJK AI code is ${code}. It expires in ${expiryText}.` });
+  } catch {
+    discardPhoneOtp(phone, purpose);
+    return res.status(502).json({ error: 'sms_send_failed',
+      message: 'The SMS could not be sent — please try again in a moment.' });
+  }
+  return res.json({ ok: true, phone, expires_in_seconds: Math.round(CONFIG.otpTtlMs / 1000) });
+}
+
 function auth(req, res, next) {
   const token = (req.headers.authorization || '').replace('Bearer ', '');
   let payload;
@@ -1519,23 +1771,25 @@ app.get('/api/config', (req, res) => res.json({
     placements: ['studio_bottom', 'home_native'],
     note: 'Web groundwork only: slot containers + policy gating + app-ads.txt. Native, interstitial and rewarded ad formats require the Android app build with the AdMob SDK.',
   },
-  // Modern auth (Phase N): which sign-in / account-recovery methods are
-  // actually switched on. Every flag is false until the owner's own
-  // provider account is configured server-side (see the Phase N CONFIG
-  // note) — the frontend renders live controls ONLY for true flags and
-  // an honest "coming soon" state for the rest. google_client_id is a
-  // PUBLIC identifier (it ships in every Google Sign-In button on the
-  // web); it is exposed only when Google Sign-In is configured, and it
-  // is the only auth value ever exposed — keys never are. facebook and
-  // phone stay false in this phase (their adapters arrive in Phase N2).
+  // Modern auth (Phases N + N2): which sign-in / account-recovery
+  // methods are actually switched on. Every flag is false until the
+  // owner's own provider account is configured server-side (see the
+  // auth CONFIG notes) — the frontend renders live controls ONLY for
+  // true flags and an honest "coming soon" state for the rest. The
+  // Google client id and the Facebook app id are PUBLIC identifiers
+  // (they ship in every sign-in button on the web); each is exposed
+  // only while its provider is configured. They are the only auth
+  // values ever exposed — the Facebook app secret, the mailer key and
+  // the SMS key never leave the server.
   auth: {
     google: googleAuthConfigured(),
-    facebook: false,
-    phone: false,
+    facebook: facebookAuthConfigured(),
+    phone: smsConfigured(),
     email_verification: mailerConfigured(),
     password_reset: mailerConfigured(),
   },
   ...(googleAuthConfigured() ? { google_client_id: CONFIG.googleClientId } : {}),
+  ...(facebookAuthConfigured() ? { facebook_app_id: CONFIG.facebookAppId } : {}),
 }));
 
 // app-ads.txt (AdMob app-ownership verification): served ONLY when a
@@ -1829,21 +2083,123 @@ app.get('/api/auth/identities', auth, (req, res) => {
   res.json({ identities: userProviders(req.user.id) });
 });
 
-// Unlink a provider. Google only in this phase. The LAST remaining
-// sign-in method can never be removed — an account must always keep a
-// way back in.
+// Unlink a provider (google | facebook | phone; the password identity
+// is the account's root credential and is never unlinked). The LAST
+// remaining sign-in method can never be removed — an account must
+// always keep a way back in; the guard counts every other identity
+// row, whatever its provider.
 app.post('/api/auth/unlink', auth, (req, res) => {
   const provider = String((req.body || {}).provider || '').toLowerCase();
-  if (provider !== 'google')
-    return res.status(400).json({ error: 'Only Google can be unlinked here.' });
+  if (!['google', 'facebook', 'phone'].includes(provider))
+    return res.status(400).json({ error: 'Only Google, Facebook or a phone number can be unlinked here.' });
+  const label = provider === 'google' ? 'Google' : provider === 'facebook' ? 'Facebook' : 'This phone number';
   const rows = db.prepare('SELECT * FROM user_identities WHERE user_id = ?').all(req.user.id);
-  const target = rows.find(r => r.provider === 'google');
-  if (!target) return res.status(404).json({ error: 'Google is not linked to this account.' });
-  if (rows.filter(r => r.provider !== 'google').length === 0)
+  const target = rows.find(r => r.provider === provider);
+  if (!target) return res.status(404).json({ error: `${label} is not linked to this account.` });
+  if (rows.filter(r => r.provider !== provider).length === 0)
     return res.status(400).json({ error: 'last_auth_method',
       message: 'This is your only sign-in method — add a password or another method before removing it.' });
   db.prepare('DELETE FROM user_identities WHERE id = ?').run(target.id);
   res.json({ ok: true, providers: userProviders(req.user.id) });
+});
+
+// ---------- Facebook Login (Phase N2, config-gated) ----------
+// POST /api/auth/facebook { access_token }: the client obtains the
+// token from Facebook's own login flow (JS SDK); the server verifies
+// it against Graph (debug_token for THIS app + a matching /me) before
+// trusting anything. Semantics are IDENTICAL to Google (Phase N):
+// known identity -> its account; new identity -> a NEW account, bonus
+// once; NO AUTO-MERGE on an email match, ever. Facebook's email is
+// optional (the user may decline it) — the account is then created
+// with a namespaced placeholder address, verified by Facebook itself.
+app.post('/api/auth/facebook', socialAuthLimiter, async (req, res) => {
+  if (!facebookAuthConfigured())
+    return res.status(503).json({ error: 'auth_provider_not_configured' });
+  const profile = await verifyFacebookAccessToken((req.body || {}).access_token);
+  if (!profile) return res.status(401).json({ error: 'Facebook sign-in could not be verified.' });
+  const out = await socialLoginOrCreate({ provider: 'facebook', providerUserId: profile.id,
+    email: profile.email, phone: null, accountEmailVerified: !!profile.email });
+  res.status(out.status).json(out.body);
+});
+
+// Link Facebook to the SIGNED-IN account (same consent path as Google).
+app.post('/api/auth/link/facebook', auth, socialAuthLimiter, async (req, res) => {
+  if (!facebookAuthConfigured())
+    return res.status(503).json({ error: 'auth_provider_not_configured' });
+  const profile = await verifyFacebookAccessToken((req.body || {}).access_token);
+  if (!profile) return res.status(401).json({ error: 'Facebook sign-in could not be verified.' });
+  const existing = db.prepare(
+    "SELECT * FROM user_identities WHERE provider = 'facebook' AND provider_user_id = ?")
+    .get(profile.id);
+  if (existing) {
+    if (existing.user_id === req.user.id)
+      return res.json({ ok: true, already_linked: true, providers: userProviders(req.user.id) });
+    return res.status(409).json({ error: 'identity_in_use',
+      message: 'This Facebook account is already linked to a different AJK AI account.' });
+  }
+  db.prepare(
+    `INSERT INTO user_identities (user_id, provider, provider_user_id, email, verified)
+     VALUES (?, 'facebook', ?, ?, 1)`)
+    .run(req.user.id, profile.id, profile.email);
+  res.status(201).json({ ok: true, linked: 'facebook', providers: userProviders(req.user.id) });
+});
+
+// ---------- Phone number + SMS OTP (Phase N2, config-gated) ----------
+// POST /api/auth/phone/start { phone }: sends a 6-digit code by SMS to
+// the REQUESTED number (owner spec doc 6: the code goes to the number
+// being verified — never to the owner's or admin's number). Stored
+// hashed only; the response never contains the code.
+// POST /api/auth/phone/verify { phone, code }: identity (provider
+// 'phone', provider_user_id = the number) -> its account; new number
+// -> a NEW account (the phone itself is the verified contact, so the
+// account is verified), bonus once. Wrong / expired / burned codes
+// share ONE honest error — nothing distinguishes them to a guesser.
+app.post('/api/auth/phone/start', phoneStartLimiter, async (req, res) => {
+  if (!smsConfigured()) return res.status(503).json({ error: 'sms_not_configured' });
+  await startPhoneOtp(req, res, 'login', null);
+});
+app.post('/api/auth/phone/verify', socialAuthLimiter, async (req, res) => {
+  if (!smsConfigured()) return res.status(503).json({ error: 'sms_not_configured' });
+  const phone = normalizePhone((req.body || {}).phone);
+  if (!phone) return res.status(400).json({ error: 'invalid_phone',
+    message: 'Enter the number in international format, e.g. +92 300 1234567.' });
+  const row = consumePhoneOtp(phone, 'login', (req.body || {}).code, null);
+  if (!row) return res.status(400).json({ error: 'invalid_or_expired_code',
+    message: 'That code is wrong, expired, or too many attempts were made — request a new code.' });
+  const out = await socialLoginOrCreate({ provider: 'phone', providerUserId: phone,
+    email: null, phone, accountEmailVerified: true });
+  res.status(out.status).json(out.body);
+});
+
+// Link a phone to the SIGNED-IN account: the OTP is issued with
+// purpose 'link' and bound to the caller — it verifies for nobody
+// else, and the number must not already belong to another account.
+app.post('/api/auth/link/phone/start', auth, phoneStartLimiter, async (req, res) => {
+  if (!smsConfigured()) return res.status(503).json({ error: 'sms_not_configured' });
+  await startPhoneOtp(req, res, 'link', req.user.id);
+});
+app.post('/api/auth/link/phone/verify', auth, socialAuthLimiter, async (req, res) => {
+  if (!smsConfigured()) return res.status(503).json({ error: 'sms_not_configured' });
+  const phone = normalizePhone((req.body || {}).phone);
+  if (!phone) return res.status(400).json({ error: 'invalid_phone',
+    message: 'Enter the number in international format, e.g. +92 300 1234567.' });
+  const row = consumePhoneOtp(phone, 'link', (req.body || {}).code, req.user.id);
+  if (!row) return res.status(400).json({ error: 'invalid_or_expired_code',
+    message: 'That code is wrong, expired, or too many attempts were made — request a new code.' });
+  const existing = db.prepare(
+    "SELECT * FROM user_identities WHERE provider = 'phone' AND provider_user_id = ?")
+    .get(phone);
+  if (existing) {
+    if (existing.user_id === req.user.id)
+      return res.json({ ok: true, already_linked: true, providers: userProviders(req.user.id) });
+    return res.status(409).json({ error: 'identity_in_use',
+      message: 'This phone number is already linked to a different AJK AI account.' });
+  }
+  db.prepare(
+    `INSERT INTO user_identities (user_id, provider, provider_user_id, phone, verified)
+     VALUES (?, 'phone', ?, ?, 1)`)
+    .run(req.user.id, phone, phone);
+  res.status(201).json({ ok: true, linked: 'phone', providers: userProviders(req.user.id) });
 });
 
 // ---------- Account deletion (Phase N) ----------
@@ -1872,6 +2228,7 @@ app.post('/api/account/delete', auth, async (req, res) => {
     db.prepare('DELETE FROM payments WHERE user_id = ?').run(user.id);
     db.prepare('DELETE FROM subscriptions WHERE user_id = ?').run(user.id);
     db.prepare('DELETE FROM auth_tokens WHERE user_id = ?').run(user.id);
+    db.prepare('DELETE FROM phone_otps WHERE user_id = ?').run(user.id);
     db.prepare('DELETE FROM user_identities WHERE user_id = ?').run(user.id);
     db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
   });

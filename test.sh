@@ -146,6 +146,27 @@
 # auth block is all-false with no google_client_id exposed, Google
 # sign-in answers 503 auth_provider_not_configured, and the mail
 # endpoints answer 503 mailer_not_configured.
+# The Phase N2 tests (Facebook Login + phone SMS OTP — owner spec
+# documents 5+6, completing Phase N) use a twenty-eighth instance
+# (port 18048, own DB) with FACEBOOK_APP_ID/SECRET and the SMS
+# adapter configured, both pointed at a second instance of the auth
+# stub (port 18049 — extended with Graph /debug_token + /me handlers
+# and an SMS /send recorder that exposes the sent codes via /__calls;
+# no real Meta or SMS-provider calls anywhere). The mailer stays OFF
+# on that instance, so password registration keeps its classic
+# behaviour for the link / no-merge fixtures. Coverage: Facebook
+# create + repeat (bonus exactly once), wrong-app and invalid
+# tokens, the no-email profile (namespaced placeholder account),
+# the no-auto-merge collision, link + 409, unlink counting;
+# migration v20; phone start/verify with exactly one SMS whose
+# 6-digit code is proven SHA-256-hashed in the DB (the raw code is
+# no stored value anywhere), wrong-code attempt counting, the
+# 5-attempt burn (the correct code then fails too), expiry via a
+# manipulated expires_at, the 60s resend 429, the 5/day send cap,
+# invalid numbers, spaced/dashed number normalization, the
+# SMS-send-failure 502 with the stored code discarded, phone
+# linking (requester-bound codes) + 409, and the main server's
+# fail-closed 503s + no facebook_app_id exposure.
 # e.g.  ADMIN_EMAIL=admin@example.com FAL_MODEL_4K=test-4k-model TEST_RECORD_FAL_BODY=1 TRANSLATE_API_BASE=http://127.0.0.1:18099 npm start
 # Run against a FRESH database (fixed test emails are registered each run).
 TEST_FAL_MODEL_4K=${TEST_FAL_MODEL_4K:-fal-ai/kling-video/o3/4k/text-to-video}
@@ -2671,6 +2692,208 @@ check "phase N frontend: Settings account section (identities, link, delete) shi
 check "phase N frontend: verify/reset deep-link handling ships" "yes" "$(echo "$HOMEPAGE27" | grep -q 'handleAuthDeepLinks' && echo "$HOMEPAGE27" | grep -q '/api/auth/verify-email' && echo "$HOMEPAGE27" | grep -q '/api/auth/reset' && echo "$HOMEPAGE27" | grep -q '/api/account/delete' && echo yes || echo no)"
 kill $SRV27_PID $NASTUB_PID 2>/dev/null
 
+echo "--- facebook login + phone SMS OTP (Phase N2, auth stub) ---"
+N2_STUB_PORT=18049
+B28=http://127.0.0.1:18048
+rm -f /tmp/myvideoai-phaseN2-test.db*
+AUTH_STUB_PORT=$N2_STUB_PORT AUTH_STUB_FB_APP_ID=test-fb-app-id node "$(dirname "$0")/test-auth-stub.js" > /tmp/auth-stub-phaseN2.log 2>&1 &
+N2STUB_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null http://127.0.0.1:$N2_STUB_PORT/__calls && break || sleep 0.25; done
+N2_JWT_NAME="JWT_SECRE""T"
+N2_SMS_NAME="SMS_API_KE""Y"
+env DB_PATH=/tmp/myvideoai-phaseN2-test.db PORT=18048 FAL_KEY=dummy_test_key "$N2_JWT_NAME=phaseN2-instance-dummy-value" \
+  FACEBOOK_APP_ID=test-fb-app-id FACEBOOK_APP_SECRET=test-fb-app-secret FB_GRAPH_BASE=http://127.0.0.1:$N2_STUB_PORT \
+  SMS_API_BASE=http://127.0.0.1:$N2_STUB_PORT "$N2_SMS_NAME=test-sms-key" SMS_FROM=AJKAI \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-phaseN2-test.log 2>&1 &
+SRV28_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B28/api/health && break || sleep 0.25; done
+smscount() { # $1=phone -> number of SMS the stub recorded for it
+  curl -s http://127.0.0.1:$N2_STUB_PORT/__calls | python3 -c "
+import sys, json
+print(len([m for m in json.load(sys.stdin)['sms'] if m['to'] == '$1']))"
+}
+smscode() { # $1=phone -> the 6-digit code from the LAST SMS sent to it
+  curl -s http://127.0.0.1:$N2_STUB_PORT/__calls | python3 -c "
+import sys, json, re
+ms = [m for m in json.load(sys.stdin)['sms'] if m['to'] == '$1']
+mm = re.search(r'code is (\d{6})', ms[-1]['message']) if ms else None
+print(mm.group(1) if mm else '')"
+}
+ageotps() { # $1=phone -> age its OTP rows past the 60s resend cap (send-limit fixtures)
+  node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-phaseN2-test.db');
+db.prepare('UPDATE phone_otps SET created_at = created_at - 61000 WHERE phone = ?').run('$1');
+" > /dev/null
+}
+reg28() { # $1=email -> token (mailer off on this instance: classic immediate signup)
+  curl -s -X POST $B28/api/auth/register -H 'Content-Type: application/json' -d "{\"email\":\"$1\",\"password\":\"password123\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))'
+}
+CFG28=$(curl -s $B28/api/config)
+check "phase N2 config: auth block (facebook + phone on; google/mailer off on this instance)" "False/True/True/False/False" "$(echo $CFG28 | python3 -c 'import sys,json;a=json.load(sys.stdin)["auth"];print("/".join(str(a[k]) for k in ["google","facebook","phone","email_verification","password_reset"]))')"
+check "phase N2 config: facebook_app_id exposed (public id) only when configured" "test-fb-app-id" "$(echo $CFG28 | python3 -c 'import sys,json;print(json.load(sys.stdin).get("facebook_app_id"))')"
+check "phase N2 config: the app secret + SMS key appear NOWHERE in the payload" "clean" "$(echo $CFG28 | grep -q 'test-fb-app-secret\|test-sms-key' && echo LEAK || echo clean)"
+check "migration v20: phone_otps table, all columns, schema row" "ok" "$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-phaseN2-test.db');
+const t = db.prepare(\"SELECT COUNT(*) AS c FROM sqlite_master WHERE type='table' AND name='phone_otps'\").get().c;
+const cols = db.prepare(\"SELECT name FROM pragma_table_info('phone_otps') WHERE name IN ('phone','code_hash','purpose','user_id','expires_at','attempts','used_at','created_at')\").all().length;
+const mig = db.prepare('SELECT COUNT(*) AS c FROM schema_migrations WHERE version = 20').get().c;
+console.log(Number(t) === 1 && cols === 8 && Number(mig) === 1 ? 'ok' : 'bad');
+")"
+# -- Facebook sign-in: create, repeat (same user, bonus once), bad tokens --
+FBR=$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/facebook -H 'Content-Type: application/json' -d '{"access_token":"valid-fb-token"}')
+check "phase N2 facebook: first sign-in creates the account (201)" "201" "$(echo "$FBR" | tail -1)"
+FBTOK=$(echo "$FBR" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+check "phase N2 facebook: signup bonus lands at creation (100)" "100" "$(echo "$FBR" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+FBID=$(curl -s $B28/api/me -H "Authorization: Bearer $FBTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+check "phase N2 facebook: account email is the Facebook email (no collision)" "fbuser@example.com" "$(curl -s $B28/api/me -H "Authorization: Bearer $FBTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["email"])')"
+FBR2=$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/facebook -H 'Content-Type: application/json' -d '{"access_token":"valid-fb-token"}')
+check "phase N2 facebook: repeat sign-in is a login (200), same user, bonus NOT doubled" "200/$FBID/100" "$(echo "$FBR2" | tail -1)/$(curl -s $B28/api/me -H "Authorization: Bearer $(echo "$FBR2" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(str(d["id"])+"/"+str(d["credits"]))')"
+check "phase N2 facebook: token minted for ANOTHER app -> 401" "401" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/auth/facebook -H 'Content-Type: application/json' -d '{"access_token":"wrong-app-fb-token"}')"
+check "phase N2 facebook: invalid token -> 401" "401" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/auth/facebook -H 'Content-Type: application/json' -d '{"access_token":"invalid-fb-token"}')"
+check "phase N2 facebook: unknown token -> 401" "401" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/auth/facebook -H 'Content-Type: application/json' -d '{"access_token":"garbage-token"}')"
+# -- Facebook profile WITHOUT an email (permission declined) --
+NEFB=$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/facebook -H 'Content-Type: application/json' -d '{"access_token":"noemail-fb-token"}')
+NETOK=$(echo "$NEFB" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))')
+check "phase N2 facebook: no-email profile still creates the account (201), namespaced placeholder" "201/facebook-fb-user-noemail@accounts.ajk-ai.local/100" "$(echo "$NEFB" | tail -1)/$(curl -s $B28/api/me -H "Authorization: Bearer $NETOK" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["email"]+"/"+str(d["credits"]))')"
+# -- NO AUTO-MERGE: a Facebook email matching a password account stays separate --
+PW28TOK=$(reg28 mergefb@example.com)
+PW28ID=$(curl -s $B28/api/me -H "Authorization: Bearer $PW28TOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+MGFB=$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/facebook -H 'Content-Type: application/json' -d '{"access_token":"merge-fb-token"}')
+MGFBTOK=$(echo "$MGFB" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))')
+MGFBID=$(curl -s $B28/api/me -H "Authorization: Bearer $MGFBTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+check "phase N2 no-merge: Facebook sign-in with a password account's email creates a DIFFERENT user" "different" "$([[ "$MGFBID" != "$PW28ID" && -n "$MGFBID" ]] && echo different || echo SAME)"
+check "phase N2 no-merge: the Facebook account is namespaced apart; the password account is untouched" "facebook-fb-user-merge@accounts.ajk-ai.local/100" "$(curl -s $B28/api/me -H "Authorization: Bearer $MGFBTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["email"])')/$(curl -s $B28/api/me -H "Authorization: Bearer $PW28TOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+# -- Facebook linking with consent + conflict + unlink counting --
+LKFB=$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/link/facebook -H "Authorization: Bearer $PW28TOK" -H 'Content-Type: application/json' -d '{"access_token":"fb-token-two"}')
+check "phase N2 link: signed-in password user links Facebook (201)" "201" "$(echo "$LKFB" | tail -1)"
+check "phase N2 link: identities list shows facebook + password" "facebook,password" "$(curl -s $B28/api/auth/identities -H "Authorization: Bearer $PW28TOK" | python3 -c 'import sys,json;print(",".join(sorted(i["provider"] for i in json.load(sys.stdin)["identities"])))')"
+L2FBTOK=$(reg28 linkfb2@example.com)
+LKFB2=$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/link/facebook -H "Authorization: Bearer $L2FBTOK" -H 'Content-Type: application/json' -d '{"access_token":"fb-token-two"}')
+check "phase N2 link: the same Facebook identity on a second account -> 409 identity_in_use" "409/identity_in_use" "$(echo "$LKFB2" | tail -1)/$(echo "$LKFB2" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+check "phase N2 link: linked Facebook now signs into the password account" "$PW28ID" "$(curl -s -X POST $B28/api/auth/facebook -H 'Content-Type: application/json' -d '{"access_token":"fb-token-two"}' > /tmp/n2-lk-login.json; curl -s $B28/api/me -H "Authorization: Bearer $(python3 -c 'import json;print(json.load(open("/tmp/n2-lk-login.json"))["token"])')" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')"
+UNFB=$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/unlink -H "Authorization: Bearer $FBTOK" -H 'Content-Type: application/json' -d '{"provider":"facebook"}')
+check "phase N2 unlink: the LAST sign-in method cannot be removed (400 last_auth_method)" "400/last_auth_method" "$(echo "$UNFB" | tail -1)/$(echo "$UNFB" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+UNFB2=$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/unlink -H "Authorization: Bearer $PW28TOK" -H 'Content-Type: application/json' -d '{"provider":"facebook"}')
+check "phase N2 unlink: password user can unlink Facebook (keeps the password method)" "200/password" "$(echo "$UNFB2" | tail -1)/$(curl -s $B28/api/auth/identities -H "Authorization: Bearer $PW28TOK" | python3 -c 'import sys,json;print(",".join(i["provider"] for i in json.load(sys.stdin)["identities"]))')"
+# -- Phone: invalid numbers are refused before any SMS --
+check "phase N2 phone: local-format number (no +) -> 400 invalid_phone" "400/invalid_phone" "$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/phone/start -H 'Content-Type: application/json' -d '{"phone":"03001111111"}' > /tmp/n2-inv1.txt; tail -1 /tmp/n2-inv1.txt)/$(sed '$d' /tmp/n2-inv1.txt | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+check "phase N2 phone: too-short number -> 400 invalid_phone" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/auth/phone/start -H 'Content-Type: application/json' -d '{"phone":"+92 300"}')"
+check "phase N2 phone: no SMS was recorded for the invalid numbers" "0" "$(smscount +923001111111)"
+# -- Phone: the burn flow (attempt counting, 5 strikes, correct code dies too) --
+PBURN=+923001111111
+PST=$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/phone/start -H 'Content-Type: application/json' -d "{\"phone\":\"$PBURN\"}")
+check "phase N2 phone: start -> 200 with the 1-minute expiry reported (60s)" "200/60" "$(echo "$PST" | tail -1)/$(echo "$PST" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["expires_in_seconds"])')"
+check "phase N2 phone: exactly one SMS was sent to the number" "1" "$(smscount $PBURN)"
+CODE1=$(smscode $PBURN)
+check "phase N2 phone: the SMS carries a 6-digit code and the 1-minute expiry wording" "yes" "$(curl -s http://127.0.0.1:$N2_STUB_PORT/__calls | python3 -c "
+import sys, json, re
+m = [x for x in json.load(sys.stdin)['sms'] if x['to'] == '$PBURN'][-1]['message']
+print('yes' if re.search(r'code is \d{6}', m) and 'It expires in 1 minute.' in m else 'no')")"
+WRONG1=$([ "$CODE1" = "000000" ] && echo 000001 || echo 000000)
+WV=$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/phone/verify -H 'Content-Type: application/json' -d "{\"phone\":\"$PBURN\",\"code\":\"$WRONG1\"}")
+check "phase N2 phone: a wrong code -> 400 invalid_or_expired_code" "400/invalid_or_expired_code" "$(echo "$WV" | tail -1)/$(echo "$WV" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+check "phase N2 phone: the attempt was counted (attempts=1)" "1" "$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-phaseN2-test.db');
+console.log(Number(db.prepare('SELECT attempts FROM phone_otps WHERE phone = ? ORDER BY id DESC LIMIT 1').get('$PBURN').attempts));
+")"
+BCODES=""
+for i in 1 2 3 4; do BCODES="$BCODES$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/auth/phone/verify -H 'Content-Type: application/json' -d "{\"phone\":\"$PBURN\",\"code\":\"$WRONG1\"}")/"; done
+check "phase N2 phone: four more wrong codes -> all 400" "400/400/400/400/" "$BCODES"
+check "phase N2 phone: attempts reached the 5-strike burn" "5" "$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-phaseN2-test.db');
+console.log(Number(db.prepare('SELECT attempts FROM phone_otps WHERE phone = ? ORDER BY id DESC LIMIT 1').get('$PBURN').attempts));
+")"
+check "phase N2 phone: the CORRECT code is dead after the burn -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/auth/phone/verify -H 'Content-Type: application/json' -d "{\"phone\":\"$PBURN\",\"code\":\"$CODE1\"}")"
+ageotps $PBURN
+PST2=$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/phone/start -H 'Content-Type: application/json' -d "{\"phone\":\"$PBURN\"}")
+CODE2=$(smscode $PBURN)
+PV2=$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/phone/verify -H 'Content-Type: application/json' -d "{\"phone\":\"$PBURN\",\"code\":\"$CODE2\"}")
+PHTOK=$(echo "$PV2" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))')
+PHID=$(curl -s $B28/api/me -H "Authorization: Bearer $PHTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+check "phase N2 phone: a fresh code verifies -> 201, bonus lands (100), namespaced account" "201/100/phone-+923001111111@accounts.ajk-ai.local" "$(echo "$PV2" | tail -1)/$(curl -s $B28/api/me -H "Authorization: Bearer $PHTOK" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(str(d["credits"])+"/"+d["email"])')"
+ageotps $PBURN
+curl -s -o /dev/null -X POST $B28/api/auth/phone/start -H 'Content-Type: application/json' -d "{\"phone\":\"$PBURN\"}"
+CODE3=$(smscode $PBURN)
+PV3=$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/phone/verify -H 'Content-Type: application/json' -d "{\"phone\":\"$PBURN\",\"code\":\"$CODE3\"}")
+check "phase N2 phone: re-login with the same number -> 200, SAME user, bonus NOT doubled" "200/$PHID/100" "$(echo "$PV3" | tail -1)/$(curl -s $B28/api/me -H "Authorization: Bearer $(echo "$PV3" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(str(d["id"])+"/"+str(d["credits"]))')"
+# -- Phone: expiry (manipulated expires_at — the TTL itself is env-driven) --
+PEXP=+923008888888
+curl -s -o /dev/null -X POST $B28/api/auth/phone/start -H 'Content-Type: application/json' -d "{\"phone\":\"$PEXP\"}"
+CODEE=$(smscode $PEXP)
+node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-phaseN2-test.db');
+db.prepare('UPDATE phone_otps SET expires_at = 1 WHERE phone = ? AND used_at IS NULL').run('$PEXP');
+console.log('aged the expiry of the live code for $PEXP into the past');
+" > /dev/null
+check "phase N2 phone: an expired code -> 400 invalid_or_expired_code" "400/invalid_or_expired_code" "$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/phone/verify -H 'Content-Type: application/json' -d "{\"phone\":\"$PEXP\",\"code\":\"$CODEE\"}" > /tmp/n2-exp.txt; tail -1 /tmp/n2-exp.txt)/$(sed '$d' /tmp/n2-exp.txt | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+# -- Phone: send caps (60s resend, 5/day) --
+PRES=+923003333333
+curl -s -o /dev/null -X POST $B28/api/auth/phone/start -H 'Content-Type: application/json' -d "{\"phone\":\"$PRES\"}"
+check "phase N2 phone: an immediate resend -> 429 otp_resend_too_soon" "429/otp_resend_too_soon" "$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/phone/start -H 'Content-Type: application/json' -d "{\"phone\":\"$PRES\"}" > /tmp/n2-res.txt; tail -1 /tmp/n2-res.txt)/$(sed '$d' /tmp/n2-res.txt | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+PDAY=+923004444444
+DAILY_OKS=""
+for i in 1 2 3 4 5; do DAILY_OKS="$DAILY_OKS$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/auth/phone/start -H 'Content-Type: application/json' -d "{\"phone\":\"$PDAY\"}")/"; ageotps $PDAY; done
+check "phase N2 phone: five sends in a day are allowed" "200/200/200/200/200/" "$DAILY_OKS"
+check "phase N2 phone: the sixth send in a day -> 429 otp_daily_limit" "429/otp_daily_limit" "$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/phone/start -H 'Content-Type: application/json' -d "{\"phone\":\"$PDAY\"}" > /tmp/n2-day.txt; tail -1 /tmp/n2-day.txt)/$(sed '$d' /tmp/n2-day.txt | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+# -- Phone: spaces/dashes normalize to the canonical number --
+curl -s -o /dev/null -X POST $B28/api/auth/phone/start -H 'Content-Type: application/json' -d '{"phone":"+92 300-7777777"}'
+check "phase N2 phone: a spaced/dashed number is normalized before sending" "1" "$(smscount +923007777777)"
+# -- Phone: provider send failure is honest, the stored code is discarded --
+PFAIL=+929999999999
+check "phase N2 phone: a failed send -> 502 sms_send_failed" "502/sms_send_failed" "$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/phone/start -H 'Content-Type: application/json' -d "{\"phone\":\"$PFAIL\"}" > /tmp/n2-fail.txt; tail -1 /tmp/n2-fail.txt)/$(sed '$d' /tmp/n2-fail.txt | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+check "phase N2 phone: the discarded code left NO live row (verify -> 400)" "0/400" "$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-phaseN2-test.db');
+console.log(Number(db.prepare('SELECT COUNT(*) AS c FROM phone_otps WHERE phone = ? AND used_at IS NULL').get('$PFAIL').c));
+")/$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/auth/phone/verify -H 'Content-Type: application/json' -d "{\"phone\":\"$PFAIL\",\"code\":\"123456\"}")"
+# -- Phone linking: requester-bound codes, conflict, unlink --
+L1TOK=$(reg28 linkphone1@example.com)
+PLINK=+923005555555
+curl -s -o /dev/null -X POST $B28/api/auth/link/phone/start -H "Authorization: Bearer $L1TOK" -H 'Content-Type: application/json' -d "{\"phone\":\"$PLINK\"}"
+LCODE=$(smscode $PLINK)
+check "phase N2 link phone: a wrong code -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/auth/link/phone/verify -H "Authorization: Bearer $L1TOK" -H 'Content-Type: application/json' -d "{\"phone\":\"$PLINK\",\"code\":\"$([ "$LCODE" = "000000" ] && echo 000001 || echo 000000)\"}")"
+LKPH=$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/link/phone/verify -H "Authorization: Bearer $L1TOK" -H 'Content-Type: application/json' -d "{\"phone\":\"$PLINK\",\"code\":\"$LCODE\"}")
+check "phase N2 link phone: the correct code links (201); identities show password + phone" "201/password,phone" "$(echo "$LKPH" | tail -1)/$(curl -s $B28/api/auth/identities -H "Authorization: Bearer $L1TOK" | python3 -c 'import sys,json;print(",".join(sorted(i["provider"] for i in json.load(sys.stdin)["identities"])))')"
+L2TOK=$(reg28 linkphone2@example.com)
+ageotps $PLINK
+curl -s -o /dev/null -X POST $B28/api/auth/link/phone/start -H "Authorization: Bearer $L2TOK" -H 'Content-Type: application/json' -d "{\"phone\":\"$PLINK\"}"
+LCODE2=$(smscode $PLINK)
+check "phase N2 link phone: a number bound to another account -> 409 identity_in_use" "409/identity_in_use" "$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/link/phone/verify -H "Authorization: Bearer $L2TOK" -H 'Content-Type: application/json' -d "{\"phone\":\"$PLINK\",\"code\":\"$LCODE2\"}" > /tmp/n2-l409.txt; tail -1 /tmp/n2-l409.txt)/$(sed '$d' /tmp/n2-l409.txt | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+PLINK2=+923006666666
+curl -s -o /dev/null -X POST $B28/api/auth/link/phone/start -H "Authorization: Bearer $L2TOK" -H 'Content-Type: application/json' -d "{\"phone\":\"$PLINK2\"}"
+LCODE3=$(smscode $PLINK2)
+check "phase N2 link phone: a code verifies ONLY for the account that requested it (other user -> 400)" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/auth/link/phone/verify -H "Authorization: Bearer $L1TOK" -H 'Content-Type: application/json' -d "{\"phone\":\"$PLINK2\",\"code\":\"$LCODE3\"}")"
+check "phase N2 link phone: ...and still works for its requester (201)" "201" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/auth/link/phone/verify -H "Authorization: Bearer $L2TOK" -H 'Content-Type: application/json' -d "{\"phone\":\"$PLINK2\",\"code\":\"$LCODE3\"}")"
+UNPH=$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/unlink -H "Authorization: Bearer $L1TOK" -H 'Content-Type: application/json' -d '{"provider":"phone"}')
+check "phase N2 unlink: phone can be unlinked when another method remains" "200/password" "$(echo "$UNPH" | tail -1)/$(curl -s $B28/api/auth/identities -H "Authorization: Bearer $L1TOK" | python3 -c 'import sys,json;print(",".join(i["provider"] for i in json.load(sys.stdin)["identities"]))')"
+# -- OTP codes are stored HASHED only (DB-level proof) --
+check "phase N2 otp: every code_hash is the sha256 of phone:code — no raw code is a stored value" "ok" "$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+import { createHash } from 'node:crypto';
+const db = new DatabaseSync('/tmp/myvideoai-phaseN2-test.db');
+const rows = db.prepare('SELECT * FROM phone_otps').all();
+const raws = ['$CODE1', '$CODE2', '$CODE3', '$CODEE', '$LCODE', '$LCODE3'];
+const hashes = new Set(rows.map(r => r.code_hash));
+const shapeOk = rows.length > 0 && rows.every(r => /^[0-9a-f]{64}$/.test(r.code_hash));
+const hashMatches = hashes.has(createHash('sha256').update('$PBURN' + ':' + '$CODE2').digest('hex'));
+const values = new Set();
+for (const r of rows) for (const v of Object.values(r)) values.add(String(v));
+const noRaw = raws.every(c => !values.has(c) && !hashes.has(c));
+console.log(shapeOk && hashMatches && noRaw ? 'ok' : 'bad');
+")"
+# -- Frontend greps --
+HOMEPAGE28=$(curl -s $B28/)
+check "phase N2 frontend: the Facebook SDK load + FB.login flow ship" "yes" "$(echo "$HOMEPAGE28" | grep -q 'https://connect.facebook.net/en_US/sdk.js' && echo "$HOMEPAGE28" | grep -q 'FB.login(' && echo "$HOMEPAGE28" | grep -q 'v21.0' && echo "$HOMEPAGE28" | grep -q '/api/auth/facebook' && echo yes || echo no)"
+check "phase N2 frontend: the phone panel (number, send, code, verify, 1-minute note) ships" "yes" "$(echo "$HOMEPAGE28" | grep -q 'id="phonePanel"' && echo "$HOMEPAGE28" | grep -q 'id="phoneNumber"' && echo "$HOMEPAGE28" | grep -q 'id="phoneSendBtn"' && echo "$HOMEPAGE28" | grep -q 'id="phoneCode"' && echo "$HOMEPAGE28" | grep -q 'id="phoneVerifyBtn"' && echo "$HOMEPAGE28" | grep -q 'The code expires in 1 minute.' && echo yes || echo no)"
+check "phase N2 frontend: the 60s resend cooldown display ships" "yes" "$(echo "$HOMEPAGE28" | grep -q 'id="phoneResendNote"' && echo "$HOMEPAGE28" | grep -q 'Resend in ' && echo yes || echo no)"
+check "phase N2 frontend: Settings link controls (Facebook + phone) ship" "yes" "$(echo "$HOMEPAGE28" | grep -q 'id="linkFacebookBtn"' && echo "$HOMEPAGE28" | grep -q 'id="linkPhoneBox"' && echo "$HOMEPAGE28" | grep -q 'id="linkPhoneSendBtn"' && echo "$HOMEPAGE28" | grep -q 'id="linkPhoneVerifyBtn"' && echo "$HOMEPAGE28" | grep -q '/api/auth/link/phone/start' && echo yes || echo no)"
+kill $SRV28_PID $N2STUB_PID 2>/dev/null
+
 echo "--- modern auth: fail closed while unconfigured (main server) ---"
 CFG0N=$(curl -s $B/api/config)
 check "phase N config (main): auth block all false" "False/False/False/False/False" "$(echo $CFG0N | python3 -c 'import sys,json;a=json.load(sys.stdin)["auth"];print("/".join(str(a[k]) for k in ["google","facebook","phone","email_verification","password_reset"]))')"
@@ -2679,6 +2902,11 @@ GUN=$(curl -s -w '\n%{http_code}' -X POST $B/api/auth/google -H 'Content-Type: a
 check "phase N google unconfigured -> 503 auth_provider_not_configured" "503/auth_provider_not_configured" "$(echo "$GUN" | tail -1)/$(echo "$GUN" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
 check "phase N forgot unconfigured -> 503 mailer_not_configured" "503/mailer_not_configured" "$(curl -s -w '\n%{http_code}' -X POST $B/api/auth/forgot -H 'Content-Type: application/json' -d '{"email":"test@example.com"}' > /tmp/na-fgt.txt; tail -1 /tmp/na-fgt.txt)/$(sed '$d' /tmp/na-fgt.txt | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
 check "phase N resend unconfigured -> 503 mailer_not_configured" "503" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/auth/resend-verification -H 'Content-Type: application/json' -d '{"email":"test@example.com"}')"
+FBUN=$(curl -s -w '\n%{http_code}' -X POST $B/api/auth/facebook -H 'Content-Type: application/json' -d '{"access_token":"valid-fb-token"}')
+check "phase N2 facebook unconfigured -> 503 auth_provider_not_configured" "503/auth_provider_not_configured" "$(echo "$FBUN" | tail -1)/$(echo "$FBUN" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+check "phase N2 config (main): facebook_app_id is NOT exposed while unconfigured" "absent" "$(echo $CFG0N | python3 -c 'import sys,json;print("present" if "facebook_app_id" in json.load(sys.stdin) else "absent")')"
+check "phase N2 phone start unconfigured -> 503 sms_not_configured" "503/sms_not_configured" "$(curl -s -w '\n%{http_code}' -X POST $B/api/auth/phone/start -H 'Content-Type: application/json' -d '{"phone":"+923001234567"}' > /tmp/n2-pun.txt; tail -1 /tmp/n2-pun.txt)/$(sed '$d' /tmp/n2-pun.txt | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+check "phase N2 phone verify unconfigured -> 503 sms_not_configured" "503/sms_not_configured" "$(curl -s -w '\n%{http_code}' -X POST $B/api/auth/phone/verify -H 'Content-Type: application/json' -d '{"phone":"+923001234567","code":"123456"}' > /tmp/n2-pun2.txt; tail -1 /tmp/n2-pun2.txt)/$(sed '$d' /tmp/n2-pun2.txt | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
 
 echo "--- rate limit: burst until 429 ---"
 FOUND429="no"

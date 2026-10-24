@@ -1298,6 +1298,92 @@ their real account** — Google needs the owner's OAuth client, the
 mailer needs the owner's email-service account. Facebook Login and
 phone-OTP adapters arrive in Phase N2 on this same identity model.
 
+## Facebook Login + phone SMS OTP (Phase N2, migration v20)
+
+Phase N2 completes the owner's auth spec (documents 5+6) on the
+Phase N identity model — same rules, same fail-closed pattern:
+nothing is offered in the UI and every endpoint answers 503 until
+the OWNER's own provider account is configured server-side.
+
+**Facebook Login** (`FACEBOOK_APP_ID` + `FACEBOOK_APP_SECRET`):
+the app runs Facebook's official JS-SDK login and posts the user
+access token to `POST /api/auth/facebook`; the server verifies it
+with Graph's `debug_token` — the token must be valid AND minted for
+THIS app — and requires `/me` to answer for the same user id before
+any session exists. The **app secret never leaves the server**: it
+is used only inside the `debug_token` call and appears in no config
+response, page, error or log (only the App ID — a public identifier —
+is exposed via `/api/config` as `facebook_app_id`, only when
+configured). Semantics are identical to Google: a known Facebook
+identity signs into ITS account; a new one auto-creates an account
+(signup bonus exactly once); **no auto-merge** — a Facebook email
+that matches a password account creates a separate account with a
+namespaced placeholder address, and linking is the signed-in,
+verified action `POST /api/auth/link/facebook` (409
+`identity_in_use` when the identity belongs to another account).
+Facebook's email is **optional** (the user may decline that
+permission): with no email the account is created on the placeholder
+address and the Facebook identity itself is the verified contact.
+Unlink covers google/facebook/phone through the Phase N endpoint;
+the last-sign-in-method guard counts every identity row.
+
+**Owner setup checklist (Meta):** Meta for Developers → create an
+app → add the **Facebook Login** product → in its settings set the
+valid OAuth redirect / JavaScript origins to this service's domain
+→ copy the **App ID** and **App Secret** into the server environment
+(`FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET` on Render) and restart.
+Basic login (`public_profile`, `email`) is the standard path;
+**public use may require Meta app review** for anything beyond
+those basic permissions — switch the app to Live mode there when
+publishing.
+
+**Phone sign-in** (`SMS_API_BASE` + `SMS_API_KEY` + `SMS_FROM`):
+`POST /api/auth/phone/start {phone}` sends a 6-digit code by SMS to
+the number being verified — the owner's spec is explicit that a code
+goes ONLY to that number, never to the owner/admin — and
+`POST /api/auth/phone/verify {phone, code}` signs in (known number →
+its account; new number → a new, verified account, bonus once).
+Numbers are accepted in international format (`+92…`, or generally
+`+` plus 10–15 digits; spaces/dashes are ignored). Linking mirrors
+the login flow for a signed-in user (`/api/auth/link/phone/start` +
+`/verify`); a link code is bound to the account that requested it
+and a number bound to another account answers 409
+`identity_in_use`.
+
+**OTP security model** (migration v20, table `phone_otps`): codes
+are CSPRNG 6-digit values stored **SHA-256-hashed only**
+(`sha256(phone:code)`) — the raw code exists solely in the SMS, is
+never logged and appears in no admin surface. A code **expires
+after 1 minute** (`OTP_TTL_MS`, default 60000 — the owner's
+decision, 2026-10-24); at most **5 verification attempts** are
+allowed per code, after which it is burned; issuing a new code
+supersedes the previous one. Sends are capped per phone across all
+purposes: **1 per 60 seconds** (exactly the code's lifetime) and
+**5 per day** (429 with a clear error code), on top of the per-IP
+limiters. A provider send failure answers 502 `sms_send_failed`
+and discards the stored code — the API never pretends an SMS went
+out. Wrong, expired and burned codes share one indistinguishable
+error (`invalid_or_expired_code`).
+
+**SMS provider checklist:** any HTTPS SMS API matching the adapter
+contract (POST `{SMS_API_BASE}/send`, Bearer key, JSON
+`{from,to,message}`) works — the owner's own provider account, so
+**per-SMS charges apply on that account**; Pakistani gateways and
+international APIs differ in price and reach, so verify the current
+pricing and country coverage on the provider's own site before
+choosing. (Firebase Phone Authentication is the common alternative;
+it was NOT used here — its client-SDK model would split sign-in
+state across two systems, while this server-verified adapter keeps
+one identity model, one bonus rule and one audit shape for every
+provider.)
+
+**Status: built and stub-tested, NOT production-verified.** The
+Facebook Graph endpoints and the SMS send are exercised against
+`test-auth-stub.js` with dummy values only. Each provider counts as
+**complete only after the owner's real-account test** — Facebook
+needs the owner's Meta app (App ID + Secret in the server env), and
+phone sign-in needs the owner's SMS-provider account.
+
 ## Test results (backend, 2026-10-20)
 Run locally with `bash test.sh` — **19/19 tests passed** with a dummy key (no paid calls):
 - ✅ health + config endpoint exposes no secrets
