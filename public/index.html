@@ -912,6 +912,35 @@
               <p class="lang-hint" id="draftHint" style="display:none;">Draft = a cheap 480P preview of your idea. Sound and voice add-ons are not available on drafts — upgrade the draft from your History to full quality first, then add them there.</p>
               <p class="lang-hint" id="seedanceHint" style="display:none;">Seedance 2.5 premium engine — the price in the bar below is the full price, native audio included. Sound and voice add-ons can't be combined with it, and AI Auto never selects it — you choose it here.</p>
 
+              <!-- Phase L: cinematic direction chips. These are prompt
+                   directives: the server appends the chosen phrases to
+                   the prompt sent to the model — no engine in our
+                   wiring has a mechanical camera control, and the hint
+                   below says so plainly. Free (no credit change). -->
+              <div class="field-label"><span>Camera movement (optional)</span></div>
+              <div class="seg" id="cameraSeg" role="group" aria-label="Camera movement">
+                <button type="button" class="sel" data-camera="">None</button>
+                <button type="button" data-camera="zoom_in">Zoom In</button>
+                <button type="button" data-camera="zoom_out">Zoom Out</button>
+                <button type="button" data-camera="pan_left">Pan Left</button>
+                <button type="button" data-camera="pan_right">Pan Right</button>
+                <button type="button" data-camera="tilt_up">Tilt Up</button>
+                <button type="button" data-camera="tilt_down">Tilt Down</button>
+                <button type="button" data-camera="tracking">Tracking Shot</button>
+                <button type="button" data-camera="orbit">Orbit</button>
+                <button type="button" data-camera="handheld">Handheld</button>
+                <button type="button" data-camera="static">Static</button>
+              </div>
+              <div class="field-label"><span>Shot size (optional)</span></div>
+              <div class="seg" id="shotSeg" role="group" aria-label="Shot size">
+                <button type="button" class="sel" data-shot="">None</button>
+                <button type="button" data-shot="close_up">Close-up</button>
+                <button type="button" data-shot="medium">Medium Shot</button>
+                <button type="button" data-shot="wide">Wide Shot</button>
+                <button type="button" data-shot="aerial">Aerial / Drone</button>
+              </div>
+              <p class="lang-hint">Camera moves are prompt directions to the AI · کیمرہ حرکات AI کو ہدایات ہیں — the model follows them as guidance, not as a mechanical guarantee. They never change the credit cost.</p>
+
               <p class="fineprint">Credits are charged by the server when it accepts your job. Failed generations are refunded automatically. Mode, a starting image and watermark text do not change the credit cost — the same duration and quality pricing applies. Sound, voice and music options are included in this price — there are no separate audio fees. The total cost and the Generate button stay in the bar at the bottom of this screen.</p>
 
             <div class="card collapsible is-collapsed" id="voiceCard">
@@ -1522,7 +1551,7 @@
         var credits = null;        // last known balance (server-sourced)
         var state = {
           aspect: "16:9", aspectExplicit: false, duration: 5, style: "realistic", mode: "realistic",
-          quality: "full", auto: lsGet(LS_AUTO) !== "0",
+          quality: "full", camera: "", shot: "", auto: lsGet(LS_AUTO) !== "0",
           imagePath: null, imageName: "",
           generating: false, currentJobId: null, pollTimer: null, pollCount: 0,
           reportTarget: null, lastStudioJob: null
@@ -1655,12 +1684,13 @@
           return q;
         }
         function costFor(d) {
-          // Seedance 2.5 premium engine (Phase J): a per-duration premium
-          // price read from the server's config (60 credits / 5s,
-          // 120 credits / 10s) — the sticky bar shows the full price up
-          // front, exactly like every other route.
+          // Seedance 2.5 premium engine (Phase J, durations extended by
+          // Phase L): a per-duration premium price read from the
+          // server's config (a linear 12 credits/second — 60 / 5s up to
+          // 360 / 30s) — the sticky bar shows the full price up front,
+          // exactly like every other route.
           if (state.quality === "seedance") {
-            var sp = (cfg && cfg.seedance_engine && cfg.seedance_engine.price_credits) || { "5": 60, "10": 120 };
+            var sp = (cfg && cfg.seedance_engine && cfg.seedance_engine.price_credits) || { "5": 60, "10": 120, "15": 180, "20": 240, "30": 360 };
             var sv = sp[String(d)];
             return (sv === undefined || sv === null) ? 60 : sv;
           }
@@ -1691,9 +1721,46 @@
           // The duration buttons show per-duration prices — refresh them
           // when the quality (and therefore the price row) changes.
           $$("#durationSeg button").forEach(function (b, i) {
-            var durs = (cfg && cfg.durations) || FALLBACK.durations;
+            var durs = currentDurations();
             var small = b.querySelector("small");
             if (small && durs[i] !== undefined) small.textContent = costFor(durs[i]) + " credits";
+          });
+        }
+        // Durations offered for the currently selected engine (Phase L):
+        // the Seedance premium engine genuinely allows up to 30s on its
+        // fal schema, so its set comes from the server's seedance_engine
+        // block; every other engine keeps the standard set. Switching
+        // engines re-clamps the selection to the nearest valid value
+        // (largest allowed ≤ current, else the smallest allowed).
+        function currentDurations() {
+          if (state.quality === "seedance") {
+            var sd = cfg && cfg.seedance_engine && cfg.seedance_engine.durations;
+            return (sd && sd.length) ? sd : [5, 10, 15, 20, 30];
+          }
+          return (cfg && cfg.durations) || FALLBACK.durations;
+        }
+        function renderDurationSeg() {
+          var durations = currentDurations();
+          if (durations.indexOf(state.duration) === -1) {
+            var lower = durations.filter(function (d) { return d <= state.duration; });
+            state.duration = lower.length ? lower[lower.length - 1] : durations[0];
+          }
+          var dseg = $("#durationSeg");
+          dseg.innerHTML = "";
+          durations.forEach(function (d) {
+            var b = document.createElement("button");
+            b.type = "button";
+            b.className = (d === state.duration) ? "sel" : "";
+            b.textContent = d + (d === 1 ? " second" : " seconds");
+            var sm = document.createElement("small");
+            sm.textContent = costFor(d) + " credits";
+            b.appendChild(sm);
+            b.addEventListener("click", function () {
+              state.duration = d;
+              $$("#durationSeg button").forEach(function (x) { x.classList.toggle("sel", x === b); });
+              updateCost();
+            });
+            dseg.appendChild(b);
           });
         }
         // Seedance premium gate (Phase J): the option renders locked for
@@ -1725,6 +1792,7 @@
               x.classList.toggle("sel", x.getAttribute("data-quality") === "full");
             });
             if (hint) hint.style.display = "none";
+            renderDurationSeg(); // Phase L: back to the standard set (+ re-clamp)
             updateCost();
           }
         }
@@ -1749,7 +1817,28 @@
             if (hint) hint.style.display = state.quality === "draft" ? "block" : "none";
             var shint = $("#seedanceHint");
             if (shint) shint.style.display = state.quality === "seedance" ? "block" : "none";
+            // Phase L: the duration set belongs to the engine — the
+            // Seedance set (5–30s) renders only while it is selected,
+            // and the selection re-clamps when the set shrinks.
+            renderDurationSeg();
             updateCost();
+          });
+        });
+
+        // Camera & shot chips (Phase L): single-select prompt directives.
+        // Free — they never change the cost — so no updateCost() call;
+        // the selections ride into genBody as camera/shot keys and the
+        // server validates them against its whitelist.
+        $$("#cameraSeg button").forEach(function (b) {
+          b.addEventListener("click", function () {
+            state.camera = b.getAttribute("data-camera") || "";
+            $$("#cameraSeg button").forEach(function (x) { x.classList.toggle("sel", x === b); });
+          });
+        });
+        $$("#shotSeg button").forEach(function (b) {
+          b.addEventListener("click", function () {
+            state.shot = b.getAttribute("data-shot") || "";
+            $$("#shotSeg button").forEach(function (x) { x.classList.toggle("sel", x === b); });
           });
         });
 
@@ -1766,7 +1855,8 @@
           });
           if (styles.indexOf(state.style) === -1) state.style = styles[0];
           if (aspects.indexOf(state.aspect) === -1) state.aspect = aspects[0];
-          if (durations.indexOf(state.duration) === -1) state.duration = durations[0];
+          // Duration validity is per-engine now (Phase L) — the clamp
+          // lives in renderDurationSeg(), called below.
 
           var grid = $("#styleGrid");
           grid.innerHTML = "";
@@ -1824,23 +1914,7 @@
             aseg.appendChild(b);
           });
 
-          var dseg = $("#durationSeg");
-          dseg.innerHTML = "";
-          durations.forEach(function (d) {
-            var b = document.createElement("button");
-            b.type = "button";
-            b.className = (d === state.duration) ? "sel" : "";
-            b.textContent = d + (d === 1 ? " second" : " seconds");
-            var sm = document.createElement("small");
-            sm.textContent = costFor(d) + " credits";
-            b.appendChild(sm);
-            b.addEventListener("click", function () {
-              state.duration = d;
-              $$("#durationSeg button").forEach(function (x) { x.classList.toggle("sel", x === b); });
-              updateCost();
-            });
-            dseg.appendChild(b);
-          });
+          renderDurationSeg();
 
           applyFrameAspect();
           updateCost();
@@ -2358,6 +2432,8 @@
                     mode: state.mode,
                     ...(state.quality === "draft" ? { quality: "draft" } : {}),
                     ...(state.quality === "seedance" ? { engine: "seedance" } : {}),
+                    ...(state.camera ? { camera: state.camera } : {}),
+                    ...(state.shot ? { shot: state.shot } : {}),
                     language: ($("#promptLang") ? $("#promptLang").value : "en"),
                     ...(state.imagePath ? { image_path: state.imagePath } : {}),
                     ...($("#genCharacter").value ? { character_id: Number($("#genCharacter").value) } : {}),
@@ -2759,6 +2835,21 @@
                   tp.textContent = "Sent to the model in English: " + g.translated_prompt;
                   main.appendChild(tp);
                 }
+              }
+              // Phase L: the camera/shot direction chosen for this job,
+              // with the exact directive phrase the server appended to
+              // the prompt (camera_directive is computed server-side
+              // from the recorded choices — what you see is what was
+              // sent). These were prompt directions, not guarantees.
+              if (g.camera_move || g.shot_size) {
+                var camLine = document.createElement("p");
+                camLine.className = "job-meta";
+                var camParts = [];
+                if (g.camera_move) camParts.push("camera: " + humanize(g.camera_move));
+                if (g.shot_size) camParts.push("shot: " + humanize(g.shot_size));
+                camLine.textContent = "Direction: " + camParts.join(" · ") +
+                  (g.camera_directive ? " — sent to the model as: “" + g.camera_directive.replace(/^,\s*/, "") + "”" : "");
+                main.appendChild(camLine);
               }
               if (String(g.status).toLowerCase() === "failed" && g.error) {
                 var er = document.createElement("p");
