@@ -1176,6 +1176,11 @@ app.get('/api/config', (req, res) => res.json({
   styles: CONFIG.styles,
   modes: MODE_LIST,
   prompt_languages: PROMPT_LANGUAGES,
+  // Pakistan language registry (Phase M): the Language Lab in Settings
+  // renders from this list. voice_status is honest by construction —
+  // 'listed' means the provider lists the language but its quality is
+  // still unproven; see PAK_LANGUAGES.
+  languages: publicLanguages(),
   cost_by_duration: CONFIG.costByDuration,
   cost_by_quality: CONFIG.costByQuality,
   signup_credits: CONFIG.signupCredits,
@@ -1517,6 +1522,10 @@ function parseCharacterVoice(body) {
   const language = has('voice_language') ? String(body.voice_language).toLowerCase() : 'ur';
   if (!VOICE_LANGUAGES.some(l => l.code === language))
     throw bad(`voice_language must be one of: ${VOICE_LANGUAGES.map(l => l.code).join(', ')}`);
+  // Phase M: a bound character voice in Punjabi/Pashto/Sindhi can only
+  // ever be synthesized by the Gemini provider (see parseVoiceSettings).
+  if (GEMINI_ONLY_VOICE_LANGUAGES.has(language) && provider !== 'gemini')
+    throw bad(`voice_language "${language}" is available through the Gemini provider only.`);
   const style = has('voice_style') ? String(body.voice_style).toLowerCase() : 'conversation';
   if (!VOICE_STYLES.includes(style))
     throw bad(`voice_style must be one of: ${VOICE_STYLES.join(', ')}`);
@@ -3362,6 +3371,83 @@ app.post('/api/generations/join', auth, joinLimiter, async (req, res) => {
 });
 
 // ==========================================================================
+// Pakistan language registry (Phase M, owner spec document 3, 2026-10-24)
+// ==========================================================================
+// One honest table driving the Language Lab (Settings) and the
+// `languages` block of /api/config. voice_status is deliberately
+// conservative:
+//   'available'   — a configured provider lists the language AND the
+//                   flow ships today (ur/hi/en).
+//   'listed'      — the Gemini TTS enum on fal lists the language, but
+//                   reading quality is UNPROVEN until the owner's
+//                   ear-test (sample battery Batch G). The UI badge
+//                   says "Listed — testing", never "supported".
+//   'unavailable' — no verified provider voice exists. No sample is
+//                   synthesized, no result is faked; the Lab offers
+//                   the Urdu-voice / prompt alternatives and a report
+//                   action instead.
+// prompt_status mirrors the prompt-language pipeline (PROMPT_LANGUAGES):
+// only ur/hi/en/ks are 'supported' among these codes.
+// Samples: one natural, widely standard sentence each for ur/hi/en/
+// pa (Shahmukhi) / ps / sd (Arabic script) / ks. Languages whose text
+// cannot be verified here carry sample: null — the native NAME is
+// shown, never an invented sentence.
+const PAK_LANGUAGES = [
+  { code: 'ur', name_en: 'Urdu', name_native: 'اردو', script: 'Urdu (Perso-Arabic)', rtl: true,
+    voice_status: 'available', prompt_status: 'supported',
+    sample: 'السلام علیکم! میرا نام احمد ہے اور میں پاکستان سے ہوں۔' },
+  { code: 'hi', name_en: 'Hindi', name_native: 'हिन्दी', script: 'Devanagari', rtl: false,
+    voice_status: 'available', prompt_status: 'supported',
+    sample: 'नमस्ते! मेरा नाम अहमद है और मैं पाकिस्तान से हूँ।' },
+  { code: 'en', name_en: 'English', name_native: 'English', script: 'Latin', rtl: false,
+    voice_status: 'available', prompt_status: 'supported',
+    sample: 'Hello! My name is Ahmad, and I am from Pakistan.' },
+  { code: 'pa', name_en: 'Punjabi', name_native: 'پنجابی', script: 'Shahmukhi (Perso-Arabic)', rtl: true,
+    voice_status: 'listed', prompt_status: 'none',
+    sample: 'میرا ناں احمد اے تے میں پنجابی وچ گل کرنا چاہنا آں۔' },
+  { code: 'ps', name_en: 'Pashto', name_native: 'پښتو', script: 'Pashto (Perso-Arabic)', rtl: true,
+    voice_status: 'listed', prompt_status: 'none',
+    sample: 'السلام علیکم! زما نوم احمد دی او زه د پاکستان یم۔' },
+  { code: 'sd', name_en: 'Sindhi', name_native: 'سنڌي', script: 'Sindhi (Perso-Arabic)', rtl: true,
+    voice_status: 'listed', prompt_status: 'none',
+    sample: 'السلام عليڪم! منهنجو نالو احمد آهي ۽ مان پاڪستان کان آهيان۔' },
+  { code: 'ks', name_en: 'Kashmiri', name_native: 'کٔشیٖر', script: 'Kashmiri (Perso-Arabic)', rtl: true,
+    voice_status: 'unavailable', prompt_status: 'supported',
+    sample: 'میہٕ چھُ ناو احمد۔' },
+  { code: 'skr', name_en: 'Saraiki', name_native: 'سرائیکی', script: 'Saraiki (Perso-Arabic)', rtl: true,
+    voice_status: 'unavailable', prompt_status: 'none', sample: null },
+  { code: 'bal', name_en: 'Balochi', name_native: 'بلوچی', script: 'Balochi (Perso-Arabic)', rtl: true,
+    voice_status: 'unavailable', prompt_status: 'none', sample: null },
+  { code: 'hnd', name_en: 'Hindko', name_native: 'ہندکو', script: 'Hindko (Perso-Arabic)', rtl: true,
+    voice_status: 'unavailable', prompt_status: 'none', sample: null },
+  { code: 'brh', name_en: 'Brahui', name_native: 'براہوئی', script: 'Brahui (Perso-Arabic)', rtl: true,
+    voice_status: 'unavailable', prompt_status: 'none', sample: null },
+  { code: 'pothwari', name_en: 'Pothwari', name_native: 'پوٹھوہاری', script: 'Shahmukhi (Perso-Arabic)', rtl: true,
+    voice_status: 'unavailable', prompt_status: 'none', sample: null },
+  { code: 'shina', name_en: 'Shina', name_native: 'شینا', script: 'Shina (Perso-Arabic)', rtl: true,
+    voice_status: 'unavailable', prompt_status: 'none', sample: null },
+  { code: 'balti', name_en: 'Balti', name_native: 'بلتی', script: 'Balti (Perso-Arabic)', rtl: true,
+    voice_status: 'unavailable', prompt_status: 'none', sample: null },
+  { code: 'burushaski', name_en: 'Burushaski', name_native: 'بروشسکی', script: 'Burushaski (Perso-Arabic)', rtl: true,
+    voice_status: 'unavailable', prompt_status: 'none', sample: null },
+  { code: 'wakhi', name_en: 'Wakhi', name_native: 'وخی', script: 'Wakhi (Perso-Arabic)', rtl: true,
+    voice_status: 'unavailable', prompt_status: 'none', sample: null },
+  { code: 'khowar', name_en: 'Khowar', name_native: 'کھوار', script: 'Khowar (Perso-Arabic)', rtl: true,
+    voice_status: 'unavailable', prompt_status: 'none', sample: null },
+  { code: 'kalasha', name_en: 'Kalasha', name_native: 'کالاشا', script: 'Kalasha (Perso-Arabic)', rtl: true,
+    voice_status: 'unavailable', prompt_status: 'none', sample: null },
+  { code: 'marwari', name_en: 'Marwari', name_native: 'مارواڑی', script: 'Marwari (Perso-Arabic)', rtl: true,
+    voice_status: 'unavailable', prompt_status: 'none', sample: null },
+];
+// Public-safe projection for /api/config (exactly the Lab's fields).
+function publicLanguages() {
+  return PAK_LANGUAGES.map(l => ({ code: l.code, name_en: l.name_en,
+    name_native: l.name_native, script: l.script, rtl: l.rtl,
+    voice_status: l.voice_status, prompt_status: l.prompt_status,
+    sample: l.sample }));
+}
+
+// ==========================================================================
 // Voice system (Phase B) — TTS providers, voice preview, lip-sync, voiceover
 // ==========================================================================
 // Providers (all server-side; keys never leave the server):
@@ -3388,7 +3474,20 @@ const VOICE_LANGUAGES = [
   { code: 'ur', name: 'Urdu' },
   { code: 'hi', name: 'Hindi' },
   { code: 'en', name: 'English' },
+  // Phase M (2026-10-24): Punjabi, Pashto and Sindhi are listed in the
+  // Gemini 3.1 Flash TTS language enum on fal — provider-LISTED, with
+  // reading quality still unproven until the owner's ear-test (sample
+  // battery Batch G). They are Gemini-only: see GEMINI_ONLY_VOICE_LANGUAGES.
+  { code: 'pa', name: 'Punjabi' },
+  { code: 'ps', name: 'Pashto' },
+  { code: 'sd', name: 'Sindhi' },
 ];
+// Spoken languages served by the Gemini provider ONLY. ElevenLabs v3
+// support for pa/ps/sd is NOT verified and the Azure catalog carries no
+// voices for them, so parseVoiceSettings fails closed (400, before any
+// provider call) when one of these codes is paired with another
+// provider, and the public catalog never advertises them elsewhere.
+const GEMINI_ONLY_VOICE_LANGUAGES = new Set(['pa', 'ps', 'sd']);
 const VOICE_STYLES = ['narration', 'conversation', 'news', 'energetic', 'emotional'];
 const VOICE_SPEEDS = ['slow', 'normal', 'fast'];
 const VOICE_PREVIEW_MAX_CHARS = 150;
@@ -3406,8 +3505,14 @@ const VOICE_CATALOG = {
     label: 'Gemini 3.1 Flash TTS (via fal.ai)',
     premium: false,
     model: 'fal-ai/gemini-3.1-flash-tts',
-    // fal's documented language_code enum values for our three languages.
-    languageNames: { ur: 'Urdu (Pakistan)', hi: 'Hindi (India)', en: 'English (US)' },
+    // fal's documented language_code enum values. The pa/ps/sd strings
+    // are the EXACT enum values from fal's llms.txt for this endpoint
+    // (verified 2026-10-24): "Punjabi (India)" — the listed Punjabi is
+    // the Indian/Gurmukhi tradition; how accurately it reads Pakistani
+    // Shahmukhi text is sample-test pending (Batch G). Same caveat for
+    // the India variant of Sindhi.
+    languageNames: { ur: 'Urdu (Pakistan)', hi: 'Hindi (India)', en: 'English (US)',
+                     pa: 'Punjabi (India)', ps: 'Pashto (Afghanistan)', sd: 'Sindhi (India)' },
     // One voice set serves every language (the model is multilingual).
     voices: [
       { id: 'Kore', gender: 'female' }, { id: 'Zephyr', gender: 'female' },
@@ -3479,6 +3584,10 @@ function publicVoiceCatalog() {
     if (!voiceProviderAvailable(providerId)) continue;
     const voices = [];
     for (const lang of VOICE_LANGUAGES.map(l => l.code)) {
+      // Phase M: the Gemini-only languages (pa/ps/sd) are advertised
+      // only on the Gemini entry — never on ElevenLabs/Azure, whose
+      // support for them is unverified/absent.
+      if (GEMINI_ONLY_VOICE_LANGUAGES.has(lang) && providerId !== 'gemini') continue;
       for (const v of providerVoicesFor(providerId, lang)) {
         const existing = voices.find(x => x.id === v.id);
         if (existing) { if (!existing.languages.includes(lang)) existing.languages.push(lang); }
@@ -3628,6 +3737,12 @@ function parseVoiceSettings(body, { scriptRequired = true, maxScriptChars = VOIC
   const scriptMode = String(body?.script_mode || body?.script_type || 'native').toLowerCase();
   if (!['native', 'roman'].includes(scriptMode))
     throw bad('script_mode must be "native" or "roman"');
+  // Phase M: Roman transliteration exists for Urdu/Hindi only. The
+  // provider-listed languages (pa/ps/sd) are native-script only for
+  // now — stated plainly instead of silently mis-converting the text.
+  const langName = (VOICE_LANGUAGES.find(l => l.code === language) || {}).name || language;
+  if (GEMINI_ONLY_VOICE_LANGUAGES.has(language) && scriptMode === 'roman')
+    throw bad(`Roman script is not supported for ${langName} yet — please write the script in its native script.`);
   const style = String(body?.style || 'conversation').toLowerCase();
   if (!VOICE_STYLES.includes(style))
     throw bad(`style must be one of: ${VOICE_STYLES.join(', ')}`);
@@ -3643,6 +3758,13 @@ function parseVoiceSettings(body, { scriptRequired = true, maxScriptChars = VOIC
       throw bad(`The "${requested}" voice provider is not configured on this server.`);
     provider = requested;
   } else provider = defaultVoiceProvider();
+  // Phase M: pa/ps/sd are served by the Gemini provider ONLY (they are
+  // in its fal language enum; ElevenLabs v3 support is unverified and
+  // Azure has no voices for them in this catalog). Fail closed HERE —
+  // before voice selection and long before any provider call — with
+  // the reason stated plainly.
+  if (GEMINI_ONLY_VOICE_LANGUAGES.has(language) && provider && provider !== 'gemini')
+    throw bad(`${langName} voice is available through the Gemini provider only — the ${provider} provider does not offer ${langName}. Please choose the Gemini provider for ${langName}.`);
   let voice = null;
   if (provider) {
     if (body?.voice) {

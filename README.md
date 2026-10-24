@@ -1066,6 +1066,100 @@ the camera directives well is a quality question only the owner's
 fal top-up sample battery can answer; the directives are guidance
 to the model, and the UI never promises more than that.
 
+## Pakistan multilingual system — language registry & Language Lab (Phase M)
+
+Owner spec document 3 (2026-10-24): AJK AI grows toward Pakistan's
+languages **only as far as verified provider capability allows** —
+one registry (`PAK_LANGUAGES` in server.js) drives everything, and
+its `voice_status` values are honest by construction:
+
+- **available** — a configured provider lists the language and the
+  flow ships today (Urdu, Hindi, English).
+- **listed** — the Gemini 3.1 Flash TTS language enum on fal lists
+  the language (enum strings verified against fal's llms.txt on
+  2026-10-24), but reading quality is **unproven** — the owner's
+  ear-test (sample battery Batch G) decides. The UI badge reads
+  "Listed — testing", never "supported".
+- **unavailable** — no verified provider voice exists. Nothing is
+  synthesized and no result is faked; the Lab shows the honest
+  alternatives (Urdu voice, or prompts in the language where
+  supported) and a Report action that opens the feedback card
+  prefilled for that language.
+
+**Claim rule:** a language is only ever marketed as "supported"
+after the owner's successful sample test. Until then it stays at
+"listed — testing" or "not yet available", in the app and in every
+description of the app.
+
+### Language matrix
+
+| Language | Script | Voice | Prompts |
+|---|---|---|---|
+| Urdu | Urdu (Perso-Arabic) | available | supported |
+| Hindi | Devanagari | available | supported |
+| English | Latin | available | supported |
+| Punjabi | Shahmukhi (Perso-Arabic) | listed — testing | — |
+| Pashto | Pashto (Perso-Arabic) | listed — testing | — |
+| Sindhi | Sindhi (Perso-Arabic) | listed — testing | — |
+| Kashmiri | Kashmiri (Perso-Arabic) | not yet available | supported |
+| Saraiki | Saraiki (Perso-Arabic) | not yet available | — |
+| Balochi | Balochi (Perso-Arabic) | not yet available | — |
+| Hindko | Hindko (Perso-Arabic) | not yet available | — |
+| Brahui | Brahui (Perso-Arabic) | not yet available | — |
+| Pothwari | Shahmukhi (Perso-Arabic) | not yet available | — |
+| Shina | Shina (Perso-Arabic) | not yet available | — |
+| Balti | Balti (Perso-Arabic) | not yet available | — |
+| Burushaski | Burushaski (Perso-Arabic) | not yet available | — |
+| Wakhi | Wakhi (Perso-Arabic) | not yet available | — |
+| Khowar | Khowar (Perso-Arabic) | not yet available | — |
+| Kalasha | Kalasha (Perso-Arabic) | not yet available | — |
+| Marwari | Marwari (Perso-Arabic) | not yet available | — |
+
+### How the listed languages are wired
+
+Punjabi (`pa`), Pashto (`ps`) and Sindhi (`sd`) join the spoken-
+language allowlist mapped to the **Gemini provider only**, using
+fal's exact enum strings — `"Punjabi (India)"`,
+`"Pashto (Afghanistan)"`, `"Sindhi (India)"`. Voice preview,
+voiceover and lip-sync accept the new codes through the existing
+machinery and caps unchanged. Two fail-closed rules, both enforced
+in `parseVoiceSettings` **before any provider call** (400):
+
+- **Premium provider + pa/ps/sd → 400.** ElevenLabs v3 support for
+  these languages is not verified, and the Azure catalog carries no
+  voices for them; the error states the Gemini-only rule plainly.
+  The public voice catalog likewise advertises pa/ps/sd only on the
+  Gemini entry.
+- **Roman script + pa/ps/sd → 400.** The Roman transliterator is
+  Urdu/Hindi-specific; these languages are native-script only for
+  now, and the Studio hides the Roman option for them.
+
+**Script caveats (read before judging Batch G):** the listed
+Punjabi is the **India/Gurmukhi tradition** and the listed Sindhi
+the **India variant** — how accurately the model reads Pakistani
+Shahmukhi Punjabi and Pakistani Sindhi (Arabic script) text is
+exactly what the sample test must prove. The registry carries one
+widely standard sample sentence each for ur/hi/en/pa/ps/sd/ks;
+languages whose text cannot be verified here are name-only in the
+registry (sample: null) — no invented sentences, ever.
+
+### Language Lab
+
+Settings gains a **Languages · زبانیں** card (plus a "Test
+languages" link in the Voice card), rendered entirely from the
+`languages` block of `GET /api/config` — no second list in the
+client. Each row shows the native + English name, the script, the
+honest status badge, the sample where one exists, a **Preview**
+button (voice-capable languages) that runs the existing free
+preview flow with that language and sample, and — for unavailable
+languages — the fallback note plus a **Report** action prefilled
+into the Phase I feedback card (category `quality`).
+
+**Status: built and simulation-tested** — pa/ps/sd request shapes
+are asserted against the stub with the exact enum strings; whether
+the voices actually sound right is Batch G, after the owner's fal
+top-up.
+
 ## Test results (backend, 2026-10-20)
 Run locally with `bash test.sh` — **19/19 tests passed** with a dummy key (no paid calls):
 - ✅ health + config endpoint exposes no secrets

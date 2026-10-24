@@ -123,6 +123,18 @@
 # whose schemas cap at 10s). 8 generate-family calls, inside the shared
 # limiter budget. Frontend greps cover the chip rows + honesty line,
 # the genBody wiring and the per-engine duration rendering.
+# The Phase M tests (Pakistan multilingual system: language registry +
+# Language Lab + Punjabi/Pashto/Sindhi voices, owner spec document 3)
+# use a twenty-sixth instance (port 18044, own DB) with the fal bases
+# pointed at a stub (port 18045): the /api/config languages registry
+# (19 rows, honest voice_status values, samples only where verified),
+# a stubbed Pashto preview asserting the EXACT "Pashto (Afghanistan)"
+# enum string reaches the Gemini provider, a Punjabi voiceover on the
+# stub, and the three fail-closed 400s (an unlisted language preview,
+# Roman script with Pashto, the premium ElevenLabs provider with
+# Punjabi) — each proven to make NO provider call via the recorded
+# voice-calls hook. Frontend greps cover the Language Lab card, the
+# three status badges, the fallback note and the Voice-card link.
 # e.g.  ADMIN_EMAIL=admin@example.com FAL_MODEL_4K=test-4k-model TEST_RECORD_FAL_BODY=1 TRANSLATE_API_BASE=http://127.0.0.1:18099 npm start
 # Run against a FRESH database (fixed test emails are registered each run).
 TEST_FAL_MODEL_4K=${TEST_FAL_MODEL_4K:-fal-ai/kling-video/o3/4k/text-to-video}
@@ -967,7 +979,7 @@ env DB_PATH=/tmp/myvideoai-voice-test.db PORT=18091 FAL_KEY=dummy_test_key "$VOI
 SRV7_PID=$!
 for i in $(seq 1 40); do curl -s -o /dev/null $B7/api/health && break || sleep 0.25; done
 CFG7=$(curl -s $B7/api/config)
-check "voice instance: languages are en/hi/ur" "en,hi,ur" "$(echo $CFG7 | python3 -c 'import sys,json;print(",".join(sorted(l["code"] for l in json.load(sys.stdin)["voice"]["languages"])))')"
+check "voice instance: languages are en/hi/pa/ps/sd/ur (Phase M added the Gemini-listed three)" "en,hi,pa,ps,sd,ur" "$(echo $CFG7 | python3 -c 'import sys,json;print(",".join(sorted(l["code"] for l in json.load(sys.stdin)["voice"]["languages"])))')"
 check "voice instance: preview daily cap is 5" "5" "$(echo $CFG7 | python3 -c 'import sys,json;print(json.load(sys.stdin)["voice"]["preview"]["daily_cap"])')"
 AR7=$(curl -s -X POST $B7/api/auth/register -H 'Content-Type: application/json' -d '{"email":"voiceadmin@example.com","password":"password123"}')
 AT7=$(echo $AR7 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
@@ -2428,6 +2440,64 @@ SDG30=$(curl -s -X POST $B25/api/generate -H "Authorization: Bearer $XT25B" -H '
 check "seedance gen (XP, 30s): linear premium 360 charged (inside the 400/day cap)" "360/340" "$(echo $SDG30 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
 check "seedance gen: non-offered duration 25 -> 400 before charging" "400/520" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B25/api/generate -H "Authorization: Bearer $XT25A" -H 'Content-Type: application/json' -d '{"prompt":"a misty mountain valley at dawn","engine":"seedance","aspect_ratio":"16:9","duration":25}')/$(curl -s $B25/api/me -H "Authorization: Bearer $XT25A" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 kill $SRV25_PID $PLSTUB_PID 2>/dev/null
+
+echo "--- multilingual system: language registry + listed voices (Phase M, fal stub) ---"
+ML_STUB_PORT=18045
+B26=http://127.0.0.1:18044
+rm -f /tmp/myvideoai-phaseM-test.db; rm -rf /tmp/voiceoutM /tmp/voicegenM; mkdir -p /tmp/voiceoutM /tmp/voicegenM
+FAL_STUB_PORT=$ML_STUB_PORT node "$(dirname "$0")/test-fal-stub.js" > /tmp/fal-stub-m.log 2>&1 &
+MLSTUB_PID=$!
+for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:$ML_STUB_PORT/__calls && break || sleep 0.25; done
+ML_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-phaseM-test.db PORT=18044 FAL_KEY=dummy_test_key "$ML_JWT_NAME=phaseM-dummy-value" \
+  TEST_RECORD_FAL_BODY=1 \
+  FAL_API_BASE_URL=http://127.0.0.1:$ML_STUB_PORT FAL_QUEUE_BASE_URL=http://127.0.0.1:$ML_STUB_PORT \
+  FAL_POLL_INTERVAL_MS=100 VOICE_DIR=/tmp/voiceoutM GENERATED_DIR=/tmp/voicegenM \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-phaseM-test.log 2>&1 &
+SRV26_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B26/api/health && break || sleep 0.25; done
+CFG26=$(curl -s $B26/api/config)
+check "phase M registry: 19 languages listed" "19" "$(echo $CFG26 | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["languages"]))')"
+check "phase M registry: honest statuses (available/listed/unavailable + prompt)" "ur:available/supported|hi:available/supported|en:available/supported|pa:listed/none|ps:listed/none|sd:listed/none|ks:unavailable/supported" "$(echo $CFG26 | python3 -c 'import sys,json;d={l["code"]:l for l in json.load(sys.stdin)["languages"]};print("|".join(c+":"+d[c]["voice_status"]+"/"+d[c]["prompt_status"] for c in ["ur","hi","en","pa","ps","sd","ks"]))')"
+check "phase M registry: samples only where verified (name-only languages carry none)" "skr:None|bal:None|pothwari:None|marwari:None|pa:text|ps:text|sd:text|ks:text" "$(echo $CFG26 | python3 -c 'import sys,json;d={l["code"]:l for l in json.load(sys.stdin)["languages"]};print("|".join(c+":"+("None" if d[c]["sample"] is None else "text") for c in ["skr","bal","pothwari","marwari","pa","ps","sd","ks"]))')"
+MR26=$(curl -s -X POST $B26/api/auth/register -H 'Content-Type: application/json' -d '{"email":"multiling@example.com","password":"password123"}')
+MT26=$(echo $MR26 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+MID26=$(curl -s $B26/api/me -H "Authorization: Bearer $MT26" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+# -- Pashto preview: the exact fal enum string must reach Gemini --
+PSPV=$(curl -s -w '\n%{http_code}' -X POST $B26/api/voice/preview -H "Authorization: Bearer $MT26" -H 'Content-Type: application/json' -d '{"script":"السلام علیکم! زما نوم احمد دی او زه د پاکستان یم۔","spoken_language":"ps","script_mode":"native","provider":"gemini"}')
+check "phase M preview (ps): -> 200" "200" "$(echo "$PSPV" | tail -1)"
+check "phase M preview (ps): response reports language ps" "ps" "$(echo "$PSPV" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["language"])')"
+VC26=$(curl -s $B26/api/_test/voice-calls)
+check "phase M preview (ps): gemini body carries the exact enum string" "gemini|Pashto (Afghanistan)" "$(echo $VC26 | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x["kind"]=="tts"][-1];print(c["provider"]+"|"+c["body"]["language_code"])')"
+# -- Punjabi voiceover through the existing machinery --
+SEEDM=$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-phaseM-test.db');
+console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($MID26, 'seed multilingual voiceover source', '16:9', 2, 'realistic', 'completed', 'http://127.0.0.1:$ML_STUB_PORT/media/clip.mp4', 10).lastInsertRowid));
+")
+PAVO=$(curl -s -w '\n%{http_code}' -X POST $B26/api/voice/voiceover -H "Authorization: Bearer $MT26" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDM,\"script\":\"میرا ناں احمد اے تے میں پنجابی وچ گل کرنا چاہنا آں۔\",\"spoken_language\":\"pa\",\"script_mode\":\"native\",\"provider\":\"gemini\"}")
+check "phase M voiceover (pa): -> 201" "201" "$(echo "$PAVO" | tail -1)"
+VC26B=$(curl -s $B26/api/_test/voice-calls)
+check "phase M voiceover (pa): gemini body carries the exact enum string" "gemini|Punjabi (India)" "$(echo $VC26B | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x["kind"]=="tts"][-1];print(c["provider"]+"|"+c["body"]["language_code"])')"
+# -- fail-closed 400s: no provider call may happen for any of these --
+TTS_M_BEFORE=$(curl -s $B26/api/_test/voice-calls | python3 -c 'import sys,json;print(len([x for x in json.load(sys.stdin)["calls"] if x["kind"]=="tts"]))')
+SKR=$(curl -s -w '\n%{http_code}' -X POST $B26/api/voice/preview -H "Authorization: Bearer $MT26" -H 'Content-Type: application/json' -d '{"script":"کجهه متن","spoken_language":"skr","script_mode":"native"}')
+check "phase M preview (skr, unlisted): -> 400" "400" "$(echo "$SKR" | tail -1)"
+check "phase M preview (skr): error honestly says the language is not offered" "yes" "$(echo "$SKR" | sed '$d' | python3 -c 'import sys,json;print("yes" if "spoken_language must be one of" in json.load(sys.stdin)["error"] else "no")')"
+ROM=$(curl -s -w '\n%{http_code}' -X POST $B26/api/voice/preview -H "Authorization: Bearer $MT26" -H 'Content-Type: application/json' -d '{"script":"zama num ahmad di","spoken_language":"ps","script_mode":"roman"}')
+check "phase M preview (ps + roman): -> 400" "400" "$(echo "$ROM" | tail -1)"
+check "phase M preview (ps + roman): error states native script only" "yes" "$(echo "$ROM" | sed '$d' | python3 -c 'import sys,json;print("yes" if "Roman script is not supported for Pashto" in json.load(sys.stdin)["error"] else "no")')"
+ELPA=$(curl -s -w '\n%{http_code}' -X POST $B26/api/voice/preview -H "Authorization: Bearer $MT26" -H 'Content-Type: application/json' -d '{"script":"میرا ناں احمد اے","spoken_language":"pa","script_mode":"native","provider":"elevenlabs"}')
+check "phase M preview (pa + elevenlabs premium): -> 400 before any provider call" "400" "$(echo "$ELPA" | tail -1)"
+check "phase M preview (pa + elevenlabs): error names the Gemini-only rule" "yes" "$(echo "$ELPA" | sed '$d' | python3 -c 'import sys,json;print("yes" if "Gemini provider only" in json.load(sys.stdin)["error"] else "no")')"
+TTS_M_AFTER=$(curl -s $B26/api/_test/voice-calls | python3 -c 'import sys,json;print(len([x for x in json.load(sys.stdin)["calls"] if x["kind"]=="tts"]))')
+check "phase M: the three 400s made NO provider call" "$TTS_M_BEFORE" "$TTS_M_AFTER"
+check "phase M: credits untouched by previews + included voiceover + 400s" "100" "$(curl -s $B26/api/me -H "Authorization: Bearer $MT26" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+HOMEPAGE26=$(curl -s $B26/)
+check "phase M frontend: language lab card + voice-card link ship" "yes" "$(echo "$HOMEPAGE26" | grep -q 'id="langLabCard"' && echo "$HOMEPAGE26" | grep -q 'id="langLabList"' && echo "$HOMEPAGE26" | grep -q 'id="langLabLink"' && echo "$HOMEPAGE26" | grep -q 'Test languages · زبان آزمائیں' && echo yes || echo no)"
+check "phase M frontend: the three honest status badges ship" "yes" "$(echo "$HOMEPAGE26" | grep -q 'Voice available · آواز دستیاب' && echo "$HOMEPAGE26" | grep -q 'Listed — testing · درج ہے، جانچ جاری' && echo "$HOMEPAGE26" | grep -q 'Voice not yet available · آواز ابھی دستیاب نہیں' && echo yes || echo no)"
+check "phase M frontend: unavailable-language fallback note ships" "yes" "$(echo "$HOMEPAGE26" | grep -q 'Alternatives: Urdu voice, or prompts in this language where supported · متبادل: اردو آواز' && echo yes || echo no)"
+kill $SRV26_PID $MLSTUB_PID 2>/dev/null
 
 echo "--- rate limit: burst until 429 ---"
 FOUND429="no"
