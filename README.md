@@ -1384,6 +1384,69 @@ Facebook Graph endpoints and the SMS send are exercised against
 needs the owner's Meta app (App ID + Secret in the server env), and
 phone sign-in needs the owner's SMS-provider account.
 
+## Interface language (English/Urdu, RTL) + light/dark theme (Phase O1, frontend only)
+
+Phase O1 implements the owner's spec-v2 item "اردو RTL انٹرفیس +
+زبان سوئچر، لائٹ موڈ". It is **presentation only**: no backend
+change, no element id removed (the pre-O1 set of 250 ids is proven
+intact by the test suite), no behaviour change. The default for a
+first-time user is exactly the pre-O1 experience — English-primary
+interface with the familiar Urdu subtitles, LTR, dark theme.
+
+**Language switcher.** Controls live in the **header** (EN / اردو)
+and in **Settings → Appearance** ("Interface language · انٹرفیس کی
+زبان"). The choice persists in `localStorage` (`ajk_lang` =
+`en`|`ur`) and is applied by a small **pre-paint script in
+`<head>`** that sets `lang`/`dir` on `<html>` before the stylesheet
+paints — no flash of the wrong language or direction. Urdu mode
+sets `dir="rtl"`; the layout mirrors through the flex/grid
+direction plus a `[dir="rtl"]` override block for the pieces
+positioned with physical properties (top-bar auto margins, the
+modal close button's float, list padding, the AI-Auto switch knob,
+the prompt-language select's arrow padding, the collapsed-card
+chevron). Urdu text uses a "Noto Naskh Arabic" font stack in RTL
+mode.
+
+**What is translated.** A dictionary (`I18N`, 160+ keys) applied
+via `data-i18n` / `data-i18n-ph` attributes plus `t()` in the few
+JS-labelled spots: the nav tabs (top + bottom), the home greeting,
+the composer (heading, prompt label + placeholder, Enhance,
+Format/Length chips, Auto), Advanced settings and its Voice /
+Sound / character / watermark cards (headings, field labels,
+primary buttons — including the cost-bearing lip-sync / voiceover /
+sound-only buttons, whose leading phrase swaps while the cost
+suffix is preserved), the Preview card, the sticky bar (Total cost
+/ Generate), History, Plans and Buy headings, labels and buttons,
+the Settings cards (Appearance, API connection, Feedback, Account,
+linked sign-in methods, delete-account zone), the Language Lab
+(badges, Preview/Report buttons and the fallback note show the
+active language's half of their combined strings), the auth modal
+(title, subtitle, provider buttons — the coming-soon label
+localizes too, while the Phase N/N2 configured-vs-coming-soon
+logic is unchanged — sign-in/create-account tabs, labels, forgot /
+reset / verification panels, phone panel) and the report modal.
+
+**What intentionally stays English.** The privacy policy's legal
+text (the in-app policy view and `privacy.html`) and the admin
+panel (`admin.html`) are not translated. Dynamic, server-driven
+content — job cards, plan/pack cards rendered from `/api/config`,
+error toasts and status messages — keeps its existing bilingual
+wording in both modes, as before. Where the pre-O1 UI showed a
+combined "EN · UR" string on a static element, that combined form
+remains the no-JS/default fallback in the HTML source; once a
+language is applied, each mode shows its own single language.
+
+**Theme.** Dark / Light controls mirror the language ones (header
+icons + Settings → Appearance), persist in `localStorage`
+(`ajk_theme`), and are pre-painted by the same head script. The
+light theme re-points the core CSS variables (`--bg`, `--panel*`,
+`--line*`, `--text`, `--muted`, `--faint`, `--code-bg`; the accent
+hue is unchanged) under `:root[data-theme="light"]`, and the few
+hardcoded on-soft text colors (errors, statuses, badges, code)
+plus the translucent top bar / bottom nav / sticky action bar get
+light overrides so contrast stays readable. Showcase and generated
+media are unaffected.
+
 ## Test results (backend, 2026-10-20)
 Run locally with `bash test.sh` — **19/19 tests passed** with a dummy key (no paid calls):
 - ✅ health + config endpoint exposes no secrets

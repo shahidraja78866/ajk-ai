@@ -167,6 +167,15 @@
 # SMS-send-failure 502 with the stored code discarded, phone
 # linking (requester-bound codes) + 409, and the main server's
 # fail-closed 503s + no facebook_app_id exposure.
+# The Phase O1 tests (UI language + theme: English/Urdu interface
+# switcher with RTL layout + light/dark theme — owner spec v2) are
+# frontend-only, against the main server's served homepage: the i18n
+# dictionary (>= 60 keys) + applyLanguage/applyTheme ship, the header
+# and Settings (Appearance card) switchers ship, the pre-paint script
+# and the light-theme + RTL CSS blocks ship, persistence uses the
+# ajk_lang / ajk_theme localStorage keys, >= 120 elements carry
+# data-i18n, and the full pre-O1 element-ID set (250 ids, embedded in
+# the section) is proven intact — presentation only, nothing removed.
 # e.g.  ADMIN_EMAIL=admin@example.com FAL_MODEL_4K=test-4k-model TEST_RECORD_FAL_BODY=1 TRANSLATE_API_BASE=http://127.0.0.1:18099 npm start
 # Run against a FRESH database (fixed test emails are registered each run).
 TEST_FAL_MODEL_4K=${TEST_FAL_MODEL_4K:-fal-ai/kling-video/o3/4k/text-to-video}
@@ -2907,6 +2916,25 @@ check "phase N2 facebook unconfigured -> 503 auth_provider_not_configured" "503/
 check "phase N2 config (main): facebook_app_id is NOT exposed while unconfigured" "absent" "$(echo $CFG0N | python3 -c 'import sys,json;print("present" if "facebook_app_id" in json.load(sys.stdin) else "absent")')"
 check "phase N2 phone start unconfigured -> 503 sms_not_configured" "503/sms_not_configured" "$(curl -s -w '\n%{http_code}' -X POST $B/api/auth/phone/start -H 'Content-Type: application/json' -d '{"phone":"+923001234567"}' > /tmp/n2-pun.txt; tail -1 /tmp/n2-pun.txt)/$(sed '$d' /tmp/n2-pun.txt | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
 check "phase N2 phone verify unconfigured -> 503 sms_not_configured" "503/sms_not_configured" "$(curl -s -w '\n%{http_code}' -X POST $B/api/auth/phone/verify -H 'Content-Type: application/json' -d '{"phone":"+923001234567","code":"123456"}' > /tmp/n2-pun2.txt; tail -1 /tmp/n2-pun2.txt)/$(sed '$d' /tmp/n2-pun2.txt | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+
+
+echo "--- phase O1: interface language (EN/Urdu RTL) + theme (main server) ---"
+HOMEPAGEO1=$(curl -s $B/)
+check "phase O1 frontend: i18n dictionary ships with >= 60 keys" "yes" "$(echo "$HOMEPAGEO1" | python3 -c 'import sys,re; s=sys.stdin.read(); m=re.search(r"var I18N = \{(.*?)\n        \};", s, re.S); print("yes" if m and len(re.findall(r"\{ en:", m.group(1))) >= 60 else "no")')"
+check "phase O1 frontend: applyLanguage + applyTheme + persistence keys ship" "yes" "$(echo "$HOMEPAGEO1" | grep -q 'function applyLanguage' && echo "$HOMEPAGEO1" | grep -q 'function applyTheme' && echo "$HOMEPAGEO1" | grep -q '"ajk_lang"' && echo "$HOMEPAGEO1" | grep -q '"ajk_theme"' && echo yes || echo no)"
+check "phase O1 frontend: header + Settings language switchers ship" "yes" "$(echo "$HOMEPAGEO1" | grep -q 'id="appearanceCard"' && echo "$HOMEPAGEO1" | python3 -c 'import sys; s=sys.stdin.read(); print("yes" if s.count("data-lang-choice=") >= 4 else "no")')"
+check "phase O1 frontend: header + Settings theme switchers ship" "yes" "$(echo "$HOMEPAGEO1" | python3 -c 'import sys; s=sys.stdin.read(); print("yes" if s.count("data-theme-choice=") >= 4 else "no")')"
+check "phase O1 frontend: pre-paint script ships (no flash of wrong lang/theme)" "yes" "$(echo "$HOMEPAGEO1" | grep -q 'Phase O1 pre-paint' && echo "$HOMEPAGEO1" | grep -q 'localStorage.getItem("ajk_lang")' && echo "$HOMEPAGEO1" | grep -q 'localStorage.getItem("ajk_theme")' && echo yes || echo no)"
+check "phase O1 frontend: light-theme CSS block ships" "yes" "$(echo "$HOMEPAGEO1" | grep -q ':root\[data-theme="light"\]' && echo yes || echo no)"
+check "phase O1 frontend: RTL override block ships" "yes" "$(echo "$HOMEPAGEO1" | grep -q '\[dir="rtl"\] .topbar-right' && echo "$HOMEPAGEO1" | grep -q '\[dir="rtl"\] .modal .close-x' && echo "$HOMEPAGEO1" | grep -q '\[dir="rtl"\] .auto-switch input:checked::after' && echo yes || echo no)"
+check "phase O1 frontend: combined-string fallback hides once a language is applied" "yes" "$(echo "$HOMEPAGEO1" | grep -q '.lang-applied .i18n-alt' && echo yes || echo no)"
+check "phase O1 frontend: >= 120 elements carry data-i18n" "yes" "$(echo "$HOMEPAGEO1" | python3 -c 'import sys; s=sys.stdin.read(); print("yes" if s.count("data-i18n=") + s.count("data-i18n-ph=") >= 120 else "no")')"
+# The switcher/theme work is presentation only: the full pre-O1
+# element-ID set must still be present (additions only, ever).
+O1_OLD_IDS="accountSignInBtn accountSignedIn accountSignedOut accountSub adHomeNative adStudioBottom advancedCard advancedCardBody aiAutoToggle apiBaseInput appVersionLine aspectSeg authBtn authEmail authError authForm authModal authModeLogin authModeRegister authPass authSub authSubmit authTitle autoPlanCancelBtn autoPlanConfirmBtn autoPlanConflicts autoPlanCost autoPlanNotes autoPlanPanel autoPlanSummary avatarBtn balanceLine balanceNum buyError buyFromPlansBtn buyMethod buyPackSelect buyQr buyQrEp buyRef buySubmitBtn buySuccess cameraSeg cancelBtn charCount charCreateBtn charError charImage charImageStatus charList charListEmpty charMaxHint charName charVoice charVoiceLang charVoiceProvider charVoiceStyle charactersCard connBanner connStatus connText connTitle costNum creditsChip creditsNum creditsPlan currentPlanDetail currentPlanName deleteAccountBtn deleteConfirm deletePass deleteStatus draftCostHint draftHint durationSeg enhanceBtn facebookBtn feedbackAttach feedbackAttachLabel feedbackCard feedbackCategory feedbackCount feedbackDetachBtn feedbackMessage feedbackSendBtn forgotCancel forgotEmail forgotLink forgotPanel forgotSend forgotStatus formError genCharThumb genCharacter generateBtn generateIcon generateLabel googleBtnWrap googleFallbackBtn historyEmpty historyEmptyBtn historyEmptyText homeGreeting imageStatus jobList joinBar joinBtn joinCount joinMsg langLabAudio langLabCard langLabLink langLabList langLabStatus linkFacebookBtn linkGoogleBtn linkPhoneBox linkPhoneCode linkPhoneCodeRow linkPhoneNumber linkPhoneSendBtn linkPhoneStatus linkPhoneVerifyBtn lipsyncBtn lipsyncCharacter lipsyncNote meCredits meDailyCap meEmail meId meIdentities meModel mePlan mePlanCredits meSince modeGrid modelLine myPacksEmpty myPacksEmptyText myPacksList packGrid packMethods payList paymentsEmpty paymentsEmptyText phoneBack phoneBtn phoneCode phoneCodeRow phoneNumber phonePanel phoneResendNote phoneSendBtn phoneStatus phoneVerifyBtn planGrid planLine previewEmpty previewFrame previewProgress previewVideo progressFill progressNote prompt promptLang qualitySeg rbActions rbIcon rbMeta rbText rbTitle refreshHistoryBtn refreshMeBtn removeImageBtn reportBtn reportBtn2 reportBtn3 reportContext reportDetails reportError reportForm reportModal reportReason reportTitle resendLine resendVerifyBtn resetPanel resetPass resetStatus resetSubmit resultBox saveBaseBtn seedanceHint seedanceQualityBtn shotSeg signOutBtn signupCreditsLine soundCard soundCardBody soundCharCount soundControls soundError soundMode soundNotice soundOnlyAudio soundOnlyBtn soundOnlyDuration soundOnlyKind soundPrompt soundVolume soundVolumeLabel sourceImage stageList studioActionBar styleGrid templateCard templateGrid testBaseBtn toast verifyBack verifyPanel verifyStatus view-buy view-history view-plans view-privacy view-settings view-studio voiceCard voiceCardBody voiceCharCount voiceControls voiceError voiceGenSelect voiceLang voiceNotice voicePreviewAudio voicePreviewBtn voicePreviewCap voicePreviewStatus voiceProvider voiceScript voiceScriptMode voiceSpeed voiceStyle voiceVoice voiceoverBtn watermarkCard watermarkEnabled watermarkText"
+O1_MISSING=""
+for i in $O1_OLD_IDS; do echo "$HOMEPAGEO1" | grep -q "id=\"$i\"" || O1_MISSING="$O1_MISSING $i"; done
+check "phase O1 frontend: all 250 pre-O1 element ids still present" "" "$O1_MISSING"
 
 echo "--- rate limit: burst until 429 ---"
 FOUND429="no"
