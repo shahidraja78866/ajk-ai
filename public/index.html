@@ -16,6 +16,24 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@400;600;700&display=swap" rel="stylesheet" />
+    <script>
+      // Phase O1 pre-paint: apply the saved interface language/direction
+      // and theme to <html> BEFORE the stylesheet paints, so a returning
+      // Urdu/light-mode user never sees a flash of English LTR dark.
+      // Defaults (no saved choice): English, LTR, dark — as always.
+      (function () {
+        try {
+          var de = document.documentElement;
+          var lang = window.localStorage.getItem("ajk_lang");
+          if (lang === "ur") { de.lang = "ur"; de.dir = "rtl"; }
+          else { de.lang = "en"; de.dir = "ltr"; }
+          var theme = window.localStorage.getItem("ajk_theme");
+          if (theme === "light") { de.setAttribute("data-theme", "light"); de.style.colorScheme = "light"; }
+          else { de.setAttribute("data-theme", "dark"); de.style.colorScheme = "dark"; }
+        } catch (e) {}
+      })();
+    </script>
     <style>
       :root{
         --bg:#080a12;
@@ -743,6 +761,98 @@
          rail, feature row, creations gallery) was removed with its
          sections — the owner found the finished Home crowded next to
          Runway's. Only the slim greeting style above remains. */
+
+      /* ---------- Phase O1: light theme ----------
+         Dark stays the :root default above; light mode only re-points
+         the core surface variables (the accent hue is unchanged) and
+         re-colors the handful of hardcoded on-soft text colors so
+         status/error/success text stays readable on light surfaces. */
+      :root[data-theme="light"]{
+        --bg:#f3f5fa;
+        --panel:#ffffff;
+        --panel-2:#edf0f6;
+        --panel-3:#e0e6f0;
+        --line:#ccd5e3;
+        --line-soft:#dde4ee;
+        --text:#141a26;
+        --muted:#4c586c;
+        --faint:#68758c;
+        --amber:#3d63e0;
+        --amber-soft:rgba(61,99,224,.12);
+        --warn:#9a6a10;
+        --warn-soft:rgba(240,168,50,.16);
+        --red:#cf3f27;
+        --red-soft:rgba(229,83,61,.10);
+        --green:#2c8a52;
+        --green-soft:rgba(67,176,110,.14);
+        --code-bg:#edf0f6;
+      }
+      :root[data-theme="light"] .topbar{ background:rgba(255,255,255,.92); }
+      :root[data-theme="light"] .bottomnav{ background:rgba(255,255,255,.96); }
+      :root[data-theme="light"] .studio-actionbar{ background:rgba(255,255,255,.95); box-shadow:0 10px 28px rgba(31,45,90,.18); }
+      :root[data-theme="light"] .tpl-chip{ box-shadow:0 4px 16px rgba(31,45,90,.10); }
+      :root[data-theme="light"] .pack-note{ color:#1e6b3c; }
+      :root[data-theme="light"] .conn-banner.ok p{ color:#1e6b3c; }
+      :root[data-theme="light"] .conn-banner.bad p{ color:#7a5a14; }
+      :root[data-theme="light"] .form-error,
+      :root[data-theme="light"] .auth-error,
+      :root[data-theme="light"] .stage-list li.failed,
+      :root[data-theme="light"] .danger-zone h3{ color:#b33524; }
+      :root[data-theme="light"] .job-error,
+      :root[data-theme="light"] .chip.failed,
+      :root[data-theme="light"] .conn-status .bad{ color:#cf3f27; }
+      :root[data-theme="light"] .chip.completed,
+      :root[data-theme="light"] .lang-badge.available,
+      :root[data-theme="light"] .conn-status .ok{ color:#1e7a44; }
+      :root[data-theme="light"] .chip.processing,
+      :root[data-theme="light"] .chip.queued,
+      :root[data-theme="light"] .chip.pending,
+      :root[data-theme="light"] .lang-badge.listed{ color:#2f4fb0; }
+      :root[data-theme="light"] table.schema td:first-child,
+      :root[data-theme="light"] .card code,
+      :root[data-theme="light"] .policy code{ color:#6d3fd4; }
+
+      /* ---------- Phase O1: language/theme switchers ---------- */
+      .hdr-tools{ display:flex; align-items:center; gap:8px; }
+      .mini-seg{ display:flex; background:var(--panel-2); border:1px solid var(--line); border-radius:999px; padding:3px; gap:2px; }
+      .mini-seg button{
+        background:transparent; border:0; color:var(--muted); font-size:12px; font-weight:600;
+        padding:4px 9px; border-radius:999px; line-height:1.25; display:inline-flex; align-items:center; gap:4px;
+      }
+      .mini-seg button svg{ width:13px; height:13px; }
+      .mini-seg button.sel{ background:var(--panel-3); color:var(--text); }
+      .pref-seg{ max-width:340px; }
+      /* Once a language is applied, the combined "EN · UR" fallback
+         halves (the no-JS default) are hidden — each mode shows its
+         own single language. */
+      .lang-applied .i18n-alt{ display:none; }
+      /* Urdu UI gets a proper Arabic-script font stack. */
+      [dir="rtl"] body{ font-family:"Inter","Noto Naskh Arabic",system-ui,sans-serif; }
+      [dir="rtl"] h1, [dir="rtl"] h2, [dir="rtl"] h3, [dir="rtl"] .brand{ font-family:"Sora","Noto Naskh Arabic",system-ui,sans-serif; }
+
+      /* ---------- Phase O1: RTL layout overrides ----------
+         Flex/grid rows follow the document direction on their own;
+         these rules fix the pieces positioned with physical
+         properties (auto margins, floats, list padding, the switch
+         knob, the prompt-language select's arrow padding). */
+      [dir="rtl"] .topnav{ margin-left:0; margin-right:10px; }
+      [dir="rtl"] .topbar-right{ margin-left:0; margin-right:auto; }
+      [dir="rtl"] .conn-banner button{ margin-left:0; margin-right:auto; }
+      [dir="rtl"] .modal .close-x{ float:left; }
+      [dir="rtl"] .plan-card ul, [dir="rtl"] .auto-panel ul{ padding-left:0; padding-right:18px; }
+      [dir="rtl"] .policy ul{ padding-left:0; padding-right:19px; }
+      [dir="rtl"] .opt-tag{ margin-left:0; margin-right:8px; }
+      [dir="rtl"] .composer-model{ text-align:left; }
+      [dir="rtl"] .auto-switch{ margin-left:0; margin-right:auto; }
+      [dir="rtl"] .auto-switch input::after{ left:auto; right:2px; }
+      [dir="rtl"] .auto-switch input:checked::after{ transform:translateX(-16px); }
+      [dir="rtl"] select#promptLang{ padding:7px 10px 7px 30px; }
+      [dir="rtl"] .forgot-row{ text-align:left !important; }
+      [dir="rtl"] .collapsible.is-collapsed .collapse-chev{ transform:rotate(90deg); }
+      @media (max-width:640px){
+        [dir="rtl"] .conn-banner button{ margin-left:0; margin-right:23px; }
+        .hdr-theme{ display:none; }
+      }
     </style>
   </head>
   <body>
@@ -754,20 +864,32 @@
         <span class="brand-text"><span class="name">AJK <em>AI</em></span><span class="brand-sub">AI Video Generator</span></span>
       </div>
       <nav class="topnav" aria-label="Main">
-        <button type="button" class="tab active" data-view="studio">Studio</button>
-        <button type="button" class="tab" data-view="history">History</button>
-        <button type="button" class="tab" data-view="plans">Plans</button>
-        <button type="button" class="tab" data-view="buy">Buy Credits</button>
-        <button type="button" class="tab" data-view="settings">Settings</button>
-        <button type="button" class="tab" data-view="privacy">Privacy</button>
+        <button type="button" class="tab active" data-view="studio" data-i18n="nav_studio">Studio</button>
+        <button type="button" class="tab" data-view="history" data-i18n="nav_history">History</button>
+        <button type="button" class="tab" data-view="plans" data-i18n="nav_plans">Plans</button>
+        <button type="button" class="tab" data-view="buy" data-i18n="nav_buy">Buy Credits</button>
+        <button type="button" class="tab" data-view="settings" data-i18n="nav_settings">Settings</button>
+        <button type="button" class="tab" data-view="privacy" data-i18n="nav_privacy">Privacy</button>
       </nav>
+      <!-- Phase O1: header language + theme switchers (mirrored in
+           Settings → Appearance). Choices persist in localStorage. -->
+      <div class="hdr-tools">
+        <div class="mini-seg" role="group" aria-label="Interface language · انٹرفیس کی زبان">
+          <button type="button" data-lang-choice="en" class="sel">EN</button>
+          <button type="button" data-lang-choice="ur">اردو</button>
+        </div>
+        <div class="mini-seg hdr-theme" role="group" aria-label="Theme · تھیم">
+          <button type="button" data-theme-choice="dark" class="sel" aria-label="Dark theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 13.5A8.5 8.5 0 1 1 10.5 4 6.5 6.5 0 0 0 20 13.5z"/></svg></button>
+          <button type="button" data-theme-choice="light" aria-label="Light theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button>
+        </div>
+      </div>
       <div class="topbar-right">
         <div class="credits-chip" id="creditsChip" title="Your credit balance, loaded from the server">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v10M15 9.2c-.6-.8-1.7-1.2-3-1.2-1.7 0-3 .9-3 2.2 0 2.9 6 1.6 6 4.1 0 1.3-1.3 2.2-3 2.2-1.3 0-2.4-.5-3-1.3"/></svg>
-          <span id="creditsNum">–</span>&nbsp;credits
+          <span id="creditsNum">–</span>&nbsp;<span data-i18n="credits_word">credits</span>
           <span class="plan" id="creditsPlan"></span>
         </div>
-        <button type="button" class="btn primary small" id="authBtn">Sign in</button>
+        <button type="button" class="btn primary small" id="authBtn" data-i18n="sign_in">Sign in</button>
         <button type="button" class="avatar" id="avatarBtn" aria-label="Account settings">G</button>
       </div>
     </header>
@@ -787,7 +909,7 @@
             <strong id="connTitle">Checking the backend connection…</strong>
             <p id="connText">Contacting the API to load the model, styles, and prices.</p>
           </div>
-          <button type="button" class="btn small" data-goto="settings">API settings</button>
+          <button type="button" class="btn small" data-goto="settings" data-i18n="api_settings">API settings</button>
         </div>
 
         <div class="ad-slot" id="adHomeNative" hidden aria-hidden="true">Advertisement</div>
@@ -796,27 +918,27 @@
           <div class="tpl-strip" id="templateGrid" role="group" aria-label="Templates">
             <button type="button" class="tpl-chip" data-template="talking-photo">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4M8 22h8"/></svg>
-              <span class="tpl-texts"><span class="tpl-name">Talking Photo</span></span>
+              <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_talking_photo">Talking Photo</span></span>
             </button>
             <button type="button" class="tpl-chip" data-template="kids-story">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 6c-1.6-1.6-4.2-2.2-8-2.2v14.4c3.8 0 6.4.6 8 2.2 1.6-1.6 4.2-2.2 8-2.2V3.8C16.2 3.8 13.6 4.4 12 6z"/><path d="M12 6v14.4"/></svg>
-              <span class="tpl-texts"><span class="tpl-name">Kids Story</span></span>
+              <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_kids_story">Kids Story</span></span>
             </button>
             <button type="button" class="tpl-chip" data-template="product-ad">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1.3"/></svg>
-              <span class="tpl-texts"><span class="tpl-name">Product Ad</span></span>
+              <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_product_ad">Product Ad</span></span>
             </button>
             <button type="button" class="tpl-chip" data-template="breaking-news">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="2"/><path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M4.9 4.9a10 10 0 0 0 0 14.2M19.1 4.9a10 10 0 0 1 0 14.2"/></svg>
-              <span class="tpl-texts"><span class="tpl-name">Breaking-News Short</span></span>
+              <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_breaking_news">Breaking-News Short</span></span>
             </button>
             <button type="button" class="tpl-chip" data-template="music-video">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
-              <span class="tpl-texts"><span class="tpl-name">Music Video</span></span>
+              <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_music_video">Music Video</span></span>
             </button>
             <button type="button" class="tpl-chip" data-template="cartoon-episode">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M8.5 14s1.2 2.2 3.5 2.2 3.5-2.2 3.5-2.2"/><circle cx="9" cy="9.5" r=".6" fill="currentColor"/><circle cx="15" cy="9.5" r=".6" fill="currentColor"/></svg>
-              <span class="tpl-texts"><span class="tpl-name">Cartoon Episode</span></span>
+              <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_cartoon_episode">Cartoon Episode</span></span>
             </button>
           </div>
         </div>
@@ -825,12 +947,12 @@
           <div>
             <div class="card composer-card">
               <div class="composer-head">
-                <h2>Describe your video</h2>
+                <h2 data-i18n="describe_video">Describe your video</h2>
                 <span class="composer-model" id="modelLine"></span>
               </div>
 
               <div class="composer-lang">
-                <label for="promptLang">Language</label>
+                <label for="promptLang" data-i18n="prompt_language">Language</label>
                 <select id="promptLang">
                   <option value="en" selected>English</option>
                   <option value="ur">اردو (Urdu)</option>
@@ -842,12 +964,12 @@
                 </select>
               </div>
 
-              <div class="field-label"><span>Prompt</span><span class="count"><span id="charCount">0</span> / 500</span></div>
-              <textarea id="prompt" maxlength="500" placeholder="What do you want to make? · آپ کیا بنانا چاہتے ہیں؟ Describe the scene, action and camera…"></textarea>
+              <div class="field-label"><span data-i18n="prompt_label">Prompt</span><span class="count"><span id="charCount">0</span> / 500</span></div>
+              <textarea id="prompt" maxlength="500" data-i18n-ph="prompt_ph" placeholder="What do you want to make? · آپ کیا بنانا چاہتے ہیں؟ Describe the scene, action and camera…"></textarea>
               <div class="prompt-tools">
                 <button type="button" class="tool-btn" id="enhanceBtn">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg>
-                  Enhance prompt
+                  <span data-i18n="enhance_prompt">Enhance prompt</span>
                 </button>
                 <button type="button" class="tool-btn" data-example="A red panda eating bamboo in a misty forest, soft morning light, slow push-in camera">Try: red panda</button>
                 <button type="button" class="tool-btn" data-example="A paper boat sailing down a rainy city street at night, neon reflections on wet pavement, tracking shot">Try: paper boat</button>
@@ -857,16 +979,16 @@
 
             <div class="composer-chips" aria-label="Quick video settings">
               <div class="chip-group">
-                <span class="chip-group-label">Format</span>
+                <span class="chip-group-label" data-i18n="format_label">Format</span>
                 <div class="seg chip-seg" id="aspectSeg" role="group" aria-label="Aspect ratio"></div>
               </div>
               <div class="chip-group">
-                <span class="chip-group-label">Length</span>
+                <span class="chip-group-label" data-i18n="length_label">Length</span>
                 <div class="seg chip-seg" id="durationSeg" role="group" aria-label="Duration"></div>
               </div>
               <label class="auto-switch" title="AI Auto plans the settings from your prompt and asks before extra-cost choices">
                 <input type="checkbox" id="aiAutoToggle" checked aria-label="AI Auto" />
-                <span>Auto</span>
+                <span data-i18n="auto_label">Auto</span>
               </label>
             </div>
 
@@ -890,27 +1012,27 @@
                  their values exactly as before. -->
             <div class="card collapsible is-collapsed" id="advancedCard">
               <button type="button" class="collapse-head" data-collapse-head aria-expanded="false" aria-controls="advancedCardBody">
-                <span class="collapse-title">Advanced settings<span class="opt-tag">optional</span> · مزید ترتیبات (اختیاری)</span>
+                <span class="collapse-title"><span data-i18n="advanced_settings">Advanced settings</span><span class="opt-tag" data-i18n="optional_tag">optional</span><span class="i18n-alt"> · مزید ترتیبات (اختیاری)</span></span>
                 <svg class="collapse-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
               </button>
               <div class="collapse-body" id="advancedCardBody">
 
-              <div class="field-label"><span>Video mode</span></div>
+              <div class="field-label"><span data-i18n="video_mode">Video mode</span></div>
               <div class="mode-grid mode-compact" id="modeGrid" role="group" aria-label="Video mode">
                 <button type="button" class="mode-card sel" data-mode="realistic">
-                  <strong>Realistic Human Video</strong>
+                  <strong data-i18n="mode_realistic">Realistic Human Video</strong>
                   <span>Lifelike people and real-world scenes with natural-looking movement.</span>
                   <small>Best for realistic and cinematic styles.</small>
                 </button>
                 <button type="button" class="mode-card" data-mode="cartoon">
-                  <strong>Cartoon / Animation</strong>
+                  <strong data-i18n="mode_cartoon">Cartoon / Animation</strong>
                   <span>Cartoon characters, animated stories, funny animals and child-friendly scenes.</span>
                   <small>Best for cartoon and anime styles.</small>
                 </button>
               </div>
               <p class="mode-note">Both modes include model-generated audio; the dialogue language isn't guaranteed — Urdu speech isn't officially documented for this model.</p>
 
-              <div class="field-label"><span>Character (optional)</span></div>
+              <div class="field-label"><span data-i18n="character_optional">Character (optional)</span></div>
               <div style="display:flex;gap:10px;align-items:center;">
                 <img id="genCharThumb" alt="" style="display:none;width:44px;height:44px;object-fit:cover;border-radius:8px;" />
                 <select id="genCharacter" style="flex:1;">
@@ -919,15 +1041,15 @@
               </div>
               <p class="lang-hint">Pick one of your saved characters (My Characters card below) and the model uses its photo as the subject reference, so the character stays recognisable from video to video. A chosen character overrides the starting image below. Character consistency is the model's best effort — it is not a guarantee. The credit cost is the standard rate for the chosen quality and duration — characters cost nothing extra.</p>
 
-              <div class="field-label"><span>Starting image (optional)</span></div>
+              <div class="field-label"><span data-i18n="starting_image">Starting image (optional)</span></div>
               <input type="file" class="file-input" id="sourceImage" accept="image/png,image/jpeg,image/webp" />
               <p class="lang-hint" id="imageStatus">Add a PNG, JPEG or WebP image (max 5 MB) to animate it as the opening frame.</p>
-              <button type="button" class="tool-btn" id="removeImageBtn" style="display:none;">Remove image</button>
+              <button type="button" class="tool-btn" id="removeImageBtn" style="display:none;" data-i18n="remove_image">Remove image</button>
 
-              <div class="field-label"><span>Visual style</span></div>
+              <div class="field-label"><span data-i18n="visual_style">Visual style</span></div>
               <div class="style-grid" id="styleGrid"></div>
 
-              <div class="field-label"><span>Quality</span></div>
+              <div class="field-label"><span data-i18n="quality_label">Quality</span></div>
               <div class="seg" id="qualitySeg" role="group" aria-label="Quality">
                 <button type="button" class="sel" data-quality="full">Full quality<small>your plan's quality</small></button>
                 <button type="button" data-quality="draft">Draft · 480P<small><span id="draftCostHint">7 / 14</span> credits</small></button>
@@ -941,7 +1063,7 @@
                    the prompt sent to the model — no engine in our
                    wiring has a mechanical camera control, and the hint
                    below says so plainly. Free (no credit change). -->
-              <div class="field-label"><span>Camera movement (optional)</span></div>
+              <div class="field-label"><span data-i18n="camera_movement">Camera movement (optional)</span></div>
               <div class="seg" id="cameraSeg" role="group" aria-label="Camera movement">
                 <button type="button" class="sel" data-camera="">None</button>
                 <button type="button" data-camera="zoom_in">Zoom In</button>
@@ -955,7 +1077,7 @@
                 <button type="button" data-camera="handheld">Handheld</button>
                 <button type="button" data-camera="static">Static</button>
               </div>
-              <div class="field-label"><span>Shot size (optional)</span></div>
+              <div class="field-label"><span data-i18n="shot_size">Shot size (optional)</span></div>
               <div class="seg" id="shotSeg" role="group" aria-label="Shot size">
                 <button type="button" class="sel" data-shot="">None</button>
                 <button type="button" data-shot="close_up">Close-up</button>
@@ -969,7 +1091,7 @@
 
             <div class="card collapsible is-collapsed" id="voiceCard">
               <button type="button" class="collapse-head" data-collapse-head aria-expanded="false" aria-controls="voiceCardBody">
-                <span class="collapse-title">Voice &amp; Dialogue<span class="opt-tag">optional</span></span>
+                <span class="collapse-title"><span data-i18n="voice_dialogue">Voice &amp; Dialogue</span><span class="opt-tag" data-i18n="optional_tag">optional</span></span>
                 <svg class="collapse-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
               </button>
               <div class="form-error" id="voiceNotice" style="display:none;" role="alert"></div>
@@ -977,31 +1099,31 @@
               <p class="sub">Write a script, hear the voice first — free — then turn a photo into a talking character, or re-voice a finished video. Voice quality is new and still being proven with real samples; listen to the preview before spending credits.</p>
 
               <div id="voiceControls">
-                <div class="field-label"><span>Script</span><span class="count"><span id="voiceCharCount">0</span> / 300</span></div>
+                <div class="field-label"><span data-i18n="script_label">Script</span><span class="count"><span id="voiceCharCount">0</span> / 300</span></div>
                 <textarea id="voiceScript" maxlength="300" placeholder="The words the character should say — in Urdu, Hindi or English script, or in Roman letters (choose Roman below)."></textarea>
                 <p class="lang-hint">Up to 300 characters · 300 حروف تک — included in your plan</p>
 
-                <div class="field-label"><span>Spoken language</span></div>
+                <div class="field-label"><span data-i18n="spoken_language">Spoken language</span></div>
                 <select id="voiceLang">
                   <option value="ur" selected>Urdu</option>
                   <option value="hi">Hindi</option>
                   <option value="en">English</option>
                 </select>
 
-                <div class="field-label"><span>Script you typed in</span></div>
+                <div class="field-label"><span data-i18n="script_typed">Script you typed in</span></div>
                 <select id="voiceScriptMode">
                   <option value="native" selected>Native script (اردو / हिन्दी / English)</option>
                   <option value="roman">Roman letters (mera naam …)</option>
                 </select>
                 <p class="lang-hint">Roman input is converted to the native script on the server before speaking — a best-effort conversion; native script always gives the most reliable pronunciation.</p>
 
-                <div class="field-label"><span>Voice provider</span></div>
+                <div class="field-label"><span data-i18n="voice_provider">Voice provider</span></div>
                 <select id="voiceProvider"></select>
 
-                <div class="field-label"><span>Voice</span></div>
+                <div class="field-label"><span data-i18n="voice_label">Voice</span></div>
                 <select id="voiceVoice"></select>
 
-                <div class="field-label"><span>Style</span></div>
+                <div class="field-label"><span data-i18n="style_label">Style</span></div>
                 <select id="voiceStyle">
                   <option value="narration">Narration</option>
                   <option value="conversation" selected>Conversation</option>
@@ -1010,7 +1132,7 @@
                   <option value="emotional">Emotional</option>
                 </select>
 
-                <div class="field-label"><span>Speed</span></div>
+                <div class="field-label"><span data-i18n="speed_label">Speed</span></div>
                 <select id="voiceSpeed">
                   <option value="slow">Slow</option>
                   <option value="normal" selected>Normal</option>
@@ -1018,17 +1140,17 @@
                 </select>
 
                 <div class="cost-row">
-                  <span>Voice preview</span>
-                  <strong>Free</strong>
+                  <span data-i18n="voice_preview">Voice preview</span>
+                  <strong data-i18n="free_word">Free</strong>
                 </div>
                 <p class="lang-hint" id="voicePreviewCap">Free preview — no credits charged.</p>
-                <button type="button" class="btn" id="voicePreviewBtn">Preview voice</button>
+                <button type="button" class="btn" id="voicePreviewBtn" data-i18n="preview_voice_btn">Preview voice</button>
                 <audio id="voicePreviewAudio" controls style="display:none;width:100%;margin-top:10px;"></audio>
                 <p class="lang-hint" id="voicePreviewStatus"></p>
-                <p style="margin-top:10px;"><button type="button" class="btn small" id="langLabLink">Test languages · زبان آزمائیں</button></p>
+                <p style="margin-top:10px;"><button type="button" class="btn small" id="langLabLink" data-i18n="test_languages">Test languages · زبان آزمائیں</button></p>
 
-                <div class="field-label" style="margin-top:18px;"><span>Talking character (lip-sync)</span></div>
-                <div class="field-label"><span>Saved character (optional)</span></div>
+                <div class="field-label" style="margin-top:18px;"><span data-i18n="talking_character">Talking character (lip-sync)</span></div>
+                <div class="field-label"><span data-i18n="saved_character">Saved character (optional)</span></div>
                 <select id="lipsyncCharacter">
                   <option value="">No character — use the image or video below</option>
                 </select>
@@ -1038,8 +1160,8 @@
                 <button type="button" class="btn primary generate-btn" id="lipsyncBtn" style="margin-top:10px;">Create talking character</button>
                 <p class="lang-hint" id="lipsyncNote">Lip-sync needs the Pro or Extra Pro plan.</p>
 
-                <div class="field-label" style="margin-top:18px;"><span>Voiceover for a finished video</span></div>
-                <div class="field-label"><span>Finished video</span></div>
+                <div class="field-label" style="margin-top:18px;"><span data-i18n="voiceover_finished">Voiceover for a finished video</span></div>
+                <div class="field-label"><span data-i18n="finished_video">Finished video</span></div>
                 <select id="voiceGenSelect"></select>
                 <p class="lang-hint">The voiceover <strong>replaces</strong> the video's original audio with the synthesized voice.</p>
                 <button type="button" class="btn primary generate-btn" id="voiceoverBtn">Add voiceover</button>
@@ -1052,7 +1174,7 @@
 
             <div class="card collapsible is-collapsed" id="soundCard">
               <button type="button" class="collapse-head" data-collapse-head aria-expanded="false" aria-controls="soundCardBody">
-                <span class="collapse-title">Sound &amp; Effects<span class="opt-tag">optional</span></span>
+                <span class="collapse-title"><span data-i18n="sound_effects">Sound &amp; Effects</span><span class="opt-tag" data-i18n="optional_tag">optional</span></span>
                 <svg class="collapse-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
               </button>
               <div class="form-error" id="soundNotice" style="display:none;" role="alert"></div>
@@ -1060,7 +1182,7 @@
               <p class="sub">Add an AI soundtrack, sound effects or a music bed to the video you are generating — or create a sound on its own. The AI matches sounds to the picture; the timing is the model's estimate, not a frame-exact guarantee.</p>
 
               <div id="soundControls">
-                <div class="field-label"><span>Sound for the video above</span></div>
+                <div class="field-label"><span data-i18n="sound_for_video">Sound for the video above</span></div>
                 <select id="soundMode">
                   <option value="none" selected>None — video only</option>
                   <option value="sync">Auto sync sound</option>
@@ -1069,18 +1191,18 @@
                 </select>
                 <p class="lang-hint">Auto sync sound <strong>replaces</strong> the video's original audio with an AI soundtrack generated from the finished video. Sound effects and background music are mixed <strong>under</strong> the original audio at the volume below. If the sound step fails, your video is still delivered — sound is included in the price, so no separate fee is involved.</p>
 
-                <div class="field-label"><span>Describe the sounds (optional)</span><span class="count"><span id="soundCharCount">0</span> / 500</span></div>
+                <div class="field-label"><span data-i18n="describe_sounds">Describe the sounds (optional)</span><span class="count"><span id="soundCharCount">0</span> / 500</span></div>
                 <textarea id="soundPrompt" maxlength="500" placeholder="Rain on a tin roof, distant thunder, a train passing… Write in Urdu, Hindi, English or any language offered in the prompt box — it is translated automatically. Leave empty to use your video prompt."></textarea>
 
-                <div class="field-label"><span>Sound volume</span><span class="count"><span id="soundVolumeLabel">100</span>%</span></div>
+                <div class="field-label"><span data-i18n="sound_volume">Sound volume</span><span class="count"><span id="soundVolumeLabel">100</span>%</span></div>
                 <input type="range" id="soundVolume" min="10" max="100" step="5" value="100" style="width:100%;" />
 
-                <div class="field-label" style="margin-top:18px;"><span>Just a sound (no video)</span></div>
+                <div class="field-label" style="margin-top:18px;"><span data-i18n="just_sound">Just a sound (no video)</span></div>
                 <select id="soundOnlyKind">
                   <option value="sfx" selected>Sound effect</option>
                   <option value="music">Music bed</option>
                 </select>
-                <div class="field-label"><span>Length</span></div>
+                <div class="field-label"><span data-i18n="length_label">Length</span></div>
                 <select id="soundOnlyDuration"></select>
                 <p class="lang-hint">Uses the description above. The finished sound plays here and is saved in your History with a player and a download.</p>
                 <button type="button" class="btn primary generate-btn" id="soundOnlyBtn">Generate sound only</button>
@@ -1093,8 +1215,8 @@
             </div>
 
             <div class="card" id="watermarkCard">
-              <h2>Watermark (optional)</h2>
-              <label class="check-row" style="margin-top:6px;"><input type="checkbox" id="watermarkEnabled" /> <span>Add watermark text</span></label>
+              <h2 data-i18n="watermark_title">Watermark (optional)</h2>
+              <label class="check-row" style="margin-top:6px;"><input type="checkbox" id="watermarkEnabled" /> <span data-i18n="add_watermark">Add watermark text</span></label>
               <input type="text" class="text-input" id="watermarkText" maxlength="30" placeholder="e.g. SMT Movies" disabled style="margin-top:9px;" />
               <p class="lang-hint">Latin letters only, up to 30 characters. It appears at the bottom-right. Watermarking does not change the credit cost.</p>
             </div>
@@ -1103,29 +1225,29 @@
             </div><!-- /advancedCard -->
 
             <div class="card" id="charactersCard">
-              <h2>My Characters</h2>
+              <h2 data-i18n="my_characters">My Characters</h2>
               <p class="sub">Save a character once — a photo plus, if you like, a bound voice — then reuse it in the video form and in lip-sync, so the same character keeps appearing in your videos. The model does its best to keep the character consistent; consistency is a best effort, not a guarantee. You can save up to <span id="charMaxHint">10</span> characters.</p>
 
-              <div class="field-label"><span>Character name</span></div>
+              <div class="field-label"><span data-i18n="character_name">Character name</span></div>
               <input type="text" class="text-input" id="charName" maxlength="60" placeholder="e.g. Captain Sara" />
 
-              <div class="field-label"><span>Character photo</span></div>
+              <div class="field-label"><span data-i18n="character_photo">Character photo</span></div>
               <input type="file" class="file-input" id="charImage" accept="image/png,image/jpeg,image/webp" />
               <p class="lang-hint" id="charImageStatus">Choose a clear PNG, JPEG or WebP photo of the character (max 5 MB). A front-facing photo works best.</p>
 
-              <div class="field-label"><span>Bound voice (optional)</span></div>
+              <div class="field-label"><span data-i18n="bound_voice">Bound voice (optional)</span></div>
               <select id="charVoiceProvider">
                 <option value="">No bound voice</option>
               </select>
-              <div class="field-label"><span>Voice language</span></div>
+              <div class="field-label"><span data-i18n="voice_language">Voice language</span></div>
               <select id="charVoiceLang">
                 <option value="ur" selected>Urdu</option>
                 <option value="hi">Hindi</option>
                 <option value="en">English</option>
               </select>
-              <div class="field-label"><span>Voice</span></div>
+              <div class="field-label"><span data-i18n="voice_label">Voice</span></div>
               <select id="charVoice"></select>
-              <div class="field-label"><span>Voice style</span></div>
+              <div class="field-label"><span data-i18n="voice_style">Voice style</span></div>
               <select id="charVoiceStyle">
                 <option value="narration">Narration</option>
                 <option value="conversation" selected>Conversation</option>
@@ -1135,10 +1257,10 @@
               </select>
               <p class="lang-hint">The bound voice is used automatically when this character speaks in a lip-sync video (you can still override it for a single job in the Voice card).</p>
 
-              <button type="button" class="btn primary generate-btn" id="charCreateBtn">Save character</button>
+              <button type="button" class="btn primary generate-btn" id="charCreateBtn" data-i18n="save_character">Save character</button>
               <div class="form-error" id="charError" role="alert"></div>
 
-              <div class="field-label" style="margin-top:18px;"><span>Saved characters</span></div>
+              <div class="field-label" style="margin-top:18px;"><span data-i18n="saved_characters">Saved characters</span></div>
               <div id="charList">
                 <p class="lang-hint" id="charListEmpty">Sign in to see and save your characters.</p>
               </div>
@@ -1147,7 +1269,7 @@
           </div>
 
           <div class="card preview-card">
-            <h2>Preview</h2>
+            <h2 data-i18n="preview_title">Preview</h2>
             <p class="sub">Job progress and the finished video appear here, straight from the server.</p>
             <div class="preview-frame" id="previewFrame">
               <div class="preview-empty" id="previewEmpty">
@@ -1179,11 +1301,11 @@
             </div>
 
             <div class="result-actions" style="margin-top:16px;">
-              <button type="button" class="btn ghost small" id="cancelBtn" style="display:none;">Stop watching</button>
+              <button type="button" class="btn ghost small" id="cancelBtn" style="display:none;" data-i18n="stop_watching">Stop watching</button>
               <span style="flex:1"></span>
               <button type="button" class="btn ghost small" id="reportBtn">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;"><path d="M4 21V4h13l-2.5 4L17 12H4"/></svg>
-                Report content
+                <span data-i18n="report_content">Report content</span>
               </button>
             </div>
           </div>
@@ -1193,12 +1315,12 @@
           <div class="form-error" id="formError" role="alert"></div>
           <div class="actionbar-row">
             <div class="actionbar-cost">
-              <span class="actionbar-label">Total cost</span>
+              <span class="actionbar-label" data-i18n="total_cost">Total cost</span>
               <strong><span id="costNum">10</span> credits</strong>
             </div>
             <button type="button" class="btn primary generate-btn actionbar-btn" id="generateBtn">
               <svg viewBox="0 0 24 24" fill="currentColor" id="generateIcon"><path d="M8 5.5v13l11-6.5-11-6.5z"/></svg>
-              <span id="generateLabel">Generate video</span>
+              <span id="generateLabel" data-i18n="generate_video">Generate video</span>
             </button>
           </div>
         </div>
@@ -1209,22 +1331,22 @@
       <!-- ================= HISTORY ================= -->
       <section class="view" id="view-history">
         <div class="page-head">
-          <h1>Generation history</h1>
+          <h1 data-i18n="generation_history">Generation history</h1>
           <p>Your jobs, loaded from the server — prompts, settings, status, and the finished videos.</p>
         </div>
         <div class="balance-line" id="balanceLine">
-          Credit balance: <strong id="balanceNum">–</strong>
-          <button type="button" class="btn small" id="refreshHistoryBtn">Refresh</button>
+          <span data-i18n="credit_balance">Credit balance:</span> <strong id="balanceNum">–</strong>
+          <button type="button" class="btn small" id="refreshHistoryBtn" data-i18n="refresh">Refresh</button>
         </div>
         <div class="join-bar" id="joinBar">
           <span id="joinCount">0 clips selected</span>
-          <button type="button" class="btn small primary" id="joinBtn">Join selected clips</button>
-          <span id="joinMsg" style="color:var(--muted);font-size:13px;">Joining is free — pick 2 to 6 finished videos.</span>
+          <button type="button" class="btn small primary" id="joinBtn" data-i18n="join_selected">Join selected clips</button>
+          <span id="joinMsg" style="color:var(--muted);font-size:13px;" data-i18n="join_hint">Joining is free — pick 2 to 6 finished videos.</span>
         </div>
         <div class="empty-state" id="historyEmpty">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/><path d="M12 7v5l3.5 2"/></svg>
           <p id="historyEmptyText">Sign in to see your generation history.</p>
-          <button type="button" class="btn small" id="historyEmptyBtn">Sign in</button>
+          <button type="button" class="btn small" id="historyEmptyBtn" data-i18n="sign_in">Sign in</button>
         </div>
         <div class="job-list" id="jobList"></div>
       </section>
@@ -1232,18 +1354,18 @@
       <!-- ================= PLANS ================= -->
       <section class="view" id="view-plans">
         <div class="page-head">
-          <h1>Plans &amp; pricing</h1>
+          <h1 data-i18n="plans_pricing">Plans &amp; pricing</h1>
           <p>Subscription plans for AJK AI, priced in Pakistani Rupees. Plan credits are granted every billing cycle while your subscription is active (weekly for the Weekly plan, monthly otherwise); free sign-up credits never expire.</p>
         </div>
         <div class="balance-line" id="planLine">
-          Current plan: <strong id="currentPlanName">Free</strong>
+          <span data-i18n="current_plan">Current plan:</span> <strong id="currentPlanName">Free</strong>
           <span id="currentPlanDetail"></span>
         </div>
         <div class="plan-grid" id="planGrid">
           <p style="color:var(--muted);">Loading plans…</p>
         </div>
         <div class="card">
-          <h2>Payment history</h2>
+          <h2 data-i18n="payment_history">Payment history</h2>
           <p class="sub">Payments on your account, loaded from the server.</p>
           <div class="empty-state" id="paymentsEmpty">
             <p id="paymentsEmptyText">Sign in to see your payment history.</p>
@@ -1251,27 +1373,27 @@
           <div class="pay-list" id="payList"></div>
         </div>
         <div class="card">
-          <h2>Need credits right away?</h2>
+          <h2 data-i18n="need_credits">Need credits right away?</h2>
           <p class="sub">Subscriptions renew monthly — credit packs top you up immediately and never expire.</p>
-          <button type="button" class="btn primary" id="buyFromPlansBtn">Buy a credit pack</button>
+          <button type="button" class="btn primary" id="buyFromPlansBtn" data-i18n="buy_pack_btn">Buy a credit pack</button>
         </div>
       </section>
 
       <!-- ================= BUY CREDITS ================= -->
       <section class="view" id="view-buy">
         <div class="page-head">
-          <h1>Buy credits</h1>
+          <h1 data-i18n="buy_credits_h1">Buy credits</h1>
           <p>One-time credit packs — they never expire and are added on top of any plan credits. Pay by easypaisa, JazzCash, NayaPay or bank transfer, then submit the transaction ID from your payment. Credits are added as soon as the payment is verified (usually within a few hours).</p>
         </div>
         <div class="card">
-          <h2>1 · Choose a pack</h2>
+          <h2 data-i18n="choose_pack">1 · Choose a pack</h2>
           <p class="sub">Packs and prices are loaded from the server.</p>
           <div class="plan-grid" id="packGrid">
             <p style="color:var(--muted);">Loading packs…</p>
           </div>
         </div>
         <div class="card buy-form">
-          <h2>2 · Send the payment</h2>
+          <h2 data-i18n="send_payment">2 · Send the payment</h2>
           <p class="sub">Send the pack price to one of these destinations, exactly as shown:</p>
           <div id="packMethods">
             <p style="color:var(--muted);">Payment details will appear here soon.</p>
@@ -1284,11 +1406,11 @@
             <img src="/easypaisa-qr.jpg" alt="Easypaisa QR code — pay Shahid Iqbal via RAAST" />
             <p class="sub">Scan this QR with your easypaisa app (RAAST) to pay <strong>Shahid Iqbal</strong>.</p>
           </div>
-          <h2 style="margin-top:22px;">3 · Tell us the transaction ID</h2>
+          <h2 style="margin-top:22px;" data-i18n="tell_txn">3 · Tell us the transaction ID</h2>
           <p class="sub">After paying, enter the transaction ID from your easypaisa / JazzCash / NayaPay / bank receipt so we can verify it.</p>
-          <div class="field-label"><span>Pack</span></div>
+          <div class="field-label"><span data-i18n="pack_label">Pack</span></div>
           <select id="buyPackSelect"></select>
-          <div class="field-label"><span>Payment method</span></div>
+          <div class="field-label"><span data-i18n="payment_method">Payment method</span></div>
           <select id="buyMethod">
             <option value="easypaisa">easypaisa</option>
             <option value="jazzcash">JazzCash</option>
@@ -1296,15 +1418,15 @@
             <option value="nayapay">NayaPay</option>
             <option value="other">Other</option>
           </select>
-          <div class="field-label"><span>Transaction ID</span></div>
+          <div class="field-label"><span data-i18n="transaction_id">Transaction ID</span></div>
           <input type="text" id="buyRef" placeholder="e.g. 12345678901" autocomplete="off" />
           <div class="form-error" id="buyError" role="alert"></div>
           <div class="pack-note" id="buySuccess"></div>
-          <button type="button" class="btn primary generate-btn" id="buySubmitBtn" style="margin-top:14px;">Submit for verification</button>
+          <button type="button" class="btn primary generate-btn" id="buySubmitBtn" style="margin-top:14px;" data-i18n="submit_verification">Submit for verification</button>
           <p class="fineprint">Submitting does not add credits by itself — they arrive once the payment is verified. Never share your bank/easypaisa password or PIN with anyone; we only need the transaction ID.</p>
         </div>
         <div class="card">
-          <h2>My pack purchases</h2>
+          <h2 data-i18n="my_pack_purchases">My pack purchases</h2>
           <p class="sub">Your credit-pack orders and their verification status.</p>
           <div class="empty-state" id="myPacksEmpty">
             <p id="myPacksEmptyText">Sign in to see your pack purchases.</p>
@@ -1316,25 +1438,42 @@
       <!-- ================= SETTINGS ================= -->
       <section class="view" id="view-settings">
         <div class="page-head">
-          <h1>Settings</h1>
+          <h1 data-i18n="nav_settings">Settings</h1>
           <p>AJK AI — AI Video Generator. Where the app talks to, and your account. The API key for the video provider lives only on the server — this page never sees it.</p>
         </div>
         <div class="settings-grid">
           <div class="stack">
+            <!-- Phase O1: appearance — interface language + theme.
+                 The same controls live in the header; choices persist
+                 in localStorage (ajk_lang / ajk_theme). -->
+            <div class="card" id="appearanceCard">
+              <h2 data-i18n="appearance">Appearance</h2>
+              <div class="field-label"><span data-i18n="interface_language">Interface language</span></div>
+              <div class="seg pref-seg" role="group" aria-label="Interface language · انٹرفیس کی زبان">
+                <button type="button" data-lang-choice="en" class="sel">English</button>
+                <button type="button" data-lang-choice="ur">اردو (Urdu)</button>
+              </div>
+              <div class="field-label"><span data-i18n="theme_label">Theme</span></div>
+              <div class="seg pref-seg" role="group" aria-label="Theme · تھیم">
+                <button type="button" data-theme-choice="dark" class="sel" data-i18n="theme_dark">Dark</button>
+                <button type="button" data-theme-choice="light" data-i18n="theme_light">Light</button>
+              </div>
+            </div>
+
             <div class="card">
-              <h2>API connection</h2>
+              <h2 data-i18n="api_connection">API connection</h2>
               <p class="sub">All data calls — sign-in, config, generation, history — go to this base URL. It is saved in this browser only.</p>
-              <div class="field-label"><span>API base URL</span></div>
+              <div class="field-label"><span data-i18n="api_base_url">API base URL</span></div>
               <div class="url-row">
                 <input type="url" id="apiBaseInput" spellcheck="false" autocomplete="off" placeholder="http://localhost:8080" />
-                <button type="button" class="btn primary" id="saveBaseBtn">Save</button>
-                <button type="button" class="btn" id="testBaseBtn">Test connection</button>
+                <button type="button" class="btn primary" id="saveBaseBtn" data-i18n="save">Save</button>
+                <button type="button" class="btn" id="testBaseBtn" data-i18n="test_connection">Test connection</button>
               </div>
               <p class="conn-status" id="connStatus">Not tested yet this session.</p>
             </div>
 
             <div class="card">
-              <h2>How the app uses the API</h2>
+              <h2 data-i18n="how_api">How the app uses the API</h2>
               <p class="sub">The endpoints this front-end calls. Your browser holds only your sign-in token — never a provider key.</p>
               <div class="schema-scroll">
                 <table class="schema">
@@ -1354,27 +1493,27 @@
             </div>
 
             <div class="card" id="feedbackCard">
-              <h2>Feedback · رائے / مسئلہ</h2>
+              <h2 data-i18n="feedback_title">Feedback · رائے / مسئلہ</h2>
               <p class="sub">Found a problem, a bad result, or something you wish the app did? Send it straight to the team — your app version and device info are attached automatically. آپ کی رائے اور مسائل یہاں سے بھیجیں۔</p>
               <div id="feedbackAttach" style="display:none;">
                 <span class="fb-chip"><span>Attached: <span id="feedbackAttachLabel"></span></span><button type="button" class="linkish" id="feedbackDetachBtn">Remove</button></span>
               </div>
-              <div class="field-label"><span>Category · قسم</span></div>
+              <div class="field-label"><span data-i18n="category_label">Category · قسم</span></div>
               <select id="feedbackCategory">
                 <option value="bug">مسئلہ — Bug / problem</option>
                 <option value="quality">کوالٹی — Video or voice quality</option>
                 <option value="feature">نئی سہولت — Feature request</option>
                 <option value="other">دیگر — Other</option>
               </select>
-              <div class="field-label"><span>Your message</span><span class="count" id="feedbackCount">0 / 1000</span></div>
+              <div class="field-label"><span data-i18n="your_message">Your message</span><span class="count" id="feedbackCount">0 / 1000</span></div>
               <textarea id="feedbackMessage" rows="4" maxlength="1000" placeholder="What happened? What did you expect instead?"></textarea>
               <div class="result-actions">
-                <button type="button" class="btn primary" id="feedbackSendBtn">Send feedback</button>
+                <button type="button" class="btn primary" id="feedbackSendBtn" data-i18n="send_feedback">Send feedback</button>
               </div>
             </div>
 
             <div class="card" id="langLabCard">
-              <h2>Languages · زبانیں</h2>
+              <h2 data-i18n="languages_title">Languages · زبانیں</h2>
               <p class="sub">Pakistan's languages, honestly labelled: a voice is only "available" when a real provider offers it, and Punjabi, Pashto and Sindhi stay marked "listed — testing" until their sample voices have been heard and approved. درج شدہ زبانیں آزمائیں — جہاں آواز ابھی دستیاب نہیں، وہاں صاف لکھا ہے اور متبادل بھی دیا ہے۔</p>
               <div id="langLabList"></div>
               <audio id="langLabAudio" controls style="display:none;width:100%;margin-top:10px;"></audio>
@@ -1383,62 +1522,62 @@
           </div>
 
           <div class="card">
-            <h2>Account</h2>
+            <h2 data-i18n="account_title">Account</h2>
             <p class="sub" id="accountSub">You are not signed in.</p>
             <div id="accountSignedOut">
               <p style="color:var(--muted);font-size:14px;margin:0 0 14px;">Sign in to generate videos, spend credits, and see your history on any device. <span id="signupCreditsLine">New accounts receive free starter credits.</span></p>
-              <button type="button" class="btn primary" id="accountSignInBtn">Sign in / Create account</button>
+              <button type="button" class="btn primary" id="accountSignInBtn" data-i18n="sign_in_create">Sign in / Create account</button>
             </div>
             <div id="accountSignedIn" style="display:none;">
               <dl class="kv">
-                <dt>Email</dt><dd id="meEmail">–</dd>
-                <dt>User ID</dt><dd class="mono" id="meId">–</dd>
-                <dt>Credit balance</dt><dd id="meCredits">–</dd>
-                <dt>Plan</dt><dd id="mePlan">Free</dd>
-                <dt>Plan credits</dt><dd id="mePlanCredits">0</dd>
-                <dt>Member since</dt><dd id="meSince">–</dd>
-                <dt>Model</dt><dd class="mono" id="meModel">–</dd>
-                <dt>Daily cap</dt><dd id="meDailyCap">–</dd>
+                <dt data-i18n="email_label">Email</dt><dd id="meEmail">–</dd>
+                <dt data-i18n="user_id_label">User ID</dt><dd class="mono" id="meId">–</dd>
+                <dt data-i18n="credit_balance_nc">Credit balance</dt><dd id="meCredits">–</dd>
+                <dt data-i18n="plan_label">Plan</dt><dd id="mePlan">Free</dd>
+                <dt data-i18n="plan_credits">Plan credits</dt><dd id="mePlanCredits">0</dd>
+                <dt data-i18n="member_since">Member since</dt><dd id="meSince">–</dd>
+                <dt data-i18n="model_label">Model</dt><dd class="mono" id="meModel">–</dd>
+                <dt data-i18n="daily_cap">Daily cap</dt><dd id="meDailyCap">–</dd>
               </dl>
               <div class="result-actions">
-                <button type="button" class="btn" id="refreshMeBtn">Refresh</button>
-                <button type="button" class="btn" id="signOutBtn">Sign out</button>
+                <button type="button" class="btn" id="refreshMeBtn" data-i18n="refresh">Refresh</button>
+                <button type="button" class="btn" id="signOutBtn" data-i18n="sign_out">Sign out</button>
               </div>
               <!-- Phase N: linked sign-in methods + account deletion.
                    Accounts are never merged automatically — linking is
                    done here, signed in, after provider verification. -->
-              <div class="field-label"><span>Sign-in methods · لاگ اِن کے طریقے</span></div>
+              <div class="field-label"><span data-i18n="signin_methods">Sign-in methods · لاگ اِن کے طریقے</span></div>
               <div id="meIdentities"><p class="lang-hint">Loading…</p></div>
               <div class="result-actions">
-                <button type="button" class="btn small" id="linkGoogleBtn" style="display:none;">Link Google · Google جوڑیں</button>
-                <button type="button" class="btn small" id="linkFacebookBtn" style="display:none;">Link Facebook · Facebook جوڑیں</button>
+                <button type="button" class="btn small" id="linkGoogleBtn" style="display:none;" data-i18n="link_google">Link Google · Google جوڑیں</button>
+                <button type="button" class="btn small" id="linkFacebookBtn" style="display:none;" data-i18n="link_facebook">Link Facebook · Facebook جوڑیں</button>
               </div>
               <!-- Phase N2: link a phone number (OTP sent to that number). -->
               <div id="linkPhoneBox" style="display:none;">
-                <div class="field-label"><span>Link a phone number · فون نمبر جوڑیں</span></div>
+                <div class="field-label"><span data-i18n="link_phone">Link a phone number · فون نمبر جوڑیں</span></div>
                 <input type="tel" id="linkPhoneNumber" class="text-input" value="+92" placeholder="+92 300 1234567" autocomplete="tel" />
                 <div class="result-actions">
-                  <button type="button" class="btn small" id="linkPhoneSendBtn">Send code · کوڈ بھیجیں</button>
+                  <button type="button" class="btn small" id="linkPhoneSendBtn" data-i18n="send_code">Send code · کوڈ بھیجیں</button>
                 </div>
                 <div id="linkPhoneCodeRow" style="display:none;">
-                  <label for="linkPhoneCode">6-digit code · 6 ہندسوں کا کوڈ</label>
+                  <label for="linkPhoneCode" data-i18n="six_digit_code">6-digit code · 6 ہندسوں کا کوڈ</label>
                   <input type="text" id="linkPhoneCode" class="text-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="••••••" />
                   <p class="auth-note">The code expires in 1 minute. کوڈ کی میعاد 1 منٹ ہے۔</p>
                   <div class="result-actions">
-                    <button type="button" class="btn small" id="linkPhoneVerifyBtn">Link phone · فون جوڑیں</button>
+                    <button type="button" class="btn small" id="linkPhoneVerifyBtn" data-i18n="link_phone_btn">Link phone · فون جوڑیں</button>
                   </div>
                 </div>
                 <p class="lang-hint" id="linkPhoneStatus"></p>
               </div>
               <div class="danger-zone">
-                <h3>Delete account · اکاؤنٹ حذف کریں</h3>
+                <h3 data-i18n="delete_account">Delete account · اکاؤنٹ حذف کریں</h3>
                 <p>This permanently deletes your account, credits, videos and history. This cannot be undone. یہ عمل واپس نہیں ہو سکتا۔</p>
-                <label for="deleteConfirm">Type DELETE to confirm</label>
+                <label for="deleteConfirm" data-i18n="type_delete">Type DELETE to confirm</label>
                 <input type="text" id="deleteConfirm" class="text-input" placeholder="DELETE" autocomplete="off" />
-                <label for="deletePass">Your password (if your account has one)</label>
+                <label for="deletePass" data-i18n="your_password_opt">Your password (if your account has one)</label>
                 <input type="password" id="deletePass" class="text-input" placeholder="••••••••" autocomplete="current-password" />
                 <div class="result-actions">
-                  <button type="button" class="btn" id="deleteAccountBtn">Delete my account</button>
+                  <button type="button" class="btn" id="deleteAccountBtn" data-i18n="delete_my_account">Delete my account</button>
                 </div>
                 <p class="lang-hint" id="deleteStatus"></p>
               </div>
@@ -1498,9 +1637,9 @@
       <div class="footer-in">
         <span>AJK AI — AI Video Generator · Your Imagination. AI Motion.</span>
         <span class="spacer"></span>
-        <button type="button" class="linkish" data-goto="privacy">Privacy policy</button>
-        <button type="button" class="linkish" id="reportBtn3">Report content</button>
-        <button type="button" class="linkish" data-goto="settings">API settings</button>
+        <button type="button" class="linkish" data-goto="privacy" data-i18n="privacy_policy">Privacy policy</button>
+        <button type="button" class="linkish" id="reportBtn3" data-i18n="report_content">Report content</button>
+        <button type="button" class="linkish" data-goto="settings" data-i18n="api_settings">API settings</button>
       </div>
     </footer>
 
@@ -1508,27 +1647,27 @@
       <div class="row">
         <button type="button" class="tab active" data-view="studio">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10 9.5v5l4.5-2.5L10 9.5z" fill="currentColor" stroke="none"/></svg>
-          Studio
+          <span data-i18n="nav_studio">Studio</span>
         </button>
         <button type="button" class="tab" data-view="history">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/><path d="M12 7v5l3.5 2"/></svg>
-          History
+          <span data-i18n="nav_history">History</span>
         </button>
         <button type="button" class="tab" data-view="plans">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18M7 15h4"/></svg>
-          Plans
+          <span data-i18n="nav_plans">Plans</span>
         </button>
         <button type="button" class="tab" data-view="buy">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v9M14.8 9.4c-.5-.7-1.5-1.1-2.8-1.1-1.6 0-2.8.8-2.8 2 0 2.7 5.6 1.5 5.6 3.9 0 1.2-1.2 2-2.8 2-1.2 0-2.3-.5-2.8-1.2"/></svg>
-          Buy
+          <span data-i18n="nav_buy_short">Buy</span>
         </button>
         <button type="button" class="tab" data-view="settings">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3.2"/><path d="M19 12a7 7 0 0 0-.14-1.4l2-1.55-2-3.46-2.36.95A7 7 0 0 0 14.1 5.1L13.7 2.6h-3.4l-.4 2.5a7 7 0 0 0-2.4 1.44l-2.36-.95-2 3.46 2 1.55a7 7 0 0 0 0 2.8l-2 1.55 2 3.46 2.36-.95a7 7 0 0 0 2.4 1.44l.4 2.5h3.4l.4-2.5a7 7 0 0 0 2.4-1.44l2.36.95 2-3.46-2-1.55c.1-.45.14-.92.14-1.4z"/></svg>
-          Settings
+          <span data-i18n="nav_settings">Settings</span>
         </button>
         <button type="button" class="tab" data-view="privacy">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l7 3v5c0 4.6-3 8.4-7 10-4-1.6-7-5.4-7-10V6l7-3z"/><path d="m9.5 12 2 2 3.5-4"/></svg>
-          Privacy
+          <span data-i18n="nav_privacy">Privacy</span>
         </button>
       </div>
     </nav>
@@ -1537,8 +1676,8 @@
     <div class="modal-backdrop" id="authModal">
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="authTitle">
         <button type="button" class="close-x" data-close="authModal" aria-label="Close">✕</button>
-        <h3 id="authTitle">Welcome to AJK AI</h3>
-        <p class="sub" id="authSub">Your Imagination. AI Motion. Sign in to generate videos and see your history. New accounts receive free starter credits.</p>
+        <h3 id="authTitle" data-i18n="welcome_title">Welcome to AJK AI</h3>
+        <p class="sub" id="authSub" data-i18n="auth_sub">Your Imagination. AI Motion. Sign in to generate videos and see your history. New accounts receive free starter credits.</p>
         <!-- Phase N: provider sign-in buttons. A button is only LIVE when
              the server reports that provider configured in /api/config;
              otherwise it stays disabled with the honest coming-soon
@@ -1549,66 +1688,66 @@
           <button type="button" class="btn" id="facebookBtn" disabled>Continue with Facebook — coming soon · جلد آ رہا ہے</button>
           <button type="button" class="btn" id="phoneBtn" disabled>Continue with Phone Number — coming soon · جلد آ رہا ہے</button>
         </div>
-        <div class="auth-divider"><span>or with email · یا ای میل سے</span></div>
+        <div class="auth-divider"><span data-i18n="or_with_email">or with email · یا ای میل سے</span></div>
         <div class="auth-switch" role="group" aria-label="Sign in or register">
-          <button type="button" id="authModeLogin" class="sel">Sign in</button>
-          <button type="button" id="authModeRegister">Create account</button>
+          <button type="button" id="authModeLogin" class="sel" data-i18n="sign_in">Sign in</button>
+          <button type="button" id="authModeRegister" data-i18n="create_account">Create account</button>
         </div>
         <form id="authForm">
-          <label for="authEmail">Email</label>
+          <label for="authEmail" data-i18n="email_label">Email</label>
           <input type="email" id="authEmail" required placeholder="you@example.com" autocomplete="email" />
-          <label for="authPass">Password</label>
+          <label for="authPass" data-i18n="password_label">Password</label>
           <input type="password" id="authPass" required placeholder="••••••••" autocomplete="current-password" />
-          <div style="text-align:right;">
-            <button type="button" class="linkish-btn" id="forgotLink">Forgot password?</button>
+          <div class="forgot-row" style="text-align:right;">
+            <button type="button" class="linkish-btn" id="forgotLink" data-i18n="forgot_password">Forgot password?</button>
           </div>
           <div class="auth-error" id="authError" role="alert"></div>
           <div class="row-actions">
-            <button type="button" class="btn" data-close="authModal">Cancel</button>
+            <button type="button" class="btn" data-close="authModal" data-i18n="cancel">Cancel</button>
             <button type="submit" class="btn primary" id="authSubmit">Sign in</button>
           </div>
         </form>
-        <p class="auth-note" id="resendLine" style="display:none;">Didn't get the verification email? <button type="button" class="linkish-btn" id="resendVerifyBtn">Resend verification</button></p>
+        <p class="auth-note" id="resendLine" style="display:none;"><span data-i18n="no_verify_email">Didn't get the verification email?</span> <button type="button" class="linkish-btn" id="resendVerifyBtn" data-i18n="resend_verification">Resend verification</button></p>
         <div id="forgotPanel" style="display:none;">
-          <label for="forgotEmail">Your account email</label>
+          <label for="forgotEmail" data-i18n="your_account_email">Your account email</label>
           <input type="email" id="forgotEmail" placeholder="you@example.com" autocomplete="email" />
           <div class="row-actions">
-            <button type="button" class="btn" id="forgotCancel">Back</button>
-            <button type="button" class="btn primary" id="forgotSend">Send reset link</button>
+            <button type="button" class="btn" id="forgotCancel" data-i18n="back">Back</button>
+            <button type="button" class="btn primary" id="forgotSend" data-i18n="send_reset_link">Send reset link</button>
           </div>
           <p class="auth-note" id="forgotStatus"></p>
         </div>
         <div id="resetPanel" style="display:none;">
-          <label for="resetPass">New password</label>
+          <label for="resetPass" data-i18n="new_password">New password</label>
           <input type="password" id="resetPass" placeholder="••••••••" autocomplete="new-password" />
           <div class="row-actions">
-            <button type="button" class="btn primary" id="resetSubmit">Set new password</button>
+            <button type="button" class="btn primary" id="resetSubmit" data-i18n="set_new_password">Set new password</button>
           </div>
           <p class="auth-note" id="resetStatus"></p>
         </div>
         <div id="verifyPanel" style="display:none;">
-          <p class="auth-note" id="verifyStatus">Verifying your email…</p>
+          <p class="auth-note" id="verifyStatus" data-i18n="verifying_email">Verifying your email…</p>
           <div class="row-actions">
-            <button type="button" class="btn" id="verifyBack">Back to sign in</button>
+            <button type="button" class="btn" id="verifyBack" data-i18n="back_to_sign_in">Back to sign in</button>
           </div>
         </div>
         <!-- Phase N2: phone sign-in panel. Shown only when the button
              above is live (SMS configured server-side). The code is
              sent ONLY to the number typed here. -->
         <div id="phonePanel" style="display:none;">
-          <label for="phoneNumber">Mobile number · موبائل نمبر</label>
+          <label for="phoneNumber" data-i18n="mobile_number">Mobile number · موبائل نمبر</label>
           <input type="tel" id="phoneNumber" class="text-input" value="+92" placeholder="+92 300 1234567" autocomplete="tel" />
           <div class="row-actions">
-            <button type="button" class="btn" id="phoneBack">Back</button>
-            <button type="button" class="btn primary" id="phoneSendBtn">Send code · کوڈ بھیجیں</button>
+            <button type="button" class="btn" id="phoneBack" data-i18n="back">Back</button>
+            <button type="button" class="btn primary" id="phoneSendBtn" data-i18n="send_code">Send code · کوڈ بھیجیں</button>
           </div>
           <p class="auth-note" id="phoneResendNote" style="display:none;"></p>
           <div id="phoneCodeRow" style="display:none;">
-            <label for="phoneCode">6-digit code · 6 ہندسوں کا کوڈ</label>
+            <label for="phoneCode" data-i18n="six_digit_code">6-digit code · 6 ہندسوں کا کوڈ</label>
             <input type="text" id="phoneCode" class="text-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="••••••" />
             <p class="auth-note">The code expires in 1 minute. کوڈ کی میعاد 1 منٹ ہے۔</p>
             <div class="row-actions">
-              <button type="button" class="btn primary" id="phoneVerifyBtn">Verify &amp; sign in · تصدیق کریں</button>
+              <button type="button" class="btn primary" id="phoneVerifyBtn" data-i18n="verify_sign_in">Verify &amp; sign in · تصدیق کریں</button>
             </div>
           </div>
           <p class="auth-note" id="phoneStatus"></p>
@@ -1621,10 +1760,10 @@
     <div class="modal-backdrop" id="reportModal">
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="reportTitle">
         <button type="button" class="close-x" data-close="reportModal" aria-label="Close">✕</button>
-        <h3 id="reportTitle">Report content</h3>
+        <h3 id="reportTitle" data-i18n="report_title">Report content</h3>
         <p class="sub">Reports go to the server and flag the generation for human review.</p>
         <form id="reportForm">
-          <label for="reportReason">Reason</label>
+          <label for="reportReason" data-i18n="reason_label">Reason</label>
           <select id="reportReason" required>
             <option value="Inappropriate or unsafe content">Inappropriate or unsafe content</option>
             <option value="Depicts a real person without consent">Depicts a real person without consent</option>
@@ -1632,13 +1771,13 @@
             <option value="Spam or misleading content">Spam or misleading content</option>
             <option value="Other">Other</option>
           </select>
-          <label for="reportDetails">Details (optional)</label>
-          <textarea id="reportDetails" placeholder="Anything that helps the reviewer — a timestamp, who is depicted, the prompt used…"></textarea>
+          <label for="reportDetails" data-i18n="details_label">Details (optional)</label>
+          <textarea id="reportDetails" data-i18n-ph="report_details_ph" placeholder="Anything that helps the reviewer — a timestamp, who is depicted, the prompt used…"></textarea>
           <p class="meta-line" id="reportContext" style="margin-top:12px;"></p>
           <div class="auth-error" id="reportError" role="alert"></div>
           <div class="row-actions">
-            <button type="button" class="btn" data-close="reportModal">Cancel</button>
-            <button type="submit" class="btn primary">Submit report</button>
+            <button type="button" class="btn" data-close="reportModal" data-i18n="cancel">Cancel</button>
+            <button type="submit" class="btn primary" data-i18n="submit_report">Submit report</button>
           </div>
         </form>
       </div>
@@ -1660,6 +1799,249 @@
         function lsGet(k) { try { return window.localStorage.getItem(k); } catch (e) { return null; } }
         function lsSet(k, v) { try { window.localStorage.setItem(k, v); } catch (e) {} }
         function lsDel(k) { try { window.localStorage.removeItem(k); } catch (e) {} }
+
+        /* ---------- Phase O1: interface language (EN/Urdu) + theme ----------
+           Presentation only: a dictionary of interface-chrome strings,
+           applied to [data-i18n] / [data-i18n-ph] elements. The default
+           (no saved choice) is exactly the pre-O1 experience: English
+           primary, LTR, dark. Choices persist in localStorage and are
+           pre-applied before first paint by the <head> script. Dynamic
+           server-driven messages stay bilingual as before; the privacy
+           policy's legal text and the admin panel stay English. */
+        var LS_LANG = "ajk_lang";
+        var LS_THEME = "ajk_theme";
+        var I18N = {
+          nav_studio: { en: "Studio", ur: "اسٹوڈیو" },
+          nav_history: { en: "History", ur: "تاریخچہ" },
+          nav_plans: { en: "Plans", ur: "پلانز" },
+          nav_buy: { en: "Buy Credits", ur: "کریڈٹس خریدیں" },
+          nav_buy_short: { en: "Buy", ur: "خریدیں" },
+          nav_settings: { en: "Settings", ur: "ترتیبات" },
+          nav_privacy: { en: "Privacy", ur: "رازداری" },
+          sign_in: { en: "Sign in", ur: "لاگ اِن" },
+          sign_out: { en: "Sign out", ur: "لاگ آؤٹ" },
+          credits_word: { en: "credits", ur: "کریڈٹس" },
+          api_settings: { en: "API settings", ur: "API ترتیبات" },
+          describe_video: { en: "Describe your video", ur: "اپنی ویڈیو بیان کریں" },
+          prompt_language: { en: "Language", ur: "زبان" },
+          prompt_label: { en: "Prompt", ur: "پرامپٹ" },
+          prompt_ph: { en: "What do you want to make? Describe the scene, action and camera…", ur: "آپ کیا بنانا چاہتے ہیں؟ منظر، حرکت اور کیمرہ بیان کریں…" },
+          enhance_prompt: { en: "Enhance prompt", ur: "پرامپٹ بہتر کریں" },
+          format_label: { en: "Format", ur: "فارمیٹ" },
+          length_label: { en: "Length", ur: "دورانیہ" },
+          auto_label: { en: "Auto", ur: "خودکار" },
+          advanced_settings: { en: "Advanced settings", ur: "مزید ترتیبات" },
+          optional_tag: { en: "optional", ur: "اختیاری" },
+          video_mode: { en: "Video mode", ur: "ویڈیو موڈ" },
+          mode_realistic: { en: "Realistic Human Video", ur: "حقیقت پسند انسانی ویڈیو" },
+          mode_cartoon: { en: "Cartoon / Animation", ur: "کارٹون / اینیمیشن" },
+          character_optional: { en: "Character (optional)", ur: "کردار (اختیاری)" },
+          starting_image: { en: "Starting image (optional)", ur: "ابتدائی تصویر (اختیاری)" },
+          remove_image: { en: "Remove image", ur: "تصویر ہٹائیں" },
+          visual_style: { en: "Visual style", ur: "بصری انداز" },
+          quality_label: { en: "Quality", ur: "کوالٹی" },
+          camera_movement: { en: "Camera movement (optional)", ur: "کیمرہ حرکت (اختیاری)" },
+          shot_size: { en: "Shot size (optional)", ur: "شاٹ سائز (اختیاری)" },
+          voice_dialogue: { en: "Voice & Dialogue", ur: "آواز اور مکالمہ" },
+          sound_effects: { en: "Sound & Effects", ur: "آواز اور ایفیکٹس" },
+          script_label: { en: "Script", ur: "اسکرپٹ" },
+          spoken_language: { en: "Spoken language", ur: "بولی جانے والی زبان" },
+          script_typed: { en: "Script you typed in", ur: "آپ نے اسکرپٹ جس رسم الخط میں لکھا" },
+          voice_provider: { en: "Voice provider", ur: "آواز فراہم کنندہ" },
+          voice_label: { en: "Voice", ur: "آواز" },
+          style_label: { en: "Style", ur: "انداز" },
+          speed_label: { en: "Speed", ur: "رفتار" },
+          voice_preview: { en: "Voice preview", ur: "آواز کا پیش منظر" },
+          free_word: { en: "Free", ur: "مفت" },
+          preview_voice_btn: { en: "Preview voice", ur: "آواز سنیں" },
+          test_languages: { en: "Test languages", ur: "زبانیں آزمائیں" },
+          talking_character: { en: "Talking character (lip-sync)", ur: "بولتا کردار (لپ سنک)" },
+          saved_character: { en: "Saved character (optional)", ur: "محفوظ کردار (اختیاری)" },
+          voiceover_finished: { en: "Voiceover for a finished video", ur: "تیار ویڈیو کے لیے وائس اوور" },
+          finished_video: { en: "Finished video", ur: "تیار ویڈیو" },
+          create_talking: { en: "Create talking character", ur: "بولتا کردار بنائیں" },
+          add_voiceover: { en: "Add voiceover", ur: "وائس اوور لگائیں" },
+          sound_for_video: { en: "Sound for the video above", ur: "اوپر والی ویڈیو کے لیے آواز" },
+          describe_sounds: { en: "Describe the sounds (optional)", ur: "آوازیں بیان کریں (اختیاری)" },
+          sound_volume: { en: "Sound volume", ur: "آواز کا حجم" },
+          just_sound: { en: "Just a sound (no video)", ur: "صرف آواز (ویڈیو نہیں)" },
+          generate_sound_only: { en: "Generate sound only", ur: "صرف آواز بنائیں" },
+          watermark_title: { en: "Watermark (optional)", ur: "واٹر مارک (اختیاری)" },
+          add_watermark: { en: "Add watermark text", ur: "واٹر مارک متن شامل کریں" },
+          my_characters: { en: "My Characters", ur: "میرے کردار" },
+          character_name: { en: "Character name", ur: "کردار کا نام" },
+          character_photo: { en: "Character photo", ur: "کردار کی تصویر" },
+          bound_voice: { en: "Bound voice (optional)", ur: "منسلک آواز (اختیاری)" },
+          voice_language: { en: "Voice language", ur: "آواز کی زبان" },
+          voice_style: { en: "Voice style", ur: "آواز کا انداز" },
+          saved_characters: { en: "Saved characters", ur: "محفوظ کردار" },
+          save_character: { en: "Save character", ur: "کردار محفوظ کریں" },
+          preview_title: { en: "Preview", ur: "پیش منظر" },
+          stop_watching: { en: "Stop watching", ur: "دیکھنا بند کریں" },
+          report_content: { en: "Report content", ur: "مواد کی رپورٹ کریں" },
+          total_cost: { en: "Total cost", ur: "کل لاگت" },
+          generate_video: { en: "Generate video", ur: "ویڈیو بنائیں" },
+          generating: { en: "Generating…", ur: "بن رہی ہے…" },
+          generation_history: { en: "Generation history", ur: "بنائی گئی ویڈیوز کی تاریخ" },
+          credit_balance: { en: "Credit balance:", ur: "کریڈٹ بیلنس:" },
+          credit_balance_nc: { en: "Credit balance", ur: "کریڈٹ بیلنس" },
+          refresh: { en: "Refresh", ur: "تازہ کریں" },
+          join_selected: { en: "Join selected clips", ur: "منتخب کلپس جوڑیں" },
+          join_hint: { en: "Joining is free — pick 2 to 6 finished videos.", ur: "جوڑنا مفت ہے — 2 سے 6 تیار ویڈیوز منتخب کریں۔" },
+          plans_pricing: { en: "Plans & pricing", ur: "پلانز اور قیمتیں" },
+          current_plan: { en: "Current plan:", ur: "موجودہ پلان:" },
+          payment_history: { en: "Payment history", ur: "ادائیگیوں کی تاریخ" },
+          need_credits: { en: "Need credits right away?", ur: "فوری کریڈٹس چاہئیں؟" },
+          buy_pack_btn: { en: "Buy a credit pack", ur: "کریڈٹ پیک خریدیں" },
+          buy_credits_h1: { en: "Buy credits", ur: "کریڈٹس خریدیں" },
+          choose_pack: { en: "1 · Choose a pack", ur: "1 · پیک منتخب کریں" },
+          send_payment: { en: "2 · Send the payment", ur: "2 · ادائیگی بھیجیں" },
+          tell_txn: { en: "3 · Tell us the transaction ID", ur: "3 · ٹرانزیکشن ID بتائیں" },
+          pack_label: { en: "Pack", ur: "پیک" },
+          payment_method: { en: "Payment method", ur: "ادائیگی کا طریقہ" },
+          transaction_id: { en: "Transaction ID", ur: "ٹرانزیکشن ID" },
+          submit_verification: { en: "Submit for verification", ur: "تصدیق کے لیے بھیجیں" },
+          my_pack_purchases: { en: "My pack purchases", ur: "میری پیک خریداریاں" },
+          appearance: { en: "Appearance", ur: "ظاہری شکل" },
+          interface_language: { en: "Interface language", ur: "انٹرفیس کی زبان" },
+          theme_label: { en: "Theme", ur: "تھیم" },
+          theme_dark: { en: "Dark", ur: "تاریک" },
+          theme_light: { en: "Light", ur: "روشن" },
+          api_connection: { en: "API connection", ur: "API کنکشن" },
+          api_base_url: { en: "API base URL", ur: "API بیس URL" },
+          save: { en: "Save", ur: "محفوظ کریں" },
+          test_connection: { en: "Test connection", ur: "کنکشن آزمائیں" },
+          how_api: { en: "How the app uses the API", ur: "ایپ API کیسے استعمال کرتی ہے" },
+          feedback_title: { en: "Feedback", ur: "رائے / مسئلہ" },
+          category_label: { en: "Category", ur: "قسم" },
+          your_message: { en: "Your message", ur: "آپ کا پیغام" },
+          send_feedback: { en: "Send feedback", ur: "رائے بھیجیں" },
+          languages_title: { en: "Languages", ur: "زبانیں" },
+          account_title: { en: "Account", ur: "اکاؤنٹ" },
+          sign_in_create: { en: "Sign in / Create account", ur: "لاگ اِن / اکاؤنٹ بنائیں" },
+          email_label: { en: "Email", ur: "ای میل" },
+          password_label: { en: "Password", ur: "پاس ورڈ" },
+          user_id_label: { en: "User ID", ur: "یوزر ID" },
+          plan_label: { en: "Plan", ur: "پلان" },
+          plan_credits: { en: "Plan credits", ur: "پلان کریڈٹس" },
+          member_since: { en: "Member since", ur: "رکنیت از" },
+          model_label: { en: "Model", ur: "ماڈل" },
+          daily_cap: { en: "Daily cap", ur: "روزانہ حد" },
+          signin_methods: { en: "Sign-in methods", ur: "لاگ اِن کے طریقے" },
+          link_google: { en: "Link Google", ur: "Google جوڑیں" },
+          link_facebook: { en: "Link Facebook", ur: "Facebook جوڑیں" },
+          link_phone: { en: "Link a phone number", ur: "فون نمبر جوڑیں" },
+          send_code: { en: "Send code", ur: "کوڈ بھیجیں" },
+          six_digit_code: { en: "6-digit code", ur: "6 ہندسوں کا کوڈ" },
+          link_phone_btn: { en: "Link phone", ur: "فون جوڑیں" },
+          delete_account: { en: "Delete account", ur: "اکاؤنٹ حذف کریں" },
+          type_delete: { en: "Type DELETE to confirm", ur: "تصدیق کے لیے DELETE لکھیں" },
+          your_password_opt: { en: "Your password (if your account has one)", ur: "آپ کا پاس ورڈ (اگر اکاؤنٹ پر ہو)" },
+          delete_my_account: { en: "Delete my account", ur: "میرا اکاؤنٹ حذف کریں" },
+          welcome_title: { en: "Welcome to AJK AI", ur: "AJK AI میں خوش آمدید" },
+          auth_sub: { en: "Your Imagination. AI Motion. Sign in to generate videos and see your history. New accounts receive free starter credits.", ur: "آپ کا تصور، AI کی حرکت۔ ویڈیوز بنانے اور اپنی تاریخ دیکھنے کے لیے لاگ اِن کریں۔ نئے اکاؤنٹس کو مفت ابتدائی کریڈٹس ملتے ہیں۔" },
+          or_with_email: { en: "or with email", ur: "یا ای میل سے" },
+          create_account: { en: "Create account", ur: "اکاؤنٹ بنائیں" },
+          forgot_password: { en: "Forgot password?", ur: "پاس ورڈ بھول گئے؟" },
+          cancel: { en: "Cancel", ur: "منسوخ" },
+          back: { en: "Back", ur: "واپس" },
+          no_verify_email: { en: "Didn't get the verification email?", ur: "تصدیقی ای میل نہیں ملی؟" },
+          resend_verification: { en: "Resend verification", ur: "تصدیق دوبارہ بھیجیں" },
+          your_account_email: { en: "Your account email", ur: "آپ کے اکاؤنٹ کی ای میل" },
+          send_reset_link: { en: "Send reset link", ur: "ری سیٹ لنک بھیجیں" },
+          new_password: { en: "New password", ur: "نیا پاس ورڈ" },
+          set_new_password: { en: "Set new password", ur: "نیا پاس ورڈ مقرر کریں" },
+          back_to_sign_in: { en: "Back to sign in", ur: "لاگ اِن پر واپس" },
+          verifying_email: { en: "Verifying your email…", ur: "آپ کی ای میل کی تصدیق ہو رہی ہے…" },
+          mobile_number: { en: "Mobile number", ur: "موبائل نمبر" },
+          verify_sign_in: { en: "Verify & sign in", ur: "تصدیق کریں" },
+          please_wait: { en: "Please wait…", ur: "براہ کرم انتظار کریں…" },
+          continue_google: { en: "Continue with Google", ur: "Google سے جاری رکھیں" },
+          continue_google_soon: { en: "Continue with Google — coming soon", ur: "Google سے جاری رکھیں — جلد آ رہا ہے" },
+          continue_facebook: { en: "Continue with Facebook", ur: "Facebook سے جاری رکھیں" },
+          continue_facebook_soon: { en: "Continue with Facebook — coming soon", ur: "Facebook سے جاری رکھیں — جلد آ رہا ہے" },
+          continue_phone: { en: "Continue with Phone Number", ur: "فون نمبر سے جاری رکھیں" },
+          continue_phone_soon: { en: "Continue with Phone Number — coming soon", ur: "فون نمبر سے جاری رکھیں — جلد آ رہا ہے" },
+          report_title: { en: "Report content", ur: "مواد کی رپورٹ" },
+          reason_label: { en: "Reason", ur: "وجہ" },
+          details_label: { en: "Details (optional)", ur: "تفصیل (اختیاری)" },
+          submit_report: { en: "Submit report", ur: "رپورٹ بھیجیں" },
+          report_details_ph: { en: "Anything that helps the reviewer — a timestamp, who is depicted, the prompt used…", ur: "جائزہ لینے والے کی مدد کے لیے — وقت، کون دکھایا گیا، استعمال شدہ پرامپٹ…" },
+          privacy_policy: { en: "Privacy policy", ur: "رازداری کی پالیسی" },
+          tpl_talking_photo: { en: "Talking Photo", ur: "بولتی تصویر" },
+          tpl_kids_story: { en: "Kids Story", ur: "بچوں کی کہانی" },
+          tpl_product_ad: { en: "Product Ad", ur: "پراڈکٹ اشتہار" },
+          tpl_breaking_news: { en: "Breaking-News Short", ur: "بریکنگ نیوز شارٹ" },
+          tpl_music_video: { en: "Music Video", ur: "میوزک ویڈیو" },
+          tpl_cartoon_episode: { en: "Cartoon Episode", ur: "کارٹون قسط" }
+        };
+        var uiLang = lsGet(LS_LANG) === "ur" ? "ur" : "en";
+        var uiTheme = lsGet(LS_THEME) === "light" ? "light" : "dark";
+        function t(key) {
+          var e = I18N[key];
+          if (!e) return key;
+          return (uiLang === "ur" ? e.ur : e.en) || e.en || key;
+        }
+        function applyLanguage(lang) {
+          uiLang = lang === "ur" ? "ur" : "en";
+          lsSet(LS_LANG, uiLang);
+          var de = document.documentElement;
+          de.lang = uiLang;
+          de.dir = uiLang === "ur" ? "rtl" : "ltr";
+          de.classList.add("lang-applied");
+          $$("[data-i18n]").forEach(function (el) {
+            var k = el.getAttribute("data-i18n");
+            if (k && I18N[k]) el.textContent = t(k);
+          });
+          $$("[data-i18n-ph]").forEach(function (el) {
+            var k = el.getAttribute("data-i18n-ph");
+            if (k && I18N[k]) el.setAttribute("placeholder", t(k));
+          });
+          $$("[data-lang-choice]").forEach(function (b) {
+            b.classList.toggle("sel", b.getAttribute("data-lang-choice") === uiLang);
+          });
+          // The three cost-bearing action buttons are labelled by the
+          // config fillers ("Create talking character — Included …");
+          // swap only their leading phrase, keeping the cost suffix.
+          [["#lipsyncBtn", "create_talking"], ["#voiceoverBtn", "add_voiceover"],
+           ["#soundOnlyBtn", "generate_sound_only"]].forEach(function (spec) {
+            var b = $(spec[0]);
+            if (!b || !I18N[spec[1]]) return;
+            var cur = b.textContent || "";
+            var prefixes = [I18N[spec[1]].en, I18N[spec[1]].ur];
+            for (var i = 0; i < prefixes.length; i++) {
+              if (cur === prefixes[i]) { b.textContent = t(spec[1]); return; }
+              if (cur.indexOf(prefixes[i] + " — ") === 0) {
+                b.textContent = t(spec[1]) + cur.slice(prefixes[i].length);
+                return;
+              }
+            }
+          });
+          if (typeof fillGreeting === "function") fillGreeting();
+          if (typeof fillAuthUI === "function" && typeof cfg !== "undefined" && cfg) fillAuthUI();
+          if (typeof setAuthMode === "function" && typeof authMode !== "undefined") setAuthMode(authMode);
+          if (typeof renderLangLab === "function" && typeof cfg !== "undefined" && cfg) renderLangLab();
+        }
+        function applyTheme(theme) {
+          uiTheme = theme === "light" ? "light" : "dark";
+          lsSet(LS_THEME, uiTheme);
+          var de = document.documentElement;
+          de.setAttribute("data-theme", uiTheme);
+          de.style.colorScheme = uiTheme;
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute("content", uiTheme === "light" ? "#f4f6fb" : "#080a12");
+          $$("[data-theme-choice]").forEach(function (b) {
+            b.classList.toggle("sel", b.getAttribute("data-theme-choice") === uiTheme);
+          });
+        }
+        function wireLangThemeControls() {
+          $$("[data-lang-choice]").forEach(function (b) {
+            b.addEventListener("click", function () { applyLanguage(b.getAttribute("data-lang-choice")); });
+          });
+          $$("[data-theme-choice]").forEach(function (b) {
+            b.addEventListener("click", function () { applyTheme(b.getAttribute("data-theme-choice")); });
+          });
+        }
 
         function cleanBase(u) {
           u = (u || "").trim().replace(/\/+$/, "");
@@ -2252,8 +2634,12 @@
           var name = "";
           if (token && me) name = String(me.name || me.display_name || "").trim();
           el.textContent = name
-            ? "Hi " + name + ", what are we creating today? · آج کیا بنائیں گے؟"
-            : "What are we creating today? · آج کیا بنائیں گے؟";
+            ? (uiLang === "ur"
+                ? "السلام علیکم " + name + "، آج کیا بنائیں گے؟"
+                : "Hi " + name + ", what are we creating today? · آج کیا بنائیں گے؟")
+            : (uiLang === "ur"
+                ? "آج کیا بنائیں گے؟"
+                : "What are we creating today? · آج کیا بنائیں گے؟");
         }
         function setSignedInUI() {
           var signed = !!token;
@@ -2330,7 +2716,7 @@
           authMode = m;
           $("#authModeLogin").classList.toggle("sel", m === "login");
           $("#authModeRegister").classList.toggle("sel", m === "register");
-          $("#authSubmit").textContent = m === "login" ? "Sign in" : "Create account";
+          $("#authSubmit").textContent = m === "login" ? t("sign_in") : t("create_account");
           $("#authPass").setAttribute("autocomplete", m === "login" ? "current-password" : "new-password");
           hideAuthError();
         }
@@ -2351,12 +2737,12 @@
           if (!email || !pass) { showAuthError("Enter your email and password."); return; }
           var btn = $("#authSubmit");
           btn.disabled = true;
-          btn.textContent = "Please wait…";
+          btn.textContent = t("please_wait");
           api("/api/auth/" + (authMode === "register" ? "register" : "login"), {
             method: "POST", body: { email: email, password: pass }
           }).then(function (res) {
             btn.disabled = false;
-            btn.textContent = authMode === "login" ? "Sign in" : "Create account";
+            btn.textContent = authMode === "login" ? t("sign_in") : t("create_account");
             if (res.network) { showAuthError("Backend not connected — no response from " + apiBase + ". Check the API base URL in Settings."); return; }
             // Phase N: with email verification on, a successful signup
             // returns no token — the account activates via the emailed
@@ -2433,11 +2819,11 @@
           var on = !!(cfg && cfg.auth && cfg.auth.google && cfg.google_client_id);
           if (on) {
             g.disabled = false;
-            g.textContent = "Continue with Google";
+            g.textContent = t("continue_google");
             initGoogle();
           } else {
             g.disabled = true;
-            g.textContent = "Continue with Google — coming soon · جلد آ رہا ہے";
+            g.textContent = t("continue_google_soon");
           }
           // Phase N2: Facebook + phone activate exactly when the
           // server reports them configured; otherwise the honest
@@ -2445,13 +2831,13 @@
           var fb = $("#facebookBtn");
           var fbOn = !!(cfg && cfg.auth && cfg.auth.facebook && cfg.facebook_app_id);
           fb.disabled = !fbOn;
-          fb.textContent = fbOn ? "Continue with Facebook"
-            : "Continue with Facebook — coming soon · جلد آ رہا ہے";
+          fb.textContent = fbOn ? t("continue_facebook")
+            : t("continue_facebook_soon");
           var ph = $("#phoneBtn");
           var phOn = !!(cfg && cfg.auth && cfg.auth.phone);
           ph.disabled = !phOn;
-          ph.textContent = phOn ? "Continue with Phone Number"
-            : "Continue with Phone Number — coming soon · جلد آ رہا ہے";
+          ph.textContent = phOn ? t("continue_phone")
+            : t("continue_phone_soon");
         }
 
         function loadGis(done) {
@@ -2886,7 +3272,7 @@
             btn.insertBefore(spin, btn.firstChild);
           }
           if (!on && spin) spin.remove();
-          $("#generateLabel").textContent = on ? "Generating…" : "Generate video";
+          $("#generateLabel").textContent = on ? t("generating") : t("generate_video");
           $("#cancelBtn").style.display = on ? "inline-flex" : "none";
         }
         function stopPolling() {
@@ -4757,6 +5143,13 @@
           listed: "Listed — testing · درج ہے، جانچ جاری",
           unavailable: "Voice not yet available · آواز ابھی دستیاب نہیں"
         };
+        // Phase O1: the lab's combined "EN · UR" strings stay the single
+        // source of truth; each interface language shows its own half.
+        function labHalf(full) {
+          var parts = String(full || "").split(" · ");
+          if (parts.length < 2) return full;
+          return uiLang === "ur" ? parts.slice(1).join(" · ") : parts[0];
+        }
         function renderLangLab() {
           var list = $("#langLabList");
           if (!list) return;
@@ -4775,7 +5168,7 @@
             en.textContent = l.name_en;
             var badge = document.createElement("span");
             badge.className = "lang-badge " + (l.voice_status || "unavailable");
-            badge.textContent = LAB_BADGES[l.voice_status] || LAB_BADGES.unavailable;
+            badge.textContent = labHalf(LAB_BADGES[l.voice_status] || LAB_BADGES.unavailable);
             head.appendChild(nat); head.appendChild(en); head.appendChild(badge);
             row.appendChild(head);
             var meta = document.createElement("p");
@@ -4795,17 +5188,17 @@
             if (l.voice_status === "available" || l.voice_status === "listed") {
               var pv = document.createElement("button");
               pv.type = "button"; pv.className = "btn small";
-              pv.textContent = "Preview voice · آواز سنیں";
+              pv.textContent = labHalf("Preview voice · آواز سنیں");
               pv.addEventListener("click", function () { labPreview(l, pv); });
               acts.appendChild(pv);
             } else {
               var alt = document.createElement("span");
               alt.className = "lang-meta";
-              alt.textContent = "Alternatives: Urdu voice, or prompts in this language where supported · متبادل: اردو آواز";
+              alt.textContent = labHalf("Alternatives: Urdu voice, or prompts in this language where supported · متبادل: اردو آواز");
               acts.appendChild(alt);
               var rep = document.createElement("button");
               rep.type = "button"; rep.className = "btn small";
-              rep.textContent = "Report · رپورٹ";
+              rep.textContent = labHalf("Report · رپورٹ");
               rep.addEventListener("click", function () { labReport(l); });
               acts.appendChild(rep);
             }
@@ -4857,6 +5250,11 @@
         });
 
         /* ---------- init ---------- */
+        // Phase O1: wire + apply the saved language/theme first, so the
+        // first render is already in the user's chosen language/theme.
+        wireLangThemeControls();
+        applyTheme(uiTheme);
+        applyLanguage(uiLang);
         renderControls(FALLBACK);
         setSignedInUI();
         if (!token) renderHistoryState("signedout");
