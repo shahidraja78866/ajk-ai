@@ -135,6 +135,17 @@
 # Punjabi) — each proven to make NO provider call via the recorded
 # voice-calls hook. Frontend greps cover the Language Lab card, the
 # three status badges, the fallback note and the Voice-card link.
+# The Phase N tests (modern auth: identity model, Google Sign-In,
+# email verification + forgot/reset password, linking, account
+# deletion — owner spec documents 5+6) use a twenty-seventh instance
+# (port 18042, own DB) with GOOGLE_CLIENT_ID + the mailer configured,
+# both pointed at a local auth stub (test-auth-stub.js, port 18043)
+# serving Google's /tokeninfo and the mailer's /send and recording
+# every call — no real Google or email-provider calls anywhere. The
+# main server (no auth env) proves the fail-closed side: the config
+# auth block is all-false with no google_client_id exposed, Google
+# sign-in answers 503 auth_provider_not_configured, and the mail
+# endpoints answer 503 mailer_not_configured.
 # e.g.  ADMIN_EMAIL=admin@example.com FAL_MODEL_4K=test-4k-model TEST_RECORD_FAL_BODY=1 TRANSLATE_API_BASE=http://127.0.0.1:18099 npm start
 # Run against a FRESH database (fixed test emails are registered each run).
 TEST_FAL_MODEL_4K=${TEST_FAL_MODEL_4K:-fal-ai/kling-video/o3/4k/text-to-video}
@@ -2498,6 +2509,176 @@ check "phase M frontend: language lab card + voice-card link ship" "yes" "$(echo
 check "phase M frontend: the three honest status badges ship" "yes" "$(echo "$HOMEPAGE26" | grep -q 'Voice available · آواز دستیاب' && echo "$HOMEPAGE26" | grep -q 'Listed — testing · درج ہے، جانچ جاری' && echo "$HOMEPAGE26" | grep -q 'Voice not yet available · آواز ابھی دستیاب نہیں' && echo yes || echo no)"
 check "phase M frontend: unavailable-language fallback note ships" "yes" "$(echo "$HOMEPAGE26" | grep -q 'Alternatives: Urdu voice, or prompts in this language where supported · متبادل: اردو آواز' && echo yes || echo no)"
 kill $SRV26_PID $MLSTUB_PID 2>/dev/null
+
+echo "--- modern auth: identities, Google, email verification + reset, delete (Phase N, auth stub) ---"
+NA_STUB_PORT=18043
+B27=http://127.0.0.1:18042
+rm -f /tmp/myvideoai-phaseN-test.db*
+AUTH_STUB_PORT=$NA_STUB_PORT node "$(dirname "$0")/test-auth-stub.js" > /tmp/auth-stub-phaseN.log 2>&1 &
+NASTUB_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null http://127.0.0.1:$NA_STUB_PORT/__calls && break || sleep 0.25; done
+NA_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-phaseN-test.db PORT=18042 FAL_KEY=dummy_test_key "$NA_JWT_NAME=phaseN-instance-dummy-value" \
+  ADMIN_EMAIL=nadmin@example.com \
+  GOOGLE_CLIENT_ID=test-client-id GOOGLE_TOKENINFO_BASE=http://127.0.0.1:$NA_STUB_PORT \
+  MAILER_API_BASE=http://127.0.0.1:$NA_STUB_PORT MAILER_API_KEY=test-mail-key MAILER_FROM=noreply@ajk-ai.test \
+  PUBLIC_BASE_URL=http://127.0.0.1:18042 \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-phaseN-test.log 2>&1 &
+SRV27_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B27/api/health && break || sleep 0.25; done
+mailcount() { # $1=recipient -> number of mails the stub recorded for them
+  curl -s http://127.0.0.1:$NA_STUB_PORT/__calls | python3 -c "
+import sys, json
+print(len([m for m in json.load(sys.stdin)['mails'] if m['to'] == '$1']))"
+}
+mailtoken() { # $1=recipient $2=verify|reset $3=index(0=first,-1=last) -> raw token
+  curl -s http://127.0.0.1:$NA_STUB_PORT/__calls | python3 -c "
+import sys, json, re
+ms = [m for m in json.load(sys.stdin)['mails'] if m['to'] == '$1' and m['text'] and ('?$2=' in m['text'])]
+if not ms: print('')
+else:
+    mm = re.search(r'\?$2=([0-9a-f]{64})', ms[$3]['text'])
+    print(mm.group(1) if mm else '')"
+}
+regverify() { # $1=email -> registers + verifies via the stub mail; echoes the login token
+  curl -s -o /dev/null -X POST $B27/api/auth/register -H 'Content-Type: application/json' -d "{\"email\":\"$1\",\"password\":\"password123\"}"
+  local T=$(mailtoken "$1" verify -1)
+  curl -s -o /dev/null -X POST $B27/api/auth/verify-email -H 'Content-Type: application/json' -d "{\"token\":\"$T\"}"
+  curl -s -X POST $B27/api/auth/login -H 'Content-Type: application/json' -d "{\"email\":\"$1\",\"password\":\"password123\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))'
+}
+CFG27=$(curl -s $B27/api/config)
+check "phase N config: auth block (google on; facebook/phone off; email verification + reset on)" "True/False/False/True/True" "$(echo $CFG27 | python3 -c 'import sys,json;a=json.load(sys.stdin)["auth"];print("/".join(str(a[k]) for k in ["google","facebook","phone","email_verification","password_reset"]))')"
+check "phase N config: google_client_id exposed (public id) only when configured" "test-client-id" "$(echo $CFG27 | python3 -c 'import sys,json;print(json.load(sys.stdin).get("google_client_id"))')"
+check "migration v19: identity + token tables, user columns, password identity backfill shape" "ok" "$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-phaseN-test.db');
+const tabs = db.prepare(\"SELECT COUNT(*) AS c FROM sqlite_master WHERE type='table' AND name IN ('user_identities','auth_tokens')\").get().c;
+const cols = db.prepare(\"SELECT name FROM pragma_table_info('users') WHERE name IN ('email_verified','token_version','signup_bonus_granted')\").all().length;
+const mig = db.prepare('SELECT COUNT(*) AS c FROM schema_migrations WHERE version = 19').get().c;
+console.log(Number(tabs) === 2 && cols === 3 && Number(mig) === 1 ? 'ok' : 'bad');
+")"
+# -- Google sign-in: create, repeat (same user, bonus once), bad tokens --
+GR27=$(curl -s -w '\n%{http_code}' -X POST $B27/api/auth/google -H 'Content-Type: application/json' -d '{"id_token":"valid-google-token"}')
+check "phase N google: first sign-in creates the account (201)" "201" "$(echo "$GR27" | tail -1)"
+GTOK=$(echo "$GR27" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+check "phase N google: signup bonus lands at creation (100)" "100" "$(echo "$GR27" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+GID=$(curl -s $B27/api/me -H "Authorization: Bearer $GTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+check "phase N google: account email is the Google email (no collision)" "googleuser@example.com" "$(curl -s $B27/api/me -H "Authorization: Bearer $GTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["email"])')"
+GR27B=$(curl -s -w '\n%{http_code}' -X POST $B27/api/auth/google -H 'Content-Type: application/json' -d '{"id_token":"valid-google-token"}')
+check "phase N google: repeat sign-in is a login (200), same user, bonus NOT doubled" "200/$GID/100" "$(echo "$GR27B" | tail -1)/$(curl -s $B27/api/me -H "Authorization: Bearer $(echo "$GR27B" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(str(d["id"])+"/"+str(d["credits"]))')"
+check "phase N google: wrong audience -> 401" "401" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/auth/google -H 'Content-Type: application/json' -d '{"id_token":"wrong-aud-token"}')"
+check "phase N google: expired token -> 401" "401" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/auth/google -H 'Content-Type: application/json' -d '{"id_token":"expired-token"}')"
+check "phase N google: unverified Google email -> 401" "401" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/auth/google -H 'Content-Type: application/json' -d '{"id_token":"unverified-email-token"}')"
+check "phase N google: unknown token -> 401" "401" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/auth/google -H 'Content-Type: application/json' -d '{"id_token":"nonsense"}')"
+# -- NO AUTO-MERGE: a Google email matching a password account stays separate --
+curl -s -o /dev/null -X POST $B27/api/auth/register -H 'Content-Type: application/json' -d '{"email":"mergepw@example.com","password":"password123"}'
+MPTOK0=$(mailtoken mergepw@example.com verify -1)
+curl -s -o /dev/null -X POST $B27/api/auth/verify-email -H 'Content-Type: application/json' -d "{\"token\":\"$MPTOK0\"}"
+PWTOK=$(curl -s -X POST $B27/api/auth/login -H 'Content-Type: application/json' -d '{"email":"mergepw@example.com","password":"password123"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+PWID=$(curl -s $B27/api/me -H "Authorization: Bearer $PWTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+MG27=$(curl -s -w '\n%{http_code}' -X POST $B27/api/auth/google -H 'Content-Type: application/json' -d '{"id_token":"merge-google-token"}')
+MGTOK=$(echo "$MG27" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+MGID=$(curl -s $B27/api/me -H "Authorization: Bearer $MGTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+check "phase N no-merge: Google sign-in with a password account's email creates a DIFFERENT user" "different" "$([[ "$MGID" != "$PWID" && -n "$MGID" ]] && echo different || echo SAME)"
+check "phase N no-merge: the Google account is namespaced apart; the password account is untouched" "google-google-sub-merge@accounts.ajk-ai.local/100" "$(curl -s $B27/api/me -H "Authorization: Bearer $MGTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["email"])')/$(curl -s $B27/api/me -H "Authorization: Bearer $PWTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+# -- Linking with consent (signed in + provider verification) --
+LK27=$(curl -s -w '\n%{http_code}' -X POST $B27/api/auth/link/google -H "Authorization: Bearer $PWTOK" -H 'Content-Type: application/json' -d '{"id_token":"valid-google-token-two"}')
+check "phase N link: signed-in password user links Google (201)" "201" "$(echo "$LK27" | tail -1)"
+check "phase N link: identities list shows password + google" "google,password" "$(curl -s $B27/api/auth/identities -H "Authorization: Bearer $PWTOK" | python3 -c 'import sys,json;print(",".join(sorted(i["provider"] for i in json.load(sys.stdin)["identities"])))')"
+L2TOK=$(regverify linkme2@example.com)
+LK2=$(curl -s -w '\n%{http_code}' -X POST $B27/api/auth/link/google -H "Authorization: Bearer $L2TOK" -H 'Content-Type: application/json' -d '{"id_token":"valid-google-token-two"}')
+check "phase N link: the same Google identity on a second account -> 409 identity_in_use" "409/identity_in_use" "$(echo "$LK2" | tail -1)/$(echo "$LK2" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+check "phase N link: linked Google now signs into the password account" "$PWID" "$(curl -s -X POST $B27/api/auth/google -H 'Content-Type: application/json' -d '{"id_token":"valid-google-token-two"}' > /tmp/na-lk-login.json; curl -s $B27/api/me -H "Authorization: Bearer $(python3 -c 'import json;print(json.load(open("/tmp/na-lk-login.json"))["token"])')" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')"
+UNL=$(curl -s -w '\n%{http_code}' -X POST $B27/api/auth/unlink -H "Authorization: Bearer $PWTOK" -H 'Content-Type: application/json' -d '{"provider":"google"}')
+check "phase N unlink: password user can unlink Google (keeps the password method)" "200/password" "$(echo "$UNL" | tail -1)/$(curl -s $B27/api/auth/identities -H "Authorization: Bearer $PWTOK" | python3 -c 'import sys,json;print(",".join(i["provider"] for i in json.load(sys.stdin)["identities"]))')"
+UNL2=$(curl -s -w '\n%{http_code}' -X POST $B27/api/auth/unlink -H "Authorization: Bearer $GTOK" -H 'Content-Type: application/json' -d '{"provider":"google"}')
+check "phase N unlink: the LAST sign-in method cannot be removed (400 last_auth_method)" "400/last_auth_method" "$(echo "$UNL2" | tail -1)/$(echo "$UNL2" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+# -- Email verification flow (mailer configured) --
+VR27=$(curl -s -w '\n%{http_code}' -X POST $B27/api/auth/register -H 'Content-Type: application/json' -d '{"email":"verifyme@example.com","password":"password123"}')
+check "phase N verify: signup with the mailer on -> 201 verification_required, NO token" "201/True/False" "$(echo "$VR27" | tail -1)/$(echo "$VR27" | sed '$d' | python3 -c 'import sys,json;d=json.load(sys.stdin);print(str(d.get("verification_required"))+"/"+str("token" in d))')"
+check "phase N verify: unverified login -> 403 email_not_verified" "403/email_not_verified" "$(curl -s -w '\n%{http_code}' -X POST $B27/api/auth/login -H 'Content-Type: application/json' -d '{"email":"verifyme@example.com","password":"password123"}' > /tmp/na-vlogin.txt; tail -1 /tmp/na-vlogin.txt)/$(sed '$d' /tmp/na-vlogin.txt | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+check "phase N verify: exactly one verification mail was sent" "1" "$(mailcount verifyme@example.com)"
+VRAW=$(mailtoken verifyme@example.com verify -1)
+check "phase N verify: a wrong token -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/auth/verify-email -H 'Content-Type: application/json' -d '{"token":"0000000000000000000000000000000000000000000000000000000000000000"}')"
+VOK=$(curl -s -w '\n%{http_code}' -X POST $B27/api/auth/verify-email -H 'Content-Type: application/json' -d "{\"token\":\"$VRAW\"}")
+check "phase N verify: the emailed token verifies and the bonus lands NOW (100)" "200/100" "$(echo "$VOK" | tail -1)/$(echo "$VOK" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "phase N verify: login works after verification" "100" "$(curl -s -X POST $B27/api/auth/login -H 'Content-Type: application/json' -d '{"email":"verifyme@example.com","password":"password123"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "phase N verify: the token is single-use (reuse -> 400)" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/auth/verify-email -H 'Content-Type: application/json' -d "{\"token\":\"$VRAW\"}")"
+# -- Resend: fresh token supersedes; per-email rate limits hold --
+curl -s -o /dev/null -X POST $B27/api/auth/register -H 'Content-Type: application/json' -d '{"email":"resendme@example.com","password":"password123"}'
+ROLD=$(mailtoken resendme@example.com verify -1)
+node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-phaseN-test.db');
+db.prepare(\"UPDATE auth_tokens SET created_at = datetime('now','-3 minutes') WHERE purpose = 'verify_email' AND user_id = (SELECT id FROM users WHERE email = 'resendme@example.com')\").run();
+console.log('aged the first resendme token past the 1-minute resend limit');
+"
+check "phase N resend: generic 200" "200" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/auth/resend-verification -H 'Content-Type: application/json' -d '{"email":"resendme@example.com"}')"
+check "phase N resend: a fresh mail was issued" "2" "$(mailcount resendme@example.com)"
+check "phase N resend: an immediate second resend is rate-limited (still 2 mails, still generic 200)" "200/2" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/auth/resend-verification -H 'Content-Type: application/json' -d '{"email":"resendme@example.com"}')/$(mailcount resendme@example.com)"
+RNEW=$(mailtoken resendme@example.com verify -1)
+check "phase N resend: the superseded token is dead (400)" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/auth/verify-email -H 'Content-Type: application/json' -d "{\"token\":\"$ROLD\"}")"
+check "phase N resend: the fresh token verifies (200)" "200" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/auth/verify-email -H 'Content-Type: application/json' -d "{\"token\":\"$RNEW\"}")"
+check "phase N resend: unknown email still gets the generic 200, and no mail" "200/0" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/auth/resend-verification -H 'Content-Type: application/json' -d '{"email":"ghost@example.com"}')/$(mailcount ghost@example.com)"
+# -- Forgot / reset password --
+VOLD=$(curl -s -X POST $B27/api/auth/login -H 'Content-Type: application/json' -d '{"email":"verifyme@example.com","password":"password123"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+MC_BEFORE=$(curl -s http://127.0.0.1:$NA_STUB_PORT/__calls | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["mails"]))')
+check "phase N forgot: unknown email -> generic 200 and NO mail" "200/$MC_BEFORE" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/auth/forgot -H 'Content-Type: application/json' -d '{"email":"ghost@example.com"}')/$(curl -s http://127.0.0.1:$NA_STUB_PORT/__calls | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["mails"]))')"
+check "phase N forgot: known email -> 200 and exactly one reset mail" "200/1" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/auth/forgot -H 'Content-Type: application/json' -d '{"email":"verifyme@example.com"}')/$(curl -s http://127.0.0.1:$NA_STUB_PORT/__calls | python3 -c 'import sys,json;print(len([m for m in json.load(sys.stdin)["mails"] if m["to"]=="verifyme@example.com" and m["text"] and "?reset=" in m["text"]]))')"
+RRAW=$(mailtoken verifyme@example.com reset -1)
+check "phase N reset: wrong token -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/auth/reset -H 'Content-Type: application/json' -d '{"token":"1111111111111111111111111111111111111111111111111111111111111111","new_password":"newpassword456"}')"
+check "phase N reset: too-short new password -> 400 (token NOT burned)" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/auth/reset -H 'Content-Type: application/json' -d "{\"token\":\"$RRAW\",\"new_password\":\"short\"}")"
+check "phase N reset: the emailed token resets (200)" "200" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/auth/reset -H 'Content-Type: application/json' -d "{\"token\":\"$RRAW\",\"new_password\":\"newpassword456\"}")"
+check "phase N reset: old password now fails (401)" "401" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/auth/login -H 'Content-Type: application/json' -d '{"email":"verifyme@example.com","password":"password123"}')"
+VNEW=$(curl -s -X POST $B27/api/auth/login -H 'Content-Type: application/json' -d '{"email":"verifyme@example.com","password":"newpassword456"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+check "phase N reset: new password signs in" "200" "$(curl -s -o /dev/null -w '%{http_code}' $B27/api/me -H "Authorization: Bearer $VNEW")"
+check "phase N reset: the pre-reset session is dead (token_version) -> 401" "401" "$(curl -s -o /dev/null -w '%{http_code}' $B27/api/me -H "Authorization: Bearer $VOLD")"
+check "phase N reset: the token is single-use (reuse -> 400)" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/auth/reset -H 'Content-Type: application/json' -d "{\"token\":\"$RRAW\",\"new_password\":\"anotherpass789\"}")"
+# -- Mail-send failure is honest --
+FM=$(curl -s -w '\n%{http_code}' -X POST $B27/api/auth/register -H 'Content-Type: application/json' -d '{"email":"FAILMAIL@example.com","password":"password123"}')
+check "phase N mailer: a failed send answers 502 mail_send_failed (account stays unverified)" "502/mail_send_failed/403" "$(echo "$FM" | tail -1)/$(echo "$FM" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')/$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/auth/login -H 'Content-Type: application/json' -d '{"email":"FAILMAIL@example.com","password":"password123"}')"
+# -- Account deletion --
+DTOK=$(regverify deleteme@example.com)
+check "phase N delete: wrong password -> 401" "401" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/account/delete -H "Authorization: Bearer $DTOK" -H 'Content-Type: application/json' -d '{"confirm":"DELETE","password":"wrongpass99"}')"
+check "phase N delete: missing typed DELETE -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/account/delete -H "Authorization: Bearer $DTOK" -H 'Content-Type: application/json' -d '{"confirm":"yes","password":"password123"}')"
+check "phase N delete: correct confirmation deletes (200)" "200" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/account/delete -H "Authorization: Bearer $DTOK" -H 'Content-Type: application/json' -d '{"confirm":"DELETE","password":"password123"}')"
+check "phase N delete: the account is gone (login 401, old session 401)" "401/401" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/auth/login -H 'Content-Type: application/json' -d '{"email":"deleteme@example.com","password":"password123"}')/$(curl -s -o /dev/null -w '%{http_code}' $B27/api/me -H "Authorization: Bearer $DTOK")"
+# -- Admin surfaces never expose hashes or tokens --
+ATOK27=$(regverify nadmin@example.com)
+AUSERS=$(curl -s $B27/api/admin/users -H "Authorization: Bearer $ATOK27")
+check "phase N admin: users list carries NO password_hash and NO token material" "clean" "$(echo "$AUSERS" | grep -q 'password_hash\|token_hash' && echo LEAK || echo clean)"
+check "phase N admin: users list still lists accounts (sanity)" "yes" "$(echo "$AUSERS" | grep -q 'googleuser@example.com' && echo yes || echo no)"
+# -- Tokens are stored HASHED only (DB-level proof) --
+check "phase N tokens: DB stores sha256 hashes only — no raw token anywhere" "ok" "$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+import { createHash } from 'node:crypto';
+const db = new DatabaseSync('/tmp/myvideoai-phaseN-test.db');
+const rows = db.prepare('SELECT token_hash FROM auth_tokens').all();
+const raws = ['$VRAW', '$RRAW', '$ROLD', '$RNEW', '$MPTOK0'];
+const hashes = new Set(rows.map(r => r.token_hash));
+const shapeOk = rows.length > 0 && rows.every(r => /^[0-9a-f]{64}$/.test(r.token_hash));
+const noRaw = raws.every(t => !hashes.has(t));
+const hashMatches = raws.slice(0, 2).every(t => hashes.has(createHash('sha256').update(t).digest('hex')));
+console.log(shapeOk && noRaw && hashMatches ? 'ok' : 'bad');
+")"
+RAWINDB=$(cat /tmp/myvideoai-phaseN-test.db /tmp/myvideoai-phaseN-test.db-wal 2>/dev/null | grep -a -c "$RRAW" || true)
+check "phase N tokens: the raw reset token never touches the DB files" "0" "$RAWINDB"
+# -- Frontend greps --
+HOMEPAGE27=$(curl -s $B27/)
+check "phase N frontend: the three provider buttons + honest coming-soon labels ship" "yes" "$(echo "$HOMEPAGE27" | grep -q 'Continue with Google' && echo "$HOMEPAGE27" | grep -q 'Continue with Facebook' && echo "$HOMEPAGE27" | grep -q 'Continue with Phone Number' && echo "$HOMEPAGE27" | grep -q 'coming soon · جلد آ رہا ہے' && echo yes || echo no)"
+check "phase N frontend: GIS client + google flow + forgot link + link-in-Settings note ship" "yes" "$(echo "$HOMEPAGE27" | grep -q 'https://accounts.google.com/gsi/client' && echo "$HOMEPAGE27" | grep -q 'id="googleBtnWrap"' && echo "$HOMEPAGE27" | grep -q 'id="forgotLink"' && echo "$HOMEPAGE27" | grep -q 'Forgot password?' && echo "$HOMEPAGE27" | grep -q 'link Google in Settings' && echo yes || echo no)"
+check "phase N frontend: Settings account section (identities, link, delete) ships" "yes" "$(echo "$HOMEPAGE27" | grep -q 'id="meIdentities"' && echo "$HOMEPAGE27" | grep -q 'id="linkGoogleBtn"' && echo "$HOMEPAGE27" | grep -q 'id="deleteAccountBtn"' && echo "$HOMEPAGE27" | grep -q 'id="deleteConfirm"' && echo yes || echo no)"
+check "phase N frontend: verify/reset deep-link handling ships" "yes" "$(echo "$HOMEPAGE27" | grep -q 'handleAuthDeepLinks' && echo "$HOMEPAGE27" | grep -q '/api/auth/verify-email' && echo "$HOMEPAGE27" | grep -q '/api/auth/reset' && echo "$HOMEPAGE27" | grep -q '/api/account/delete' && echo yes || echo no)"
+kill $SRV27_PID $NASTUB_PID 2>/dev/null
+
+echo "--- modern auth: fail closed while unconfigured (main server) ---"
+CFG0N=$(curl -s $B/api/config)
+check "phase N config (main): auth block all false" "False/False/False/False/False" "$(echo $CFG0N | python3 -c 'import sys,json;a=json.load(sys.stdin)["auth"];print("/".join(str(a[k]) for k in ["google","facebook","phone","email_verification","password_reset"]))')"
+check "phase N config (main): google_client_id is NOT exposed while unconfigured" "absent" "$(echo $CFG0N | python3 -c 'import sys,json;print("present" if "google_client_id" in json.load(sys.stdin) else "absent")')"
+GUN=$(curl -s -w '\n%{http_code}' -X POST $B/api/auth/google -H 'Content-Type: application/json' -d '{"id_token":"valid-google-token"}')
+check "phase N google unconfigured -> 503 auth_provider_not_configured" "503/auth_provider_not_configured" "$(echo "$GUN" | tail -1)/$(echo "$GUN" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+check "phase N forgot unconfigured -> 503 mailer_not_configured" "503/mailer_not_configured" "$(curl -s -w '\n%{http_code}' -X POST $B/api/auth/forgot -H 'Content-Type: application/json' -d '{"email":"test@example.com"}' > /tmp/na-fgt.txt; tail -1 /tmp/na-fgt.txt)/$(sed '$d' /tmp/na-fgt.txt | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+check "phase N resend unconfigured -> 503 mailer_not_configured" "503" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/auth/resend-verification -H 'Content-Type: application/json' -d '{"email":"test@example.com"}')"
 
 echo "--- rate limit: burst until 429 ---"
 FOUND429="no"

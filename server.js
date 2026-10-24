@@ -33,7 +33,7 @@ import rateLimit from 'express-rate-limit';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
-import { randomUUID, createSign, createHash, timingSafeEqual } from 'node:crypto';
+import { randomUUID, randomBytes, createSign, createHash, timingSafeEqual } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite'; // built into Node 22.5+/24 — no native build step
@@ -352,6 +352,35 @@ const CONFIG = {
   seedanceDurations: [5, 10, 15, 20, 30],
   seedanceAspects: ['16:9', '9:16', '1:1'],
   seedanceResolution: '720p',
+  // --- Modern auth (Phase N: identity model, Google Sign-In, email flows) --
+  // Owner spec documents 5+6 (2026-10-24). Every provider here is a
+  // CONFIG-GATED, FAIL-CLOSED adapter in the PayFast/Azure pattern:
+  // nothing is offered in the UI and every endpoint answers 503 until
+  // the OWNER's own provider account is configured in the environment.
+  //  - Google Sign-In activates only when GOOGLE_CLIENT_ID (the owner's
+  //    own Google Cloud OAuth Web client id) is set. ID tokens are
+  //    verified server-side against Google's tokeninfo endpoint;
+  //    GOOGLE_TOKENINFO_BASE overrides the host (tests point it at a
+  //    local stub — production must never set it).
+  //  - The mailer activates only when MAILER_API_BASE + MAILER_API_KEY +
+  //    MAILER_FROM are ALL set. It is a generic HTTPS email API adapter:
+  //    POST {base}/send with a Bearer key and a JSON {from,to,subject,
+  //    text} body. It powers email verification + password reset ONLY;
+  //    while it is off, signup keeps its historical behaviour (verified
+  //    at once, bonus at signup) so nobody is ever locked out of a
+  //    feature that was never switched on.
+  // SECURITY (owner's hard rules): verification/reset tokens are stored
+  // SHA-256-HASHED only, are short-lived and single-use, and are never
+  // logged; NO admin surface ever exposes a password hash or a token;
+  // accounts are NEVER auto-merged on an email match — identities are
+  // linked only by a signed-in user after provider verification.
+  googleClientId: (process.env.GOOGLE_CLIENT_ID || '').trim(),
+  googleTokeninfoBase: (process.env.GOOGLE_TOKENINFO_BASE || 'https://oauth2.googleapis.com').replace(/\/+$/, ''),
+  mailer: {
+    base: (process.env.MAILER_API_BASE || '').trim().replace(/\/+$/, ''),
+    key: (process.env.MAILER_API_KEY || '').trim(),
+    from: (process.env.MAILER_FROM || '').trim(),
+  },
 };
 
 // ---------- Prompt languages ----------
@@ -856,6 +885,59 @@ const MIGRATIONS = [
   { version: 18, up: `
     ALTER TABLE generations ADD COLUMN camera_move TEXT;
     ALTER TABLE generations ADD COLUMN shot_size TEXT;` },
+  // v19 — modern auth (Phase N): the identity model, hashed single-use
+  // auth tokens, and the user columns the new flows need.
+  //  - user_identities: one row per sign-in method bound to an account
+  //    (provider 'password' | 'google' | 'facebook' | 'phone';
+  //    provider_user_id is the email for password, Google's `sub`, etc).
+  //    UNIQUE(provider, provider_user_id) makes an identity bindable to
+  //    exactly ONE account — the database-level backstop for the
+  //    no-auto-merge rule: an email match alone NEVER links accounts.
+  //  - auth_tokens: email-verification + password-reset tokens, stored
+  //    SHA-256-HASHED only (the raw token exists solely in the email
+  //    link). expires_at is epoch MILLISECONDS (compared in JS);
+  //    used_at is set when the token is consumed — single-use.
+  //  - users.email_verified: 1 for ALL existing rows (grandfathered —
+  //    owner spec doc 6: verification applies to NEW signups, and only
+  //    while the mailer is configured).
+  //  - users.token_version: carried in every JWT as `tv`; the auth
+  //    middleware rejects a mismatch, so a password reset (or account
+  //    change) immediately invalidates every previously issued session.
+  //  - users.signup_bonus_granted: 1 for all existing rows (they were
+  //    granted at signup under the historical flow). New flows grant
+  //    the bonus through grantSignupBonus(), which flips this flag in
+  //    the same transaction — exactly once per account, whichever
+  //    sign-in method created it.
+  //  - Backfill: every existing user gets their 'password' identity
+  //    row (provider_user_id = their email).
+  { version: 19, up: `
+    CREATE TABLE IF NOT EXISTS user_identities (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      provider TEXT NOT NULL,
+      provider_user_id TEXT NOT NULL,
+      email TEXT,
+      phone TEXT,
+      verified INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(provider, provider_user_id)
+    );
+    CREATE TABLE IF NOT EXISTS auth_tokens (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      purpose TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      expires_at INTEGER NOT NULL,
+      used_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0;
+    UPDATE users SET email_verified = 1;
+    ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE users ADD COLUMN signup_bonus_granted INTEGER NOT NULL DEFAULT 0;
+    UPDATE users SET signup_bonus_granted = 1;
+    INSERT OR IGNORE INTO user_identities (user_id, provider, provider_user_id, email, verified)
+      SELECT id, 'password', email, email, 1 FROM users;` },
 ];
 {
   const applied = new Set(db.prepare('SELECT version FROM schema_migrations').all().map(r => r.version));
@@ -1140,10 +1222,142 @@ const feedbackLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 10,
   keyGenerator: (req) => String(req.user?.id || req.ip),
   message: { error: 'Rate limit: max 10 feedback reports per hour.' } });
 
+// ---------- Modern auth (Phase N): adapters, tokens, identities ----------
+// Verification / password-reset emails send through the mailer adapter
+// and Google sign-in attempts hit Google — both get their own per-IP
+// limiters on top of the per-account limits inside the handlers.
+const authMailLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 20,
+  message: { error: 'Rate limit: too many email requests — please try again later.' } });
+const googleAuthLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 60,
+  message: { error: 'Rate limit: too many sign-in attempts — please try again later.' } });
+
+function mailerConfigured() {
+  return !!(CONFIG.mailer.base && CONFIG.mailer.key && CONFIG.mailer.from);
+}
+function googleAuthConfigured() { return !!CONFIG.googleClientId; }
+
+// Generic HTTPS email-API adapter (see the Phase N CONFIG note):
+// POST {MAILER_API_BASE}/send with a Bearer key and a JSON body.
+// Throws on any non-2xx so callers fail honestly; error messages never
+// include the email's contents (which may carry a secret token link).
+async function sendMail({ to, subject, text }) {
+  const r = await fetch(`${CONFIG.mailer.base}/send`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json',
+               Authorization: `Bearer ${CONFIG.mailer.key}` },
+    body: JSON.stringify({ from: CONFIG.mailer.from, to, subject, text }),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!r.ok) throw Object.assign(new Error(`MAILER_${r.status}`), { status: 502 });
+  return true;
+}
+
+// Auth tokens (email verification, password reset): the RAW token is a
+// 256-bit random value that exists only in the emailed link; the DB
+// stores its SHA-256 hash. Issuing a fresh token supersedes every
+// still-unused token of the same purpose for that user (a resend kills
+// the previous link). Consuming is single-use and expiry-checked.
+function sha256Hex(s) { return createHash('sha256').update(String(s)).digest('hex'); }
+function issueAuthToken(userId, purpose, ttlMs) {
+  db.prepare('DELETE FROM auth_tokens WHERE user_id = ? AND purpose = ? AND used_at IS NULL')
+    .run(userId, purpose);
+  const raw = randomBytes(32).toString('hex');
+  db.prepare('INSERT INTO auth_tokens (user_id, purpose, token_hash, expires_at) VALUES (?, ?, ?, ?)')
+    .run(userId, purpose, sha256Hex(raw), Date.now() + ttlMs);
+  return raw;
+}
+function consumeAuthToken(raw, purpose) {
+  if (!raw || typeof raw !== 'string') return null;
+  const row = db.prepare('SELECT * FROM auth_tokens WHERE token_hash = ? AND purpose = ?')
+    .get(sha256Hex(raw), purpose);
+  if (!row || row.used_at || Number(row.expires_at) <= Date.now()) return null;
+  db.prepare("UPDATE auth_tokens SET used_at = datetime('now') WHERE id = ?").run(row.id);
+  return row;
+}
+
+// The signup bonus lands EXACTLY ONCE per account, whichever sign-in
+// method created it (password signup, email verification, Google). The
+// users.signup_bonus_granted flag flips in the same transaction as the
+// grant, so concurrent first sign-ins cannot double it.
+function grantSignupBonus(userId) {
+  return tx(() => {
+    const u = db.prepare('SELECT signup_bonus_granted FROM users WHERE id = ?').get(userId);
+    if (!u || u.signup_bonus_granted) return false;
+    db.prepare(`UPDATE users SET credits = credits + ?, free_credits = free_credits + ?,
+      signup_bonus_granted = 1 WHERE id = ?`)
+      .run(CONFIG.signupCredits, CONFIG.signupCredits, userId);
+    return true;
+  });
+}
+
+// Every session JWT carries the user's token_version as `tv` (Phase N).
+function signUserToken(user) {
+  return jwt.sign({ id: user.id, email: user.email, tv: Number(user.token_version || 0) },
+    JWT_SECRET, { expiresIn: '7d' });
+}
+
+// Verifies a Google ID token server-side via Google's tokeninfo
+// endpoint, validating audience, issuer, expiry and verified email
+// exactly as Google prescribes. Returns the normalized profile, or
+// null for ANY failure (network, wrong audience, expired, unverified).
+async function verifyGoogleIdToken(idToken) {
+  if (!idToken || typeof idToken !== 'string') return null;
+  let data;
+  try {
+    const r = await fetch(
+      `${CONFIG.googleTokeninfoBase}/tokeninfo?id_token=${encodeURIComponent(idToken)}`,
+      { signal: AbortSignal.timeout(15000) });
+    if (!r.ok) return null;
+    data = await r.json();
+  } catch { return null; }
+  if (!data || data.aud !== CONFIG.googleClientId) return null;
+  if (!['accounts.google.com', 'https://accounts.google.com'].includes(data.iss)) return null;
+  if (!data.exp || Number(data.exp) * 1000 <= Date.now()) return null;
+  if (String(data.email_verified) !== 'true') return null;
+  if (!data.sub || !data.email) return null;
+  return { sub: String(data.sub), email: String(data.email).toLowerCase(),
+           name: data.name ? String(data.name) : null,
+           picture: data.picture ? String(data.picture) : null };
+}
+
+// The two transactional emails. Links point at the app with the raw
+// token in the query string (the frontend exchanges it immediately and
+// strips it from the URL); the base is PUBLIC_BASE_URL when set, else
+// the request's own origin — the same derivation the gateway uses.
+function sendVerificationEmail(req, to, raw) {
+  const base = CONFIG.publicBaseUrl || `${req.protocol}://${req.get('host')}`;
+  return sendMail({ to, subject: 'Verify your AJK AI email',
+    text: `Welcome to AJK AI — Your Imagination. AI Motion.\n\nConfirm this email address to activate your account and receive your ${CONFIG.signupCredits} free starter credits:\n\n${base}/?verify=${raw}\n\nThis link expires in 24 hours and works once.\nIf you did not create this account, you can ignore this email.` });
+}
+function sendResetEmail(req, to, raw) {
+  const base = CONFIG.publicBaseUrl || `${req.protocol}://${req.get('host')}`;
+  return sendMail({ to, subject: 'Reset your AJK AI password',
+    text: `You asked to reset your AJK AI password.\n\nSet a new password with this link (it expires in 60 minutes and works once):\n\n${base}/?reset=${raw}\n\nIf you did not ask for this, ignore this email — your password is unchanged.` });
+}
+
+// The caller's linked sign-in methods, whitelisted for API responses
+// (identity rows carry no secrets, but the shape is fixed here anyway).
+function userProviders(userId) {
+  return db.prepare(`SELECT provider, email, phone, verified, created_at
+    FROM user_identities WHERE user_id = ? ORDER BY id`).all(userId);
+}
+
 function auth(req, res, next) {
   const token = (req.headers.authorization || '').replace('Bearer ', '');
-  try { req.user = jwt.verify(token, JWT_SECRET); next(); }
-  catch { res.status(401).json({ error: 'Please sign in again.' }); }
+  let payload;
+  try { payload = jwt.verify(token, JWT_SECRET); }
+  catch { return res.status(401).json({ error: 'Please sign in again.' }); }
+  // Phase N: the JWT's `tv` must match users.token_version. A password
+  // reset bumps the version, immediately invalidating every previously
+  // issued session; a deleted account fails the lookup. Tokens minted
+  // before Phase N carry no `tv` and read as version 0 — the same as a
+  // fresh account's — so existing sessions survive until their account's
+  // first version bump.
+  const row = db.prepare('SELECT token_version FROM users WHERE id = ?').get(payload.id);
+  if (!row || Number(payload.tv || 0) !== Number(row.token_version))
+    return res.status(401).json({ error: 'Please sign in again.' });
+  req.user = payload;
+  next();
 }
 
 // Admin gate: the is_admin flag lives on the user row (bootstrapped from
@@ -1305,6 +1519,23 @@ app.get('/api/config', (req, res) => res.json({
     placements: ['studio_bottom', 'home_native'],
     note: 'Web groundwork only: slot containers + policy gating + app-ads.txt. Native, interstitial and rewarded ad formats require the Android app build with the AdMob SDK.',
   },
+  // Modern auth (Phase N): which sign-in / account-recovery methods are
+  // actually switched on. Every flag is false until the owner's own
+  // provider account is configured server-side (see the Phase N CONFIG
+  // note) — the frontend renders live controls ONLY for true flags and
+  // an honest "coming soon" state for the rest. google_client_id is a
+  // PUBLIC identifier (it ships in every Google Sign-In button on the
+  // web); it is exposed only when Google Sign-In is configured, and it
+  // is the only auth value ever exposed — keys never are. facebook and
+  // phone stay false in this phase (their adapters arrive in Phase N2).
+  auth: {
+    google: googleAuthConfigured(),
+    facebook: false,
+    phone: false,
+    email_verification: mailerConfigured(),
+    password_reset: mailerConfigured(),
+  },
+  ...(googleAuthConfigured() ? { google_client_id: CONFIG.googleClientId } : {}),
 }));
 
 // app-ads.txt (AdMob app-ownership verification): served ONLY when a
@@ -1372,38 +1603,286 @@ app.get('/api/my/pack-purchases', auth, (req, res) => {
 });
 
 // ---------- Auth ----------
-app.post('/api/auth/register', async (req, res) => {
+// Email + password signup. Two regimes, chosen by whether the mailer
+// is configured (Phase N):
+//  - Mailer OFF (the historical behaviour): the account is verified at
+//    once, the signup bonus lands immediately, a session is returned.
+//  - Mailer ON (owner spec doc 6 — new signups must verify): the
+//    account is created UNVERIFIED with NO bonus; a hashed, 24-hour,
+//    single-use token is emailed as a link; verification activates the
+//    account and grants the bonus exactly once (grantSignupBonus).
+async function handleRegister(req, res) {
   const { email, password } = req.body || {};
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !password || password.length < 8)
     return res.status(400).json({ error: 'A valid email and a password of 8+ characters are required.' });
+  const emailLc = String(email).toLowerCase();
+  const isAdmin = CONFIG.adminEmail && emailLc === CONFIG.adminEmail ? 1 : 0;
   const hash = await bcrypt.hash(password, 10);
+  const verification = mailerConfigured();
+  let userId;
   try {
-    const emailLc = email.toLowerCase();
-    const isAdmin = CONFIG.adminEmail && emailLc === CONFIG.adminEmail ? 1 : 0;
-    const info = db.prepare(
-      'INSERT INTO users (email, password_hash, credits, free_credits, plan_credits, is_admin) VALUES (?, ?, ?, ?, 0, ?)')
-      .run(emailLc, hash, CONFIG.signupCredits, CONFIG.signupCredits, isAdmin);
-    const token = jwt.sign({ id: Number(info.lastInsertRowid), email: emailLc }, JWT_SECRET, { expiresIn: '7d' });
-    res.json({ token, credits: CONFIG.signupCredits });
-  } catch { res.status(409).json({ error: 'An account with this email already exists.' }); }
-});
+    userId = tx(() => {
+      const info = db.prepare(
+        `INSERT INTO users (email, password_hash, credits, free_credits, plan_credits, is_admin, email_verified)
+         VALUES (?, ?, 0, 0, 0, ?, ?)`)
+        .run(emailLc, hash, isAdmin, verification ? 0 : 1);
+      const id = Number(info.lastInsertRowid);
+      db.prepare(
+        `INSERT INTO user_identities (user_id, provider, provider_user_id, email, verified)
+         VALUES (?, 'password', ?, ?, ?)`)
+        .run(id, emailLc, emailLc, verification ? 0 : 1);
+      return id;
+    });
+  } catch { return res.status(409).json({ error: 'An account with this email already exists.' }); }
+  if (!verification) {
+    grantSignupBonus(userId);
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+    return res.json({ token: signUserToken(user), credits: user.credits });
+  }
+  const raw = issueAuthToken(userId, 'verify_email', 24 * 3600 * 1000);
+  try {
+    await sendVerificationEmail(req, emailLc, raw);
+  } catch {
+    // The account exists (unverified); the user can request a fresh
+    // link from the sign-in screen. Answer honestly — never fake a send.
+    return res.status(502).json({ error: 'mail_send_failed',
+      message: 'Your account was created, but the verification email could not be sent. Use "Resend verification" on the sign-in screen.' });
+  }
+  res.status(201).json({ verification_required: true, email: emailLc });
+}
+app.post('/api/auth/register', handleRegister);
+app.post('/api/auth/signup', handleRegister); // alias — same handler, same semantics
 
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body || {};
   const user = db.prepare('SELECT * FROM users WHERE email = ?').get((email || '').toLowerCase());
   if (!user || !(await bcrypt.compare(password || '', user.password_hash)))
     return res.status(401).json({ error: 'Wrong email or password.' });
+  // Phase N (spec doc 6): while the mailer is configured, an unverified
+  // email account cannot sign in. (Accounts created before the mailer
+  // was switched on are grandfathered verified=1 by migration v19.)
+  if (mailerConfigured() && !user.email_verified)
+    return res.status(403).json({ error: 'email_not_verified',
+      message: 'Please verify your email first — open the link we sent you, or request a fresh one.' });
   // Bootstrap admin also applies to accounts registered before ADMIN_EMAIL
   // was configured.
   if (CONFIG.adminEmail && user.email === CONFIG.adminEmail && !user.is_admin)
     db.prepare('UPDATE users SET is_admin = 1 WHERE id = ?').run(user.id);
-  const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
+  const token = signUserToken(user);
   res.json({ token, credits: user.credits });
+});
+
+// Email verification: the emailed link lands on the app as
+// /?verify=<raw token>; the frontend posts the token here. Consuming it
+// verifies the account AND grants the signup bonus (exactly once).
+app.post('/api/auth/verify-email', (req, res) => {
+  const rec = consumeAuthToken((req.body || {}).token, 'verify_email');
+  if (!rec) return res.status(400).json({ error: 'This verification link is invalid, expired, or already used.' });
+  const user = db.prepare('SELECT id FROM users WHERE id = ?').get(rec.user_id);
+  if (!user) return res.status(400).json({ error: 'This verification link is invalid, expired, or already used.' });
+  tx(() => {
+    db.prepare('UPDATE users SET email_verified = 1 WHERE id = ?').run(rec.user_id);
+    db.prepare("UPDATE user_identities SET verified = 1 WHERE user_id = ? AND provider = 'password'")
+      .run(rec.user_id);
+  });
+  grantSignupBonus(rec.user_id);
+  const after = db.prepare('SELECT credits FROM users WHERE id = ?').get(rec.user_id);
+  res.json({ ok: true, verified: true, credits: after.credits });
+});
+
+// Resend a verification link. ALWAYS a generic 200 (no account
+// enumeration); a fresh link is actually issued only when the account
+// exists and is still unverified, at most 1/minute and 5/day per email.
+app.post('/api/auth/resend-verification', authMailLimiter, async (req, res) => {
+  if (!mailerConfigured())
+    return res.status(503).json({ error: 'mailer_not_configured' });
+  const emailLc = String((req.body || {}).email || '').toLowerCase();
+  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(emailLc);
+  if (user && !user.email_verified) {
+    const recent = db.prepare(`SELECT
+        SUM(CASE WHEN created_at > datetime('now','-1 minute') THEN 1 ELSE 0 END) AS last_min,
+        COUNT(*) AS last_day
+      FROM auth_tokens WHERE user_id = ? AND purpose = 'verify_email'
+        AND created_at > datetime('now','-1 day')`).get(user.id);
+    if (!Number(recent.last_min || 0) && Number(recent.last_day || 0) < 5) {
+      const raw = issueAuthToken(user.id, 'verify_email', 24 * 3600 * 1000);
+      try { await sendVerificationEmail(req, emailLc, raw); } catch { /* generic by design */ }
+    }
+  }
+  res.json({ ok: true });
+});
+
+// Forgot password: generic 200 either way (no enumeration). A reset
+// token (hashed, 60 minutes, single-use) is created ONLY for an account
+// that actually has a password identity — social-only accounts have
+// nothing to reset.
+app.post('/api/auth/forgot', authMailLimiter, async (req, res) => {
+  if (!mailerConfigured())
+    return res.status(503).json({ error: 'mailer_not_configured' });
+  const emailLc = String((req.body || {}).email || '').toLowerCase();
+  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(emailLc);
+  const hasPassword = user && db.prepare(
+    "SELECT id FROM user_identities WHERE user_id = ? AND provider = 'password'").get(user.id);
+  if (hasPassword) {
+    const raw = issueAuthToken(user.id, 'reset_password', 60 * 60 * 1000);
+    try { await sendResetEmail(req, emailLc, raw); } catch { /* generic by design */ }
+  }
+  res.json({ ok: true });
+});
+
+// Reset password with an emailed token. Success sets the new hash,
+// marks the email verified (the link proved control of the inbox) and
+// bumps token_version — every previously issued session dies at once.
+app.post('/api/auth/reset', async (req, res) => {
+  const { token, new_password } = req.body || {};
+  if (!new_password || String(new_password).length < 8)
+    return res.status(400).json({ error: 'A new password of 8+ characters is required.' });
+  const rec = consumeAuthToken(token, 'reset_password');
+  if (!rec) return res.status(400).json({ error: 'This reset link is invalid, expired, or already used.' });
+  const hash = await bcrypt.hash(String(new_password), 10);
+  db.prepare(`UPDATE users SET password_hash = ?, email_verified = 1,
+    token_version = token_version + 1 WHERE id = ?`).run(hash, rec.user_id);
+  res.json({ ok: true });
+});
+
+// ---------- Google Sign-In (Phase N, config-gated) ----------
+// POST /api/auth/google { id_token }: the client obtains the ID token
+// from Google's own sign-in flow (GIS); the server verifies it against
+// Google's tokeninfo endpoint before trusting anything in it.
+//  - Known Google identity -> session for ITS account.
+//  - New Google identity -> a NEW account is auto-created (spec: first
+//    login creates the account), verified by Google, bonus once.
+//  - NO AUTO-MERGE, ever: an email match with an existing password
+//    account changes nothing — that account is neither signed into nor
+//    linked. (Linking is a separate, signed-in, verified action.)
+app.post('/api/auth/google', googleAuthLimiter, async (req, res) => {
+  if (!googleAuthConfigured())
+    return res.status(503).json({ error: 'auth_provider_not_configured' });
+  const profile = await verifyGoogleIdToken((req.body || {}).id_token);
+  if (!profile) return res.status(401).json({ error: 'Google sign-in could not be verified.' });
+  const identity = db.prepare(
+    "SELECT * FROM user_identities WHERE provider = 'google' AND provider_user_id = ?")
+    .get(profile.sub);
+  if (identity) {
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(identity.user_id);
+    if (!user) return res.status(401).json({ error: 'Please sign in again.' });
+    return res.json({ token: signUserToken(user), credits: user.credits });
+  }
+  // users.email is UNIQUE and a password account may already own this
+  // Google email — the accounts must stay separate, so on collision
+  // the Google account gets a namespaced placeholder address and the
+  // real Google email lives on the identity row.
+  const emailTaken = db.prepare('SELECT id FROM users WHERE email = ?').get(profile.email);
+  const accountEmail = emailTaken ? `google-${profile.sub}@accounts.ajk-ai.local` : profile.email;
+  // Social accounts have no password: the NOT NULL hash column gets a
+  // bcrypt hash of a random secret nobody knows (password login for
+  // this account simply never matches). Having a password is defined
+  // by the 'password' IDENTITY row, never by this column.
+  const placeholderHash = await bcrypt.hash(randomBytes(32).toString('hex'), 10);
+  const isAdmin = CONFIG.adminEmail && accountEmail === CONFIG.adminEmail ? 1 : 0;
+  let userId;
+  try {
+    userId = tx(() => {
+      const info = db.prepare(
+        `INSERT INTO users (email, password_hash, credits, free_credits, plan_credits, is_admin, email_verified)
+         VALUES (?, ?, 0, 0, 0, ?, 1)`)
+        .run(accountEmail, placeholderHash, isAdmin);
+      const id = Number(info.lastInsertRowid);
+      db.prepare(
+        `INSERT INTO user_identities (user_id, provider, provider_user_id, email, verified)
+         VALUES (?, 'google', ?, ?, 1)`)
+        .run(id, profile.sub, profile.email);
+      return id;
+    });
+  } catch { return res.status(409).json({ error: 'Could not create the account.' }); }
+  grantSignupBonus(userId);
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  res.status(201).json({ token: signUserToken(user), credits: user.credits, created: true });
+});
+
+// Link Google to the SIGNED-IN account (the consent path that replaces
+// any email-match merging): the caller proves control of both accounts
+// — their session plus a fresh, verified Google token.
+app.post('/api/auth/link/google', auth, googleAuthLimiter, async (req, res) => {
+  if (!googleAuthConfigured())
+    return res.status(503).json({ error: 'auth_provider_not_configured' });
+  const profile = await verifyGoogleIdToken((req.body || {}).id_token);
+  if (!profile) return res.status(401).json({ error: 'Google sign-in could not be verified.' });
+  const existing = db.prepare(
+    "SELECT * FROM user_identities WHERE provider = 'google' AND provider_user_id = ?")
+    .get(profile.sub);
+  if (existing) {
+    if (existing.user_id === req.user.id)
+      return res.json({ ok: true, already_linked: true, providers: userProviders(req.user.id) });
+    return res.status(409).json({ error: 'identity_in_use',
+      message: 'This Google account is already linked to a different AJK AI account.' });
+  }
+  db.prepare(
+    `INSERT INTO user_identities (user_id, provider, provider_user_id, email, verified)
+     VALUES (?, 'google', ?, ?, 1)`)
+    .run(req.user.id, profile.sub, profile.email);
+  res.status(201).json({ ok: true, linked: 'google', providers: userProviders(req.user.id) });
+});
+
+// The caller's linked sign-in methods (Settings renders from this).
+app.get('/api/auth/identities', auth, (req, res) => {
+  res.json({ identities: userProviders(req.user.id) });
+});
+
+// Unlink a provider. Google only in this phase. The LAST remaining
+// sign-in method can never be removed — an account must always keep a
+// way back in.
+app.post('/api/auth/unlink', auth, (req, res) => {
+  const provider = String((req.body || {}).provider || '').toLowerCase();
+  if (provider !== 'google')
+    return res.status(400).json({ error: 'Only Google can be unlinked here.' });
+  const rows = db.prepare('SELECT * FROM user_identities WHERE user_id = ?').all(req.user.id);
+  const target = rows.find(r => r.provider === 'google');
+  if (!target) return res.status(404).json({ error: 'Google is not linked to this account.' });
+  if (rows.filter(r => r.provider !== 'google').length === 0)
+    return res.status(400).json({ error: 'last_auth_method',
+      message: 'This is your only sign-in method — add a password or another method before removing it.' });
+  db.prepare('DELETE FROM user_identities WHERE id = ?').run(target.id);
+  res.json({ ok: true, providers: userProviders(req.user.id) });
+});
+
+// ---------- Account deletion (Phase N) ----------
+// Self-serve, permanent. Requires the typed word DELETE and — when the
+// account has a password — that password (social-only accounts confirm
+// by typing alone). The schema declares REFERENCES without ON DELETE
+// CASCADE, so every user-owned row is deleted explicitly, in one
+// transaction, children first; uploaded source images go best-effort.
+app.post('/api/account/delete', auth, async (req, res) => {
+  const { confirm, password } = req.body || {};
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  if (!user) return res.status(404).json({ error: 'Account not found.' });
+  if (String(confirm || '').trim().toUpperCase() !== 'DELETE')
+    return res.status(400).json({ error: 'Type DELETE to confirm account deletion.' });
+  const hasPassword = !!db.prepare(
+    "SELECT id FROM user_identities WHERE user_id = ? AND provider = 'password'").get(user.id);
+  if (hasPassword && !(await bcrypt.compare(String(password || ''), user.password_hash)))
+    return res.status(401).json({ error: 'Your password is incorrect — the account was not deleted.' });
+  tx(() => {
+    db.prepare('DELETE FROM reports WHERE user_id = ?').run(user.id);
+    db.prepare('DELETE FROM feedback WHERE user_id = ?').run(user.id);
+    db.prepare('DELETE FROM voice_jobs WHERE user_id = ?').run(user.id);
+    db.prepare('DELETE FROM generations WHERE user_id = ?').run(user.id);
+    db.prepare('DELETE FROM characters WHERE user_id = ?').run(user.id);
+    db.prepare('DELETE FROM pack_purchases WHERE user_id = ?').run(user.id);
+    db.prepare('DELETE FROM payments WHERE user_id = ?').run(user.id);
+    db.prepare('DELETE FROM subscriptions WHERE user_id = ?').run(user.id);
+    db.prepare('DELETE FROM auth_tokens WHERE user_id = ?').run(user.id);
+    db.prepare('DELETE FROM user_identities WHERE user_id = ?').run(user.id);
+    db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
+  });
+  try { fs.rmSync(path.join(CONFIG.uploadsDir, String(user.id)), { recursive: true, force: true }); }
+  catch { /* uploaded files are removed best-effort */ }
+  res.json({ ok: true, deleted: true });
 });
 
 app.get('/api/me', auth, (req, res) => {
   refreshSubscriptionState(req.user.id);
-  const u = db.prepare('SELECT id, email, credits, free_credits, plan_credits, credit_deficit, is_admin, created_at FROM users WHERE id = ?').get(req.user.id);
+  const u = db.prepare('SELECT id, email, credits, free_credits, plan_credits, credit_deficit, is_admin, email_verified, created_at FROM users WHERE id = ?').get(req.user.id);
   if (!u) return res.status(404).json({ error: 'Account not found.' });
   const sub = currentSubscription(u.id);
   const plan = sub ? getPlan(sub.plan_id) : null;

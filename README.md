@@ -1160,6 +1160,144 @@ are asserted against the stub with the exact enum strings; whether
 the voices actually sound right is Batch G, after the owner's fal
 top-up.
 
+## Modern auth — identities, Google Sign-In, email verification & reset (Phase N, migration v19)
+
+Owner spec documents 5+6 (2026-10-24): a modern, fully automatic
+auth system in which **every user verifies their own account through
+their own provider** — no user's OTP, password or code is ever sent
+to the app owner's or an admin's personal Gmail, Facebook or phone
+number, and no admin surface ever displays a password hash or a
+verification/reset code.
+
+### The identity model
+
+An account (`users`) is separate from its **sign-in methods**
+(`user_identities`, migration v19): one row per method — `password`
+(provider_user_id = the email), `google` (provider_user_id =
+Google's `sub`), with `facebook`/`phone` reserved for Phase N2.
+`UNIQUE(provider, provider_user_id)` is the database-level backstop
+for the owner's hardest rule:
+
+> **No auto-merge on email match, ever.** If a Google sign-in
+> arrives with an email that an existing password account owns, the
+> password account is **not** signed into and **not** linked — a
+> separate account is created (its `users.email` is namespaced as
+> `google-<sub>@accounts.ajk-ai.local` on collision, because
+> `users.email` is UNIQUE; the real Google email lives on the
+> identity row). Linking happens only the consented way: the user
+> signs in with their password, then uses **Settings → Link Google**,
+> which verifies a fresh Google token server-side before binding it.
+> A Google identity already bound to another account answers
+> `409 identity_in_use`; unlinking refuses to remove the account's
+> **last** sign-in method (`400 last_auth_method`).
+
+The **signup bonus** (100 credits) is granted by
+`grantSignupBonus()` — exactly once per account, whichever method
+created it (the `users.signup_bonus_granted` flag flips in the same
+transaction as the grant). Social-created accounts have no password:
+the NOT NULL `password_hash` column holds a bcrypt hash of a random
+secret nobody knows, and "has a password" is defined by the
+`password` **identity row**, never by that column.
+
+### Sessions: token_version
+
+Every JWT carries the user's `token_version` as `tv`; the auth
+middleware rejects any token whose `tv` no longer matches the
+database. A successful password reset bumps the version, so **all
+previously issued sessions die the moment a password is reset** —
+and a deleted account's tokens die with the account row.
+
+### Email verification + forgot password (mailer adapter)
+
+The mailer is a config-gated, fail-closed adapter like PayFast /
+Azure: it switches on only when `MAILER_API_BASE` +
+`MAILER_API_KEY` + `MAILER_FROM` are all set, and sends via
+`POST {base}/send` with a Bearer key and a JSON
+`{from,to,subject,text}` body (any HTTPS email API with that shape;
+use your own email-service account — providers' free tiers and
+limits change, so check the provider's own site before choosing).
+
+- **Mailer configured:** `POST /api/auth/register` (alias
+  `/api/auth/signup`) creates the account **unverified and
+  bonus-less**, stores a verification token, and emails
+  `${PUBLIC_BASE_URL}/?verify=<token>`. Login answers
+  `403 email_not_verified` until `POST /api/auth/verify-email`
+  consumes the token — verification grants the bonus at that moment.
+  `POST /api/auth/resend-verification` always answers a generic 200
+  (no account enumeration) and issues a fresh, superseding token at
+  most 1/minute and 5/day per email. A failed send answers an honest
+  `502 mail_send_failed` — the account stays, unverified, and can be
+  activated later via resend.
+- **Mailer not configured:** signup keeps its exact historical
+  behaviour (verified at once, bonus at signup, session returned) —
+  nobody is ever locked out of a feature that was never switched on.
+  `forgot`/`resend-verification` answer `503 mailer_not_configured`.
+- **Forgot/reset:** `POST /api/auth/forgot` is always a generic 200;
+  a reset token (60 minutes) is created **only** for an account that
+  has a password identity. `POST /api/auth/reset` sets the new hash,
+  marks the email verified (the link proved inbox control) and bumps
+  `token_version`. Accounts created before the mailer was switched
+  on are grandfathered `email_verified=1` by migration v19.
+
+### Token security
+
+Verification and reset tokens are 256-bit random values that exist
+**only in the emailed link**. The database stores their **SHA-256
+hash** (`auth_tokens.token_hash`), an expiry (24 h verify / 60 min
+reset, epoch ms) and a `used_at` stamp — single-use, superseded on
+re-issue, and never written to any log. Tests assert at the DB level
+that stored values are hashes and that no raw token ever touches
+the DB files. The user serializer and every admin endpoint whitelist
+their fields — no admin response contains `password_hash` or any
+token material (test-asserted).
+
+### Google Sign-In (config-gated)
+
+Activates only when `GOOGLE_CLIENT_ID` (the owner's own Google
+Cloud OAuth **Web** client id) is set. The client obtains an ID
+token from Google's official GIS flow; `POST /api/auth/google`
+verifies it **server-side** against Google's `tokeninfo` endpoint,
+validating `aud` = our client id, `iss`, future `exp` and
+`email_verified=true` before trusting `sub`/`email`/`name`/
+`picture`. First sign-in auto-creates the account (verified by
+Google, bonus once); repeat sign-ins return to the same account.
+Unconfigured → `503 auth_provider_not_configured`, and the app's
+button stays disabled with an honest "coming soon" label.
+`/api/config` exposes `auth: { google, facebook: false, phone:
+false, email_verification, password_reset }` — and `google_client_id`
+**only** while configured (it is a public identifier).
+
+**Owner setup checklist — Google:** Google Cloud Console → create
+project → *APIs & Services → OAuth consent screen* (app name AJK AI,
+your support email) → *Credentials → Create credentials → OAuth
+client ID → Web application* → add your site's origin under
+*Authorized JavaScript origins* → set `GOOGLE_CLIENT_ID` in the
+server environment (Render) → restart. **Mailer:** create your
+email-service account, verify your sending domain/address, then set
+`MAILER_API_BASE`, `MAILER_API_KEY` and `MAILER_FROM`.
+
+**Login screen:** logo/header, then Continue with Google (live only
+when configured), Continue with Facebook / Continue with Phone
+Number (disabled "coming soon" until Phase N2), the email form with
+a **Forgot password?** link, the resend-verification affordance, and
+the note explaining the link-in-Settings path. **Settings → Account**
+lists the linked sign-in methods (`GET /api/auth/identities`), the
+Link/Unlink Google actions, and a danger zone: **Delete account**
+(`POST /api/account/delete`) — typed `DELETE` confirmation plus the
+account password when the account has one; deletion removes every
+user-owned row (generations, characters, voice jobs, feedback,
+reports, purchases, payments, subscriptions, tokens, identities)
+in one transaction, since the schema's REFERENCES carry no
+ON DELETE CASCADE.
+
+**Status: built and stub-tested, NOT production-verified.** Every
+flow above is exercised against a local stub (`test-auth-stub.js`:
+Google tokeninfo + mailer, recording every call) with dummy values.
+A provider counts as **complete only after the owner tests it with
+their real account** — Google needs the owner's OAuth client, the
+mailer needs the owner's email-service account. Facebook Login and
+phone-OTP adapters arrive in Phase N2 on this same identity model.
+
 ## Test results (backend, 2026-10-20)
 Run locally with `bash test.sh` — **19/19 tests passed** with a dummy key (no paid calls):
 - ✅ health + config endpoint exposes no secrets
@@ -1728,4 +1866,5 @@ the privacy policy page is included in the web app.
 - `test-translate-stub.js` — local Google Translate stub used by `test.sh` (tests never call the real translate endpoint)
 - `test-gateway-stub.js` — signs PayFast-shaped webhook bodies for `test.sh` (tests never call the real gateway)
 - `test-fal-stub.js` — local fal.ai stub (TTS endpoints + lip-sync queue + media files) used by the voice tests in `test.sh` (tests never call the real fal API)
+- `test-auth-stub.js` — local Phase N auth stub (Google tokeninfo + mailer `/send`, recording every call) used by the modern-auth tests in `test.sh` (tests never call real Google or email providers)
 - `.env.example` — copy to `.env` and fill in (never commit the real one)
