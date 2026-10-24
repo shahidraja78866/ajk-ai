@@ -2080,15 +2080,16 @@ console.log(cols === 1 && Number(mig) === 1 ? 'ok' : 'bad');
 ")"
 kill $SRV20_PID $GSTUB_PID $GTSTUB_PID 2>/dev/null
 
-echo "--- phase H: home finishing (hero, showcase, features, creations) ---"
+echo "--- phase K: home declutter (greeting + composer-first, Runway-style) ---"
 HOMEPAGEH=$(curl -s $B/)
-check "phase H: hero band ships (eyebrow + tagline)" "yes" "$(echo "$HOMEPAGEH" | grep -q 'hero-eyebrow' && echo "$HOMEPAGEH" | grep -q 'Your Imagination' && echo yes || echo no)"
-check "phase H: showcase rail + honest style-preview label ships" "yes" "$(echo "$HOMEPAGEH" | grep -q 'id="showcaseRail"' && echo "$HOMEPAGEH" | grep -q 'Style preview' && echo yes || echo no)"
-check "phase H: showcase cards wired as template controls" "yes" "$(echo "$HOMEPAGEH" | grep -q 'data-showcase="talking-photo"' && echo "$HOMEPAGEH" | grep -q 'data-showcase="showcase-realistic"' && echo yes || echo no)"
-check "phase H: feature highlights row ships" "yes" "$(echo "$HOMEPAGEH" | grep -q 'id="featureRow"' && echo yes || echo no)"
-check "phase H: creations gallery ships (hidden by default)" "yes" "$(echo "$HOMEPAGEH" | grep -q 'id="creationsCard"' && echo "$HOMEPAGEH" | grep -q 'renderCreations' && echo yes || echo no)"
-check "phase H: showcase image served (realistic)" "200" "$(curl -s -o /dev/null -w '%{http_code}' $B/showcase/showcase-realistic.jpg)"
-check "phase H: showcase image served (speaking)" "200" "$(curl -s -o /dev/null -w '%{http_code}' $B/showcase/showcase-speaking.jpg)"
+check "phase K: slim greeting ships with the bilingual line" "yes" "$(echo "$HOMEPAGEH" | grep -q 'id="homeGreeting"' && echo "$HOMEPAGEH" | grep -q 'What are we creating today?' && echo "$HOMEPAGEH" | grep -q 'آج کیا بنائیں گے؟' && echo yes || echo no)"
+check "phase K: greeting is filled from the loaded /api/me state" "yes" "$(echo "$HOMEPAGEH" | grep -q 'function fillGreeting' && echo "$HOMEPAGEH" | grep -q 'me.display_name' && echo "$HOMEPAGEH" | grep -q 'Hi " + name' && echo yes || echo no)"
+check "phase K: hero band removed from Home" "no" "$(echo "$HOMEPAGEH" | grep -qE 'hero-eyebrow|class="hero"' && echo yes || echo no)"
+check "phase K: showcase rail, feature row, creations gallery + Recent strip removed" "no" "$(echo "$HOMEPAGEH" | grep -qE 'id="showcaseRail"|id="featureRow"|id="creationsCard"|recent-strip' && echo yes || echo no)"
+check "phase K: removed sections' render wiring is gone" "no" "$(echo "$HOMEPAGEH" | grep -qE 'renderCreations|renderRecent|data-showcase' && echo yes || echo no)"
+check "phase K: composer-first surface intact (rail, composer, chips, auto panel, advanced, sticky bar)" "yes" "$(echo "$HOMEPAGEH" | grep -q 'id="templateGrid"' && echo "$HOMEPAGEH" | grep -q 'id="prompt"' && echo "$HOMEPAGEH" | grep -q 'id="aspectSeg"' && echo "$HOMEPAGEH" | grep -q 'id="durationSeg"' && echo "$HOMEPAGEH" | grep -q 'id="aiAutoToggle"' && echo "$HOMEPAGEH" | grep -q 'id="autoPlanPanel"' && echo "$HOMEPAGEH" | grep -q 'id="advancedCard"' && echo "$HOMEPAGEH" | grep -q 'id="generateBtn"' && echo yes || echo no)"
+check "phase K: showcase image files retained on disk (realistic)" "200" "$(curl -s -o /dev/null -w '%{http_code}' $B/showcase/showcase-realistic.jpg)"
+check "phase K: showcase image files retained on disk (speaking)" "200" "$(curl -s -o /dev/null -w '%{http_code}' $B/showcase/showcase-speaking.jpg)"
 
 echo "--- Phase G2: standalone lip-sync included (300-char cap + fair-use cap, stub instance) ---"
 G2_STUB_PORT=18052

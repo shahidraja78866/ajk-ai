@@ -913,6 +913,35 @@ exactly three new container ids (`showcaseRail`, `featureRow`,
 `creationsCard`). Test suite: 602 checks, including 7 Phase H
 presence/serving checks.
 
+**Home declutter (Phase K, frontend only).** After reviewing
+Runway's Play Store screens, the owner found the Phase H-finished
+Home crowded ("ہمارے Home سکرین میں کافی رش ہے") — the finishing
+worked against the calm, composer-first direction of Phases E/F.
+Phase K therefore supersedes the Phase H *placement* (the Phase H
+sections themselves were honestly labelled and fully wired; this is
+a layout decision, not a defect fix). Removed from the Studio view:
+the hero band (`.hero` — the header already carries the brand), the
+showcase rail (`#showcaseRail`), the feature highlights row
+(`#featureRow`), the Your-creations gallery (`#creationsCard` +
+`renderCreations()`), and the Phase F Recent strip (+
+`renderRecent()`); the two Phase H showcase-only template presets
+went with the rail. Nothing functional is lost: creations live in
+the History view, which renders the same `/api/history` data in
+full, and the showcase image files stay in `public/showcase/`
+(still served, currently unused). In their place, one slim greeting
+line tops the Studio — "What are we creating today? · آج کیا بنائیں
+گے؟" (`#homeGreeting`) — prefixed Runway-style with "Hi <name>,"
+when the already-loaded `/api/me` state carries a display name
+(`me.name` / `me.display_name`; `/api/me` returns no name today, so
+the generic line stands until it does — no new endpoint, no server
+change). Everything else is untouched and in the same order:
+template chip rail, composer card, quick chip row, the Phase D
+confirmation panel, the collapsed `#advancedCard`, and the sticky
+cost/Generate bar. Element ids: exactly the three removed
+containers' ids (`showcaseRail`, `featureRow`, `creationsCard`)
+went with their sections, plus the id-less Recent strip; one new
+id (`homeGreeting`); every other id preserved.
+
 ## Premium engine — Seedance 2.5 (Phase J, migration v17)
 
 ByteDance's Seedance 2.5 — currently the top-ranked video model in
