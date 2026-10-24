@@ -337,11 +337,19 @@ const CONFIG = {
   // price (owner decision): 60 (5s) / 120 (10s). Sustainability at the
   // Rs 14/credit floor and Rs 277/$: worst case 10s @720p ≈ $4.73 ≈
   // Rs 1,310 vs floor revenue 120 × Rs 14 = Rs 1,680 (~28% margin);
-  // 5s ≈ $2.37 ≈ Rs 656 vs Rs 840. Gate: the can_seedance plan flag
+  // 5s ≈ $2.37 ≈ Rs 656 vs Rs 840.
+  // Phase L extends the SAME linear rate — 12 credits per second — to
+  // the longer durations the fal schema genuinely allows (4–30s; the
+  // product offers 5/10/15/20/30): 15s = 180, 20s = 240, 30s = 360.
+  // Margin holds linearly: the 30s worst case ≈ 30 × $0.473 = $14.19
+  // ≈ Rs 3,930 vs floor revenue 360 × Rs 14 = Rs 5,040 (~28%). A 30s
+  // job (360) sits inside the 400/day cap by design — the cap is NOT
+  // raised for it. Gate: the can_seedance plan flag
   // (Extra Pro only). Dialogue languages are NOT stated by fal — Urdu
   // speech on this engine is UNVERIFIED and is never promised.
   modelSeedance: (process.env.FAL_MODEL_SEEDANCE || 'bytedance/seedance-2.5/text-to-video').trim(),
-  seedanceCost: { 5: 60, 10: 120 },
+  seedanceCost: { 5: 60, 10: 120, 15: 180, 20: 240, 30: 360 },
+  seedanceDurations: [5, 10, 15, 20, 30],
   seedanceAspects: ['16:9', '9:16', '1:1'],
   seedanceResolution: '720p',
 };
@@ -371,6 +379,82 @@ const VIDEO_MODES = {
   cartoon: ['cartoon', 'anime'],
 };
 const MODE_LIST = Object.entries(VIDEO_MODES).map(([id, styles]) => ({ id, styles }));
+
+// ---------- Camera & shot controls (Phase L) ------------------------------
+// Optional cinematic direction chosen with chips in the Studio. These
+// are PROMPT DIRECTIVES, not model parameters: no engine in our wiring
+// exposes a mechanical camera control, so the server appends a plain-
+// English directive phrase to the prompt actually sent to the provider
+// and records the choices on the generation row (migration v18 — the
+// dedicated columns are used rather than the auto_plan JSON because
+// camera/shot apply with AI Auto on OR off, while auto_plan exists only
+// for confirmed Auto plans; inventing a plan for manual generations
+// would misrepresent the record). The UI says exactly what these are:
+// "Camera moves are prompt directions to the AI" — the model treats
+// them as guidance, never as a guarantee. Keys are the wire format;
+// `label` is the display name; `directive` is the phrase appended.
+const CAMERA_MOVES = {
+  zoom_in:   { label: 'Zoom In',       directive: 'slow cinematic zoom in' },
+  zoom_out:  { label: 'Zoom Out',      directive: 'slow cinematic zoom out, gradually revealing the wider scene' },
+  pan_left:  { label: 'Pan Left',      directive: 'smooth cinematic pan to the left' },
+  pan_right: { label: 'Pan Right',     directive: 'smooth cinematic pan to the right' },
+  tilt_up:   { label: 'Tilt Up',       directive: 'slow cinematic tilt up' },
+  tilt_down: { label: 'Tilt Down',     directive: 'slow cinematic tilt down' },
+  tracking:  { label: 'Tracking Shot', directive: 'cinematic tracking shot that follows the subject' },
+  orbit:     { label: 'Orbit',         directive: 'slow cinematic orbit around the subject' },
+  handheld:  { label: 'Handheld',      directive: 'natural handheld camera feel with subtle realistic movement' },
+  static:    { label: 'Static',        directive: 'static locked-off camera with no camera movement' },
+};
+const SHOT_SIZES = {
+  close_up: { label: 'Close-up',       directive: 'close-up shot' },
+  medium:   { label: 'Medium Shot',    directive: 'medium shot' },
+  wide:     { label: 'Wide Shot',      directive: 'wide establishing shot' },
+  aerial:   { label: 'Aerial / Drone', directive: 'aerial drone shot' },
+};
+// The exact suffix appended to the effective prompt (after translation
+// and after the Auto Director's own enrichment) — a leading ", " phrase
+// list, e.g. ", slow cinematic zoom in, wide establishing shot".
+// Deterministic from the recorded choices, so History can show the user
+// precisely what was sent (the same transparency pattern as
+// translated_prompt).
+function cameraDirectiveSuffix(cameraMove, shotSize) {
+  const parts = [];
+  if (cameraMove && CAMERA_MOVES[cameraMove]) parts.push(CAMERA_MOVES[cameraMove].directive);
+  if (shotSize && SHOT_SIZES[shotSize]) parts.push(SHOT_SIZES[shotSize].directive);
+  return parts.length ? `, ${parts.join(', ')}` : '';
+}
+// Lightweight wording detection, used ONLY to note a contradiction: when
+// the prompt text itself names a camera move / shot size that differs
+// from the explicit chip, the chip wins (it is appended last, as the
+// direct instruction) and the stored auto plan notes the override. No
+// extra confirmation round — the note is the whole mechanism.
+const CAMERA_TEXT_KEYS = [
+  ['zoom_in', /\bzoom(?:ing)?\s+in\b/i], ['zoom_out', /\bzoom(?:ing)?\s+out\b/i],
+  ['pan_left', /\bpan(?:ning)?\s+(?:to\s+the\s+)?left\b/i],
+  ['pan_right', /\bpan(?:ning)?\s+(?:to\s+the\s+)?right\b/i],
+  ['tilt_up', /\btilt(?:ing)?\s+up\b/i], ['tilt_down', /\btilt(?:ing)?\s+down\b/i],
+  ['tracking', /\btracking\s+shot\b/i], ['orbit', /\borbit(?:ing)?\b/i],
+  ['handheld', /\bhandheld\b/i],
+  ['static', /\bstatic\s+(?:shot|camera)\b|\blocked[- ]off\b|\btripod\s+shot\b/i],
+];
+const SHOT_TEXT_KEYS = [
+  ['close_up', /\bclose[- ]?up\b/i], ['medium', /\bmedium\s+shot\b/i],
+  ['wide', /\bwide\s+(?:shot|angle)\b|\bestablishing\s+shot\b/i],
+  ['aerial', /\baerial\s+(?:shot|view)\b|\bdrone\s+shot\b/i],
+];
+function promptCameraClash(text, cameraMove, shotSize) {
+  const hay = String(text || '');
+  const clashes = [];
+  if (cameraMove) {
+    const hit = CAMERA_TEXT_KEYS.find(([, re]) => re.test(hay));
+    if (hit && hit[0] !== cameraMove) clashes.push('camera');
+  }
+  if (shotSize) {
+    const hit = SHOT_TEXT_KEYS.find(([, re]) => re.test(hay));
+    if (hit && hit[0] !== shotSize) clashes.push('shot');
+  }
+  return clashes.length ? clashes.join(' and ') : null;
+}
 
 // Translate a prompt to English via Google Translate's free web endpoint
 // (client=gtx). The response is nested arrays: data[0] is the list of
@@ -763,6 +847,15 @@ const MIGRATIONS = [
   { version: 17, up: `
     ALTER TABLE plans ADD COLUMN can_seedance INTEGER NOT NULL DEFAULT 0;
     UPDATE plans SET can_seedance = 1 WHERE id = 'extrapro';` },
+  // v18 — cinematic camera/shot controls (Phase L): the user's chip
+  // choices (whitelist keys from CAMERA_MOVES / SHOT_SIZES; NULL when
+  // not chosen) are recorded on the generation row so History can show
+  // exactly which prompt directives were appended. Dedicated columns —
+  // not the auto_plan JSON — because the controls work with AI Auto on
+  // or off, while auto_plan exists only for confirmed Auto plans.
+  { version: 18, up: `
+    ALTER TABLE generations ADD COLUMN camera_move TEXT;
+    ALTER TABLE generations ADD COLUMN shot_size TEXT;` },
 ];
 {
   const applied = new Set(db.prepare('SELECT version FROM schema_migrations').all().map(r => r.version));
@@ -1185,11 +1278,13 @@ app.get('/api/config', (req, res) => res.json({
   // Premium engine (Phase J): Seedance 2.5 — a direct, user-chosen
   // premium engine (AI Auto never routes to it), Extra Pro only (the
   // can_seedance entitlement), 16:9 / 9:16 / 1:1, routed at 720p with
-  // native synchronized audio included. Priced per duration
-  // (60 credits / 5s, 120 credits / 10s). It is NOT a 4K engine and is
-  // never presented as one.
+  // native synchronized audio included. Priced per duration at a linear
+  // 12 credits/second (60 / 5s … 360 / 30s; Phase L added the 15/20/30s
+  // durations the fal schema genuinely allows). It is NOT a 4K engine
+  // and is never presented as one.
   seedance_engine: { provider: 'seedance-2.5', model: CONFIG.modelSeedance,
-    price_credits: CONFIG.seedanceCost, aspects: CONFIG.seedanceAspects,
+    price_credits: CONFIG.seedanceCost, durations: CONFIG.seedanceDurations,
+    aspects: CONFIG.seedanceAspects,
     resolution: CONFIG.seedanceResolution },
   // Advertising preparation (AdMob groundwork): flags and placement names
   // only — the publisher id itself is never exposed here. `enabled` is
@@ -1507,7 +1602,14 @@ function parseStoredAutoPlan(value) {
 }
 function publicGenerationRow(row) {
   if (!row) return row;
-  return { ...row, auto_plan: parseStoredAutoPlan(row.auto_plan) };
+  const out = { ...row, auto_plan: parseStoredAutoPlan(row.auto_plan) };
+  // Phase L: expose the exact camera/shot directive phrase that was
+  // appended to this job's prompt, recomputed from the recorded choices
+  // with the same pure function generation used — History shows the
+  // user precisely what the model was told.
+  const directive = cameraDirectiveSuffix(row.camera_move, row.shot_size);
+  if (directive) out.camera_directive = directive;
+  return out;
 }
 
 // The plan a user is currently entitled to (null on the free tier).
@@ -2175,14 +2277,42 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
     return res.status(400).json({ error: 'Please describe your video in 3–500 characters.' });
   if (!CONFIG.aspectRatios.includes(aspect_ratio))
     return res.status(400).json({ error: `aspect_ratio must be one of: ${CONFIG.aspectRatios.join(', ')}` });
-  if (!CONFIG.durations.includes(Number(duration)))
-    return res.status(400).json({ error: `duration must be one of: ${CONFIG.durations.join(', ')} seconds` });
+  // Duration set (Phase L): every engine is capped at the standard
+  // 5/10s EXCEPT the Seedance premium engine, whose fal schema genuinely
+  // allows up to 30s — it alone may use its extended set. The Seedance
+  // gates below still run before any charge, so an unentitled caller
+  // asking for 30s gets the 403 there, and any other engine asking for
+  // 15s+ is refused right here — longer durations are never faked.
+  const engineRequested = String(req.body?.engine || '').toLowerCase();
+  const allowedDurations = ['seedance', 'seedance_premium'].includes(engineRequested)
+    ? CONFIG.seedanceDurations : CONFIG.durations;
+  if (!allowedDurations.includes(Number(duration)))
+    return res.status(400).json({ error: `duration must be one of: ${allowedDurations.join(', ')} seconds` });
   if (!CONFIG.styles.includes(style))
     return res.status(400).json({ error: `style must be one of: ${CONFIG.styles.join(', ')}` });
   if (!Object.hasOwn(VIDEO_MODES, mode))
     return res.status(400).json({ error: `mode must be one of: ${Object.keys(VIDEO_MODES).join(', ')}` });
   if (!VIDEO_MODES[mode].includes(style))
     return res.status(400).json({ error: `style "${style}" is not available in ${mode} mode — use one of: ${VIDEO_MODES[mode].join(', ')}` });
+  // Optional cinematic direction (Phase L): camera movement + shot
+  // size from fixed whitelists — anything else is a 400 before any
+  // charge. The choices are appended to the prompt as plain-English
+  // directives after translation + Auto enrichment (below) and are
+  // recorded on the row; they cost nothing extra.
+  let cameraMove = null;
+  let shotSize = null;
+  if (req.body?.camera !== undefined && req.body?.camera !== null && String(req.body.camera) !== '') {
+    const c = String(req.body.camera).toLowerCase();
+    if (!Object.hasOwn(CAMERA_MOVES, c))
+      return res.status(400).json({ error: `camera must be one of: ${Object.keys(CAMERA_MOVES).join(', ')}` });
+    cameraMove = c;
+  }
+  if (req.body?.shot !== undefined && req.body?.shot !== null && String(req.body.shot) !== '') {
+    const s = String(req.body.shot).toLowerCase();
+    if (!Object.hasOwn(SHOT_SIZES, s))
+      return res.status(400).json({ error: `shot must be one of: ${Object.keys(SHOT_SIZES).join(', ')}` });
+    shotSize = s;
+  }
   // Optional watermark: user-supplied overlay text, Latin printable ASCII
   // only (the renderer has no Urdu/Arabic shaping — non-Latin text would
   // come out wrong, so it is refused up front rather than faked).
@@ -2380,6 +2510,29 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
     }
   }
 
+  // --- Cinematic direction (Phase L): apply the camera/shot chips -----
+  // The directive suffix goes on LAST: after translation and after the
+  // Auto Director's own enrichment, so every text-prompt route below
+  // (H3 text/image/reference, Kling 4K, Omni speaking, Seedance) sends
+  // it verbatim. When the prompt text itself names a DIFFERENT camera
+  // move or shot size, the explicit chip wins (it is the final, direct
+  // instruction) and the stored plan notes the override — no extra
+  // confirmation round.
+  const cameraSuffix = cameraDirectiveSuffix(cameraMove, shotSize);
+  if (cameraSuffix) {
+    if (autoPlanToStore) {
+      const clash = promptCameraClash(effectivePrompt, cameraMove, shotSize);
+      if (clash) {
+        const chosen = [cameraMove && CAMERA_MOVES[cameraMove].label,
+                        shotSize && SHOT_SIZES[shotSize].label].filter(Boolean).join(' · ');
+        autoPlanToStore = { ...autoPlanToStore,
+          notes: [...(Array.isArray(autoPlanToStore.notes) ? autoPlanToStore.notes : []),
+            `Camera direction: your ${clash} chip choice (${chosen}) was applied as a prompt directive and overrides the camera wording in your prompt text.`] };
+      }
+    }
+    effectivePrompt = `${effectivePrompt}${cameraSuffix}`;
+  }
+
   // --- Speaking engine (Phase E: Gemini Omni) ------------------------------
   // Selected directly via engine:'speaking' (alias 'omni_speaking') or via
   // a confirmed AI Auto plan whose canonicalized apply carries
@@ -2524,8 +2677,9 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
   // Rate card (v9): the credit cost comes from the ROUTED quality's own
   // row — 768P 10/20, 2K 15/30, native 4K 40/80 for 5s/10s. Speaking jobs
   // are the flat speaking price instead (50 credits, either duration);
-  // Seedance premium jobs pay the per-duration premium price
-  // (60 credits / 5s, 120 credits / 10s).
+  // Seedance premium jobs pay the per-duration premium price (Phase J,
+  // extended by Phase L: a linear 12 credits/second — 60/120/180/240/360
+  // for 5/10/15/20/30s).
   const cost = isSeedance ? (CONFIG.seedanceCost[Number(duration)] ?? CONFIG.seedanceCost[5])
              : isSpeaking ? CONFIG.speakingCost
              : isDraft ? (CONFIG.draftCost[Number(duration)] ?? 7)
@@ -2569,14 +2723,14 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
       if (creditBuckets(user).total < totalCost) throw Object.assign(new Error('NO_CREDITS'), { status: 402 });
       spendBuckets(user, totalCost); // plan credits first, then free credits
       const info = db.prepare(
-        `INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, cost_credits, idempotency_key, resolution, model, prompt_language, translated_prompt, mode, source_image_path, watermark_text, watermark_status, sound_mode, sound_status, sound_prompt, sound_volume, sound_cost, stage, character_id, auto_plan, auto_voice_status, auto_voice_cost, mute_status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(user.id, prompt.trim(), aspect_ratio, Number(duration), style, totalCost, idemKey, resolution, model, languageCode, translatedPrompt, mode, sourceImagePath, watermarkText, watermarkStatus,
+        `INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, cost_credits, idempotency_key, resolution, model, prompt_language, translated_prompt, mode, source_image_path, watermark_text, watermark_status, sound_mode, sound_status, sound_prompt, sound_volume, sound_cost, stage, character_id, auto_plan, auto_voice_status, auto_voice_cost, mute_status, camera_move, shot_size)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(user.id, prompt.trim(), aspect_ratio, Number(duration), style, totalCost, idemKey, resolution, model, languageCode, translatedPrompt, mode, sourceImagePath, watermarkText, watermarkStatus,
            soundSpec ? soundSpec.mode : null, soundSpec ? 'pending' : 'none',
            soundSpec ? soundSpec.prompt : null, soundSpec ? soundSpec.volume : null, soundCost,
            isDraft ? 'draft' : 'final', character ? character.id : null,
            autoPlanToStore ? JSON.stringify(autoPlanToStore) : null,
            autoVoiceSpec ? 'pending' : 'none', autoVoiceCost,
-           autoMute ? 'pending' : 'none');
+           autoMute ? 'pending' : 'none', cameraMove, shotSize);
       return Number(info.lastInsertRowid);
     });
   } catch (e) {
@@ -2669,6 +2823,8 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
                ...(soundSpec ? { sound_mode: soundSpec.mode, sound_status: 'pending',
                                  sound_cost_credits: soundCost } : {}),
                ...(translatedPrompt ? { translated_prompt: translatedPrompt } : {}),
+               ...((cameraMove || shotSize) ? { camera_move: cameraMove, shot_size: shotSize,
+                                                camera_directive: cameraSuffix } : {}),
                ...(autoPlanToStore ? { auto_plan: autoPlanToStore,
                                        auto_voice_status: autoVoiceSpec ? 'pending' : 'none',
                                        auto_voice_cost: autoVoiceCost } : {}),

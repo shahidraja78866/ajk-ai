@@ -109,6 +109,20 @@
 # anywhere near it). A twenty-fourth instance (port 18055, stub 18056)
 # proves the AI Auto Director never routes to the premium engine and a
 # forged seedance claim in an echoed plan falls back to server routing.
+# The Phase L tests (cinematic camera/shot prompt directives + Seedance
+# long durations) use a twenty-fifth instance (port 18046, own DB) with
+# the fal bases pointed at the stub (port 18047): the seedance_engine
+# durations + linear price map in config, migration v18 (generations
+# camera_move/shot_size), the camera/shot whitelist 400s before
+# charging, an H3 generation whose recorded fal prompt carries the
+# appended directives and whose History row exposes the choices + the
+# exact directive phrase, the chip-overrides-prompt note on a confirmed
+# auto plan, Seedance 15s/30s happy paths (180/360 credits, string
+# durations at the stub), a non-offered Seedance duration -> 400, and an
+# H3 15s request -> 400 (long durations are never faked for engines
+# whose schemas cap at 10s). 8 generate-family calls, inside the shared
+# limiter budget. Frontend greps cover the chip rows + honesty line,
+# the genBody wiring and the per-engine duration rendering.
 # e.g.  ADMIN_EMAIL=admin@example.com FAL_MODEL_4K=test-4k-model TEST_RECORD_FAL_BODY=1 TRANSLATE_API_BASE=http://127.0.0.1:18099 npm start
 # Run against a FRESH database (fixed test emails are registered each run).
 TEST_FAL_MODEL_4K=${TEST_FAL_MODEL_4K:-fal-ai/kling-video/o3/4k/text-to-video}
@@ -2341,6 +2355,79 @@ GENF=$(curl -s -X POST $B24/api/generate -H "Authorization: Bearer $FT24" -H 'Co
 check "forged seedance plan: charged the recomputed rate-card total 10, not the premium price" "10/90" "$(echo $GENF | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
 check "forged seedance plan: claim ignored — server routing (H3) recorded" "minimax/h3/text-to-video/h3_text_to_video" "$(echo $GENF | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["model"]+"/"+g["auto_plan"]["engine"]["route"])')"
 kill $SRV24_PID $SD2STUB_PID 2>/dev/null
+
+echo "--- Phase L: camera/shot prompt directives + Seedance long durations (stub instance) ---"
+PL_STUB_PORT=18047
+B25=http://127.0.0.1:18046
+rm -f /tmp/myvideoai-phaseL-test.db; rm -rf /tmp/plgen2 /tmp/plvoice2; mkdir -p /tmp/plgen2 /tmp/plvoice2
+FAL_STUB_PORT=$PL_STUB_PORT node "$(dirname "$0")/test-fal-stub.js" > /tmp/fal-stub-phaseL.log 2>&1 &
+PLSTUB_PID=$!
+for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:$PL_STUB_PORT/__calls && break || sleep 0.25; done
+PL_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-phaseL-test.db PORT=18046 FAL_KEY=dummy_test_key "$PL_JWT_NAME=phaseL-instance-dummy-value" \
+  ADMIN_EMAIL=pladmin@example.com TEST_RECORD_FAL_BODY=1 \
+  FAL_API_BASE_URL=http://127.0.0.1:$PL_STUB_PORT FAL_QUEUE_BASE_URL=http://127.0.0.1:$PL_STUB_PORT \
+  FAL_POLL_INTERVAL_MS=100 \
+  GENERATED_DIR=/tmp/plgen2 VOICE_DIR=/tmp/plvoice2 \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-phaseL-test.log 2>&1 &
+SRV25_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B25/api/health && break || sleep 0.25; done
+AR25=$(curl -s -X POST $B25/api/auth/register -H 'Content-Type: application/json' -d '{"email":"pladmin@example.com","password":"password123"}')
+AT25=$(echo $AR25 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+FR25=$(curl -s -X POST $B25/api/auth/register -H 'Content-Type: application/json' -d '{"email":"plfree@example.com","password":"password123"}')
+FT25=$(echo $FR25 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+mkxp25() { # email -> token on the Extra Pro plan
+  local T=$(curl -s -X POST $B25/api/auth/register -H 'Content-Type: application/json' -d "{\"email\":\"$1\",\"password\":\"password123\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+  local ID=$(curl -s $B25/api/me -H "Authorization: Bearer $T" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+  curl -s -o /dev/null -X POST $B25/api/admin/users/$ID/activate -H "Authorization: Bearer $AT25" -H 'Content-Type: application/json' -d '{"plan_id":"extrapro","period":"monthly"}'
+  echo $T
+}
+XT25A=$(mkxp25 plxp1@example.com)
+XT25B=$(mkxp25 plxp2@example.com)
+poll25() { # jobId token -> echoes the final generation JSON
+  local st=""
+  for i in $(seq 1 40); do
+    st=$(curl -s $B25/api/generations/$1 -H "Authorization: Bearer $2")
+    [[ "$(echo "$st" | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])' 2>/dev/null)" == "completed" ]] && break || sleep 0.3
+  done
+  echo "$st"
+}
+check "config: seedance_engine durations + linear price map (Phase L)" "5,10,15,20,30/60,120,180,240,360" "$(curl -s $B25/api/config | python3 -c 'import sys,json;s=json.load(sys.stdin)["seedance_engine"];print(",".join(str(d) for d in s["durations"])+"/"+",".join(str(s["price_credits"][str(d)]) for d in s["durations"]))')"
+check "migration v18: generations camera_move/shot_size columns applied" "ok" "$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-phaseL-test.db');
+const cols = db.prepare(\"SELECT name FROM pragma_table_info('generations') WHERE name IN ('camera_move','shot_size')\").all().length;
+const mig = db.prepare('SELECT COUNT(*) AS c FROM schema_migrations WHERE version = 18').get().c;
+console.log(cols === 2 && Number(mig) === 1 ? 'ok' : 'bad');
+")"
+HOMEPAGE25=$(curl -s $B25/)
+check "phase L frontend: camera + shot chip rows ship" "yes" "$(echo "$HOMEPAGE25" | grep -q 'id="cameraSeg"' && echo "$HOMEPAGE25" | grep -q 'id="shotSeg"' && echo "$HOMEPAGE25" | grep -q 'data-camera="zoom_in"' && echo "$HOMEPAGE25" | grep -q 'data-camera="tracking"' && echo "$HOMEPAGE25" | grep -q 'data-shot="close_up"' && echo "$HOMEPAGE25" | grep -q 'data-shot="aerial"' && echo yes || echo no)"
+check "phase L frontend: directive-not-guarantee honesty line ships" "yes" "$(echo "$HOMEPAGE25" | grep -q 'Camera moves are prompt directions to the AI' && echo yes || echo no)"
+check "phase L frontend: genBody wires camera/shot + per-engine durations render" "yes" "$(echo "$HOMEPAGE25" | grep -q 'camera: state.camera' && echo "$HOMEPAGE25" | grep -q 'shot: state.shot' && echo "$HOMEPAGE25" | grep -q 'function currentDurations' && echo "$HOMEPAGE25" | grep -q 'seedance_engine.durations' && echo "$HOMEPAGE25" | grep -q 'function renderDurationSeg' && echo yes || echo no)"
+# NOTE: exactly 8 generate-family calls on this instance (shared limiter).
+check "camera gen: unknown camera -> 400 before charging" "400/100" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B25/api/generate -H "Authorization: Bearer $FT25" -H 'Content-Type: application/json' -d '{"prompt":"a calm river at dawn","camera":"flyover"}')/$(curl -s $B25/api/me -H "Authorization: Bearer $FT25" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "camera gen: unknown shot -> 400 before charging" "400/100" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B25/api/generate -H "Authorization: Bearer $FT25" -H 'Content-Type: application/json' -d '{"prompt":"a calm river at dawn","shot":"extreme"}')/$(curl -s $B25/api/me -H "Authorization: Bearer $FT25" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "durations: H3 request at 15s -> 400 (long durations never faked)" "400/100" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B25/api/generate -H "Authorization: Bearer $FT25" -H 'Content-Type: application/json' -d '{"prompt":"a calm river at dawn","duration":15}')/$(curl -s $B25/api/me -H "Authorization: Bearer $FT25" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+PLG1=$(curl -s -X POST $B25/api/generate -H "Authorization: Bearer $FT25" -H 'Content-Type: application/json' -d '{"prompt":"a fisherman casts his net over a calm river at dawn","camera":"zoom_in","shot":"wide","duration":5}')
+check "camera gen (H3, 5s): standard 10 charged, choices + directive in the response" "10/90/zoom_in/wide/, slow cinematic zoom in, wide establishing shot" "$(echo $PLG1 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"])+"/"+g["camera_move"]+"/"+g["shot_size"]+"/"+g["camera_directive"])')"
+PLFB=$(curl -s $B25/api/_test/fal-body)
+check "camera gen: fal prompt carries the directives after the user text" "a fisherman casts his net over a calm river at dawn, slow cinematic zoom in, wide establishing shot — style: realistic" "$(echo $PLFB | python3 -c 'import sys,json;print(json.load(sys.stdin)["body"]["prompt"])')"
+PLJ1=$(echo $PLG1 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+PLP1=$(poll25 $PLJ1 $FT25)
+check "camera gen: completes on the stub" "completed" "$(echo $PLP1 | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])')"
+PLHIST=$(curl -s $B25/api/history -H "Authorization: Bearer $FT25")
+check "camera gen: History exposes the choices + the exact directive phrase" "zoom_in/wide/, slow cinematic zoom in, wide establishing shot" "$(echo $PLHIST | python3 -c 'import sys,json;g=[x for x in json.load(sys.stdin)["generations"] if x["camera_move"]][0];print(g["camera_move"]+"/"+g["shot_size"]+"/"+g["camera_directive"])')"
+PLNOTE=$(python3 -c 'import json;print(json.dumps({"prompt":"a lighthouse on the rocks, slow zoom out over the waves","mode":"realistic","style":"realistic","duration":5,"camera":"zoom_in","auto_confirmed":True,"auto_plan":{"apply":{"mode":"realistic","aspect_ratio":"16:9","sound":None,"voice":None,"speaking_engine":False,"mute":False},"engine":{"route":"h3_text_to_video","model":"minimax/h3/text-to-video","reason":"echo"},"base_cost":10,"total_cost":10}}))')
+PLG2=$(curl -s -X POST $B25/api/generate -H "Authorization: Bearer $FT25" -H 'Content-Type: application/json' -d "$PLNOTE")
+check "camera gen: chip overrides contradictory prompt wording — stored plan notes it" "noted" "$(echo $PLG2 | python3 -c 'import sys,json;ns=json.load(sys.stdin).get("auto_plan",{}).get("notes",[]);print("noted" if any("Camera direction" in n and "overrides the camera wording" in n for n in ns) else "missing")')"
+SDG15=$(curl -s -X POST $B25/api/generate -H "Authorization: Bearer $XT25A" -H 'Content-Type: application/json' -d '{"prompt":"a misty mountain valley at dawn","engine":"seedance","aspect_ratio":"16:9","duration":15,"mode":"realistic","style":"cinematic"}')
+check "seedance gen (XP, 15s): linear premium 180 charged" "180/520" "$(echo $SDG15 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+PLCALLS=$(curl -s http://127.0.0.1:$PL_STUB_PORT/__calls)
+check "seedance gen (15s): stub received the duration as a string" "15/str" "$(echo $PLCALLS | python3 -c 'import sys,json;cs=[c for c in json.load(sys.stdin)["calls"] if c["path"]=="/bytedance/seedance-2.5/text-to-video"];b=cs[-1]["body"];print(b["duration"]+"/"+("str" if isinstance(b["duration"],str) else "int"))')"
+SDG30=$(curl -s -X POST $B25/api/generate -H "Authorization: Bearer $XT25B" -H 'Content-Type: application/json' -d '{"prompt":"a misty mountain valley at dawn","engine":"seedance","aspect_ratio":"16:9","duration":30,"mode":"realistic","style":"cinematic"}')
+check "seedance gen (XP, 30s): linear premium 360 charged (inside the 400/day cap)" "360/340" "$(echo $SDG30 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "seedance gen: non-offered duration 25 -> 400 before charging" "400/520" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B25/api/generate -H "Authorization: Bearer $XT25A" -H 'Content-Type: application/json' -d '{"prompt":"a misty mountain valley at dawn","engine":"seedance","aspect_ratio":"16:9","duration":25}')/$(curl -s $B25/api/me -H "Authorization: Bearer $XT25A" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+kill $SRV25_PID $PLSTUB_PID 2>/dev/null
 
 echo "--- rate limit: burst until 429 ---"
 FOUND429="no"

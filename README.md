@@ -976,9 +976,9 @@ route. The Studio option reads "Seedance 2.5 · Premium — Top-ranked
 quality · 720p · Extra Pro", and the test suite asserts no "4K"
 wording appears anywhere near it.
 
-**How it is sold.** **60 credits (5s) / 120 credits (10s)**, **Extra
-Pro only** (the `can_seedance` entitlement, migration v17; everyone
-else gets 403). Sustainability at the Rs 14/credit floor and
+**How it is sold.** **60 credits (5s) / 120 credits (10s)** — extended
+by Phase L to the full linear table below — **Extra Pro only** (the
+`can_seedance` entitlement, migration v17; everyone else gets 403). Sustainability at the Rs 14/credit floor and
 Rs 277/$: worst case 10s @720p ≈ $4.73 ≈ Rs 1,310 vs floor revenue
 120 × Rs 14 = Rs 1,680 (~28% margin); 5s ≈ $2.37 ≈ Rs 656 vs
 Rs 840. Select it directly with `engine: "seedance"` (alias
@@ -1001,6 +1001,70 @@ the owner's fal top-up sample** (sample battery Batch F: one 5s 720p
 clip on benchmark prompt P1, ≈ $2.37, judged against the H3 output
 on the same prompt; if it does not clearly beat H3 on realism and
 motion, the engine gets disabled, not sold quietly).
+
+## Cinematic camera & shot controls + per-engine durations (Phase L, migration v18)
+
+From the owner's feature spec v2 (2026-10-24, sections 2/3/4/6):
+Runway/Higgsfield-style camera direction and Kling-style duration
+choice, implemented only where the integrated APIs genuinely support
+them.
+
+**Camera movement & shot size — prompt directives, honestly labelled.**
+Two optional chip rows in the Studio's Advanced settings: Camera
+movement (None, Zoom In, Zoom Out, Pan Left, Pan Right, Tilt Up,
+Tilt Down, Tracking Shot, Orbit, Handheld, Static) and Shot size
+(None, Close-up, Medium Shot, Wide Shot, Aerial / Drone). No engine in
+our wiring exposes a mechanical camera parameter, so these are
+**prompt directives**: `POST /api/generate` validates `camera` /
+`shot` against fixed whitelists (unknown values → 400 before any
+charge) and the server appends a plain-English phrase to the prompt
+actually sent to the provider — e.g. `, slow cinematic zoom in,
+wide establishing shot` — after translation and after the Auto
+Director's own enrichment, so it reaches every text-prompt route
+(H3 text/image/reference, Kling O3 4K, Gemini Omni speaking,
+Seedance 2.5) verbatim. The Studio hint says exactly what they are:
+*"Camera moves are prompt directions to the AI · کیمرہ حرکات AI کو
+ہدایات ہیں — the model follows them as guidance, not as a mechanical
+guarantee."* Directives are free (no credit change) and work with AI
+Auto on or off. If the prompt text itself names a *different* camera
+move, the explicit chip wins — it is appended last, as the direct
+instruction — and the stored auto plan notes the override (no extra
+confirmation round). The choices are recorded on the generation row
+(migration v18: `generations.camera_move` / `shot_size` — dedicated
+columns rather than the auto_plan JSON, because the controls apply
+with Auto on or off while auto_plan exists only for confirmed Auto
+plans), and History shows the choices together with the exact
+directive phrase that was appended (`camera_directive`, recomputed
+server-side from the recorded choices — the same transparency pattern
+as `translated_prompt`).
+
+**Longer durations — only where the model genuinely allows them.**
+The Seedance 2.5 schema allows 4–30s, so its offered set grows from
+{5, 10} to **{5, 10, 15, 20, 30}** at the same linear rate of
+**12 credits/second**:
+
+| Duration | 5s | 10s | 15s | 20s | 30s |
+|---|---|---|---|---|---|
+| Credits | 60 | 120 | 180 | 240 | 360 |
+
+The margin holds linearly: the 30s worst case ≈ 30 × $0.473 =
+$14.19 ≈ Rs 3,930 vs floor revenue 360 × Rs 14 = Rs 5,040 (~28%).
+The duration is still sent to fal as a **string**, and
+`seedance_engine` in `GET /api/config` now carries the `durations`
+list beside the price map; the Studio's duration control renders the
+extended set only while the Seedance engine is selected and
+re-clamps the selection when switching engines. A 30s job costs 360
+of the 400-credit daily cap — intended; the cap is unchanged. Every
+other engine keeps 5/10s: the H3, Omni and Kling schemas are wired
+at those durations in this codebase, a 15s request to them is a 400,
+and longer durations are **never faked** — a 60-second video is
+served by the existing free clip-joining (up to 6 finished clips),
+not by pretending a model generated it in one pass.
+
+**Status: built and simulation-tested** — whether the models honour
+the camera directives well is a quality question only the owner's
+fal top-up sample battery can answer; the directives are guidance
+to the model, and the UI never promises more than that.
 
 ## Test results (backend, 2026-10-20)
 Run locally with `bash test.sh` — **19/19 tests passed** with a dummy key (no paid calls):
