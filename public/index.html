@@ -494,6 +494,19 @@
         color:#f2b8ae; border-radius:10px; padding:10px 13px; font-size:13.5px;
       }
       .auth-error.show{ display:block; }
+      /* Phase N: social sign-in buttons + account panels in the auth modal */
+      .auth-social{ display:flex; flex-direction:column; gap:9px; margin:4px 0 12px; }
+      .auth-social .btn{ width:100%; justify-content:center; }
+      .auth-social .btn[disabled]{ opacity:.55; cursor:not-allowed; }
+      #googleBtnWrap{ justify-content:center; }
+      .auth-divider{ display:flex; align-items:center; gap:10px; color:var(--faint); font-size:12px; margin:2px 0 2px; }
+      .auth-divider::before, .auth-divider::after{ content:""; flex:1; height:1px; background:var(--line); }
+      .auth-note{ color:var(--muted); font-size:12.5px; margin:12px 0 0; line-height:1.5; }
+      .linkish-btn{ background:none; border:0; color:var(--amber); font-size:13px; font-weight:600; padding:4px 2px; cursor:pointer; }
+      .danger-zone{ border:1px solid rgba(229,83,61,.45); border-radius:12px; padding:14px; margin-top:18px; }
+      .danger-zone h3{ color:#f2b8ae; font-size:14px; margin:0 0 6px; }
+      .danger-zone p{ color:var(--muted); font-size:13px; margin:0 0 10px; }
+      .danger-zone label{ display:block; font-size:12px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--faint); margin:10px 0 6px; }
       .toast{
         position:fixed; left:50%; bottom:96px; transform:translateX(-50%) translateY(16px);
         background:var(--panel-3); border:1px solid var(--line); color:var(--text);
@@ -1391,6 +1404,26 @@
                 <button type="button" class="btn" id="refreshMeBtn">Refresh</button>
                 <button type="button" class="btn" id="signOutBtn">Sign out</button>
               </div>
+              <!-- Phase N: linked sign-in methods + account deletion.
+                   Accounts are never merged automatically — linking is
+                   done here, signed in, after provider verification. -->
+              <div class="field-label"><span>Sign-in methods · لاگ اِن کے طریقے</span></div>
+              <div id="meIdentities"><p class="lang-hint">Loading…</p></div>
+              <div class="result-actions">
+                <button type="button" class="btn small" id="linkGoogleBtn" style="display:none;">Link Google · Google جوڑیں</button>
+              </div>
+              <div class="danger-zone">
+                <h3>Delete account · اکاؤنٹ حذف کریں</h3>
+                <p>This permanently deletes your account, credits, videos and history. This cannot be undone. یہ عمل واپس نہیں ہو سکتا۔</p>
+                <label for="deleteConfirm">Type DELETE to confirm</label>
+                <input type="text" id="deleteConfirm" class="text-input" placeholder="DELETE" autocomplete="off" />
+                <label for="deletePass">Your password (if your account has one)</label>
+                <input type="password" id="deletePass" class="text-input" placeholder="••••••••" autocomplete="current-password" />
+                <div class="result-actions">
+                  <button type="button" class="btn" id="deleteAccountBtn">Delete my account</button>
+                </div>
+                <p class="lang-hint" id="deleteStatus"></p>
+              </div>
             </div>
           </div>
         </div>
@@ -1401,7 +1434,7 @@
       <section class="view" id="view-privacy">
         <div class="policy">
           <h1>Privacy Policy</h1>
-          <p class="updated">AJK AI — AI Video Generator · Last updated 23 October 2026</p>
+          <p class="updated">AJK AI — AI Video Generator · Last updated 24 October 2026</p>
 
           <h2>What we collect</h2>
           <ul>
@@ -1422,6 +1455,9 @@
 
           <h2>Retention and deletion</h2>
           <p>Generated videos and prompts are kept while your account is active. You can ask for individual videos to be removed, and deleting your account removes your prompts, videos, and profile within 30 days, except records we must keep for fraud prevention or legal reasons.</p>
+
+          <h2>Sign-in, email verification and social accounts</h2>
+          <p>When email verification is enabled on the service, a new email account confirms its address through a link we email it; password-reset links work the same way. Those links are single-use, expire quickly, and the codes behind them are stored only as one-way hashes — they never appear in any admin screen, and no password or code is ever sent to the app owner's own email, Facebook or phone number. If you sign in with Google, we receive your name, email address and profile photo from Google to create and identify your account; we never receive your Google password. Accounts are never merged automatically: a Google sign-in creates its own account unless you first sign in with your password and then link Google yourself in Settings. You can delete your account at any time from Settings — deletion permanently removes your account, credits, videos and history.</p>
 
           <h2>Your choices</h2>
           <ul>
@@ -1485,6 +1521,17 @@
         <button type="button" class="close-x" data-close="authModal" aria-label="Close">✕</button>
         <h3 id="authTitle">Welcome to AJK AI</h3>
         <p class="sub" id="authSub">Your Imagination. AI Motion. Sign in to generate videos and see your history. New accounts receive free starter credits.</p>
+        <!-- Phase N: provider sign-in buttons. A button is only LIVE when
+             the server reports that provider configured in /api/config;
+             otherwise it stays disabled with the honest coming-soon
+             label — never a dead button that pretends to work. -->
+        <div class="auth-social">
+          <div id="googleBtnWrap" style="display:none;"></div>
+          <button type="button" class="btn" id="googleFallbackBtn">Continue with Google</button>
+          <button type="button" class="btn" id="facebookBtn" disabled>Continue with Facebook — coming soon · جلد آ رہا ہے</button>
+          <button type="button" class="btn" id="phoneBtn" disabled>Continue with Phone Number — coming soon · جلد آ رہا ہے</button>
+        </div>
+        <div class="auth-divider"><span>or with email · یا ای میل سے</span></div>
         <div class="auth-switch" role="group" aria-label="Sign in or register">
           <button type="button" id="authModeLogin" class="sel">Sign in</button>
           <button type="button" id="authModeRegister">Create account</button>
@@ -1494,12 +1541,40 @@
           <input type="email" id="authEmail" required placeholder="you@example.com" autocomplete="email" />
           <label for="authPass">Password</label>
           <input type="password" id="authPass" required placeholder="••••••••" autocomplete="current-password" />
+          <div style="text-align:right;">
+            <button type="button" class="linkish-btn" id="forgotLink">Forgot password?</button>
+          </div>
           <div class="auth-error" id="authError" role="alert"></div>
           <div class="row-actions">
             <button type="button" class="btn" data-close="authModal">Cancel</button>
             <button type="submit" class="btn primary" id="authSubmit">Sign in</button>
           </div>
         </form>
+        <p class="auth-note" id="resendLine" style="display:none;">Didn't get the verification email? <button type="button" class="linkish-btn" id="resendVerifyBtn">Resend verification</button></p>
+        <div id="forgotPanel" style="display:none;">
+          <label for="forgotEmail">Your account email</label>
+          <input type="email" id="forgotEmail" placeholder="you@example.com" autocomplete="email" />
+          <div class="row-actions">
+            <button type="button" class="btn" id="forgotCancel">Back</button>
+            <button type="button" class="btn primary" id="forgotSend">Send reset link</button>
+          </div>
+          <p class="auth-note" id="forgotStatus"></p>
+        </div>
+        <div id="resetPanel" style="display:none;">
+          <label for="resetPass">New password</label>
+          <input type="password" id="resetPass" placeholder="••••••••" autocomplete="new-password" />
+          <div class="row-actions">
+            <button type="button" class="btn primary" id="resetSubmit">Set new password</button>
+          </div>
+          <p class="auth-note" id="resetStatus"></p>
+        </div>
+        <div id="verifyPanel" style="display:none;">
+          <p class="auth-note" id="verifyStatus">Verifying your email…</p>
+          <div class="row-actions">
+            <button type="button" class="btn" id="verifyBack">Back to sign in</button>
+          </div>
+        </div>
+        <p class="auth-note">Already have an account with the same email? Sign in with email, then link Google in Settings · اسی ای میل سے اکاؤنٹ ہے؟ ای میل سے لاگ اِن کر کے Settings میں Google جوڑیں</p>
       </div>
     </div>
 
@@ -2103,6 +2178,7 @@
               fillAccountMeta();
               fillVoiceUI();
               renderLangLab();
+              fillAuthUI();
               fillSoundUI();
               fillCharacterVoiceUI();
               updateAdSlots();
@@ -2192,6 +2268,7 @@
               fillVoiceGate();
               fillSeedanceGate();
               loadCharacters();
+              loadIdentities();
               fillAccountMeta();
               setSignedInUI();
               updateAdSlots();
@@ -2242,7 +2319,23 @@
             btn.disabled = false;
             btn.textContent = authMode === "login" ? "Sign in" : "Create account";
             if (res.network) { showAuthError("Backend not connected — no response from " + apiBase + ". Check the API base URL in Settings."); return; }
+            // Phase N: with email verification on, a successful signup
+            // returns no token — the account activates via the emailed
+            // link (and the bonus lands then, not before).
+            if (res.ok && res.data && res.data.verification_required) {
+              lastSignupEmail = email;
+              $("#verifyStatus").textContent = "Account created — we emailed a verification link to " + email + ". Open it to activate your account and receive your free credits. تصدیقی لنک آپ کی ای میل پر بھیج دیا گیا ہے۔";
+              $("#resendLine").style.display = "block";
+              showAuthPanel("verify");
+              return;
+            }
             if (!res.ok || !res.data || !res.data.token) {
+              if (res.data && res.data.error === "email_not_verified") {
+                lastSignupEmail = email;
+                showAuthError("This email isn't verified yet. Open the verification link we emailed you — or resend it below.");
+                $("#resendLine").style.display = "block";
+                return;
+              }
               showAuthError(errText(res, authMode === "register" ? "Could not create the account" : "Sign-in failed"));
               return;
             }
@@ -2272,6 +2365,213 @@
         }
         $("#signOutBtn").addEventListener("click", function () { signOut(false); });
         $("#refreshMeBtn").addEventListener("click", function () { loadMe().then(function () { toast("Account refreshed."); }); });
+
+        /* ---------- modern auth (Phase N) ---------- */
+        // Provider buttons follow /api/config exactly: Google is live
+        // only when the server reports it configured (client id is a
+        // public identifier, shipped by the config); Facebook and
+        // phone stay disabled with the coming-soon label until their
+        // adapters exist. Verification / reset links arrive as
+        // ?verify= / ?reset= and are exchanged immediately, then
+        // stripped from the URL.
+        var lastSignupEmail = "";
+        var pendingResetToken = null;
+        var googleLinkMode = false;
+
+        function showAuthPanel(which) {
+          $("#authForm").style.display = which === "form" ? "block" : "none";
+          $("#forgotPanel").style.display = which === "forgot" ? "block" : "none";
+          $("#resetPanel").style.display = which === "reset" ? "block" : "none";
+          $("#verifyPanel").style.display = which === "verify" ? "block" : "none";
+        }
+        $("#verifyBack").addEventListener("click", function () { showAuthPanel("form"); });
+
+        function fillAuthUI() {
+          var g = $("#googleFallbackBtn");
+          if (!g) return;
+          var on = !!(cfg && cfg.auth && cfg.auth.google && cfg.google_client_id);
+          if (on) {
+            g.disabled = false;
+            g.textContent = "Continue with Google";
+            initGoogle();
+          } else {
+            g.disabled = true;
+            g.textContent = "Continue with Google — coming soon · جلد آ رہا ہے";
+          }
+          // Facebook + phone adapters arrive in a later phase; the
+          // buttons remain disabled with the honest label until then.
+          $("#facebookBtn").disabled = true;
+          $("#phoneBtn").disabled = true;
+        }
+
+        function loadGis(done) {
+          if (window.google && google.accounts && google.accounts.id) { done(true); return; }
+          var s = document.createElement("script");
+          s.src = "https://accounts.google.com/gsi/client";
+          s.async = true; s.defer = true;
+          s.onload = function () { done(true); };
+          s.onerror = function () { done(false); };
+          document.head.appendChild(s);
+        }
+        function initGoogle() {
+          loadGis(function (ok) {
+            if (!ok || !cfg || !cfg.google_client_id) return; // fallback button stays as the prompt trigger
+            google.accounts.id.initialize({ client_id: cfg.google_client_id, callback: handleGoogleCredential });
+            var wrap = $("#googleBtnWrap");
+            wrap.innerHTML = "";
+            google.accounts.id.renderButton(wrap, { theme: "outline", size: "large", text: "continue_with", width: 280 });
+            wrap.style.display = "flex";
+            $("#googleFallbackBtn").style.display = "none";
+          });
+        }
+        function promptGoogle(linkMode) {
+          googleLinkMode = !!linkMode;
+          loadGis(function (ok) {
+            if (!ok || !cfg || !cfg.google_client_id) { googleLinkMode = false; toast("Google sign-in couldn't load — check your connection."); return; }
+            google.accounts.id.initialize({ client_id: cfg.google_client_id, callback: handleGoogleCredential });
+            google.accounts.id.prompt();
+          });
+        }
+        function handleGoogleCredential(resp) {
+          if (!resp || !resp.credential) { googleLinkMode = false; toast("Google sign-in was cancelled."); return; }
+          var linkMode = googleLinkMode; googleLinkMode = false;
+          api(linkMode ? "/api/auth/link/google" : "/api/auth/google", {
+            method: "POST", body: { id_token: resp.credential }
+          }).then(function (res) {
+            if (!res.ok || !res.data) { toast(errText(res, linkMode ? "Could not link Google" : "Google sign-in failed")); return; }
+            if (linkMode) { toast("Google linked to your account."); loadIdentities(); return; }
+            if (!res.data.token) { toast("Google sign-in failed"); return; }
+            token = res.data.token;
+            lsSet(LS_TOKEN, token);
+            if (res.data.credits !== undefined) setCredits(res.data.credits);
+            setSignedInUI();
+            closeModal("authModal");
+            toast(res.data.created ? "Account created with Google — welcome!" : "Signed in with Google");
+            loadMe();
+            loadHistory();
+          });
+        }
+        $("#googleFallbackBtn").addEventListener("click", function () { promptGoogle(false); });
+        $("#linkGoogleBtn").addEventListener("click", function () { promptGoogle(true); });
+
+        /* ----- email verification / password reset panels ----- */
+        $("#forgotLink").addEventListener("click", function () {
+          $("#forgotEmail").value = $("#authEmail").value.trim();
+          $("#forgotStatus").textContent = "";
+          showAuthPanel("forgot");
+        });
+        $("#forgotCancel").addEventListener("click", function () { showAuthPanel("form"); });
+        $("#forgotSend").addEventListener("click", function () {
+          var em = $("#forgotEmail").value.trim();
+          if (!em) { $("#forgotStatus").textContent = "Enter your email first."; return; }
+          var btn = $("#forgotSend"); btn.disabled = true;
+          api("/api/auth/forgot", { method: "POST", body: { email: em } }).then(function (res) {
+            btn.disabled = false;
+            if (res.status === 503) { $("#forgotStatus").textContent = "Password reset by email isn't switched on yet on this server. ای میل سے پاس ورڈ بحالی ابھی فعال نہیں ہے۔"; return; }
+            if (!res.ok) { $("#forgotStatus").textContent = errText(res, "Could not send the reset email"); return; }
+            $("#forgotStatus").textContent = "If that email has an account, a reset link is on its way — check your inbox. اگر اکاؤنٹ موجود ہے تو لنک بھیج دیا گیا ہے۔";
+          });
+        });
+        $("#resendVerifyBtn").addEventListener("click", function () {
+          var em = lastSignupEmail || $("#authEmail").value.trim();
+          if (!em) { toast("Enter your email in the form first."); return; }
+          api("/api/auth/resend-verification", { method: "POST", body: { email: em } }).then(function (res) {
+            if (res.status === 503) { toast("Email verification isn't switched on for this server."); return; }
+            toast(res.ok ? "If the account still needs verifying, a fresh link is on its way." : errText(res, "Could not resend the link"));
+          });
+        });
+        $("#resetSubmit").addEventListener("click", function () {
+          var pw = $("#resetPass").value;
+          if (!pw || pw.length < 8) { $("#resetStatus").textContent = "Use at least 8 characters."; return; }
+          if (!pendingResetToken) { $("#resetStatus").textContent = "This reset link has already been handled — request a new one."; return; }
+          var btn = $("#resetSubmit"); btn.disabled = true;
+          api("/api/auth/reset", { method: "POST", body: { token: pendingResetToken, new_password: pw } }).then(function (res) {
+            btn.disabled = false;
+            if (!res.ok) { $("#resetStatus").textContent = errText(res, "Could not reset the password") + " The link may have expired — request a new one."; return; }
+            pendingResetToken = null;
+            $("#resetPass").value = "";
+            toast("Password updated — sign in with your new password. نیا پاس ورڈ لگ گیا ہے۔");
+            setAuthMode("login");
+            showAuthPanel("form");
+          });
+        });
+
+        function handleAuthDeepLinks() {
+          var q;
+          try { q = new URLSearchParams(window.location.search); } catch (e) { return; }
+          var vt = q.get("verify"), rt = q.get("reset");
+          if (!vt && !rt) return;
+          // Strip the token from the address bar at once — it must not
+          // linger in history, screenshots or shared links.
+          try { window.history.replaceState(null, "", window.location.pathname); } catch (e) {}
+          openAuth("login");
+          if (vt) {
+            showAuthPanel("verify");
+            $("#verifyStatus").textContent = "Verifying your email…";
+            api("/api/auth/verify-email", { method: "POST", body: { token: vt } }).then(function (res) {
+              if (res.ok && res.data) {
+                toast("Email verified — your " + (res.data.credits || 0) + " free credits are ready. Sign in now! ای میل کی تصدیق ہو گئی۔");
+                showAuthPanel("form");
+              } else {
+                $("#verifyStatus").textContent = errText(res, "Verification failed") + " — the link may have expired; sign in and use Resend verification.";
+              }
+            });
+          }
+          if (rt) {
+            pendingResetToken = rt;
+            $("#resetStatus").textContent = "Choose a new password for your account.";
+            showAuthPanel("reset");
+          }
+        }
+
+        /* ----- Settings: linked sign-in methods + delete account ----- */
+        function loadIdentities() {
+          var box = $("#meIdentities");
+          if (!box || !token) return;
+          api("/api/auth/identities").then(function (res) {
+            if (!res.ok || !res.data) { box.innerHTML = ""; return; }
+            box.innerHTML = "";
+            var ids = res.data.identities || [];
+            ids.forEach(function (it) {
+              var p = document.createElement("p");
+              p.className = "lang-hint";
+              p.textContent = humanize(it.provider) +
+                (it.email ? " — " + it.email : "") + (it.phone ? " — " + it.phone : "") +
+                (it.verified ? " · verified" : " · not verified");
+              box.appendChild(p);
+              if (it.provider === "google") {
+                var ub = document.createElement("button");
+                ub.type = "button"; ub.className = "btn small"; ub.textContent = "Unlink Google";
+                ub.addEventListener("click", function () {
+                  api("/api/auth/unlink", { method: "POST", body: { provider: "google" } }).then(function (r2) {
+                    if (!r2.ok) { toast(errText(r2, "Could not unlink Google")); return; }
+                    toast("Google unlinked.");
+                    loadIdentities();
+                  });
+                });
+                box.appendChild(ub);
+              }
+            });
+            var hasGoogle = ids.some(function (i) { return i.provider === "google"; });
+            var lb = $("#linkGoogleBtn");
+            if (lb) lb.style.display = (!hasGoogle && cfg && cfg.auth && cfg.auth.google) ? "inline-flex" : "none";
+          });
+        }
+        $("#deleteAccountBtn").addEventListener("click", function () {
+          var conf = $("#deleteConfirm").value;
+          var pw = $("#deletePass").value;
+          var st = $("#deleteStatus");
+          if (String(conf || "").trim().toUpperCase() !== "DELETE") { st.textContent = "Type DELETE in the box above to confirm."; return; }
+          var btn = $("#deleteAccountBtn"); btn.disabled = true;
+          api("/api/account/delete", { method: "POST", body: { confirm: conf, password: pw } }).then(function (res) {
+            btn.disabled = false;
+            if (!res.ok) { st.textContent = errText(res, "The account could not be deleted"); return; }
+            $("#deleteConfirm").value = ""; $("#deletePass").value = ""; st.textContent = "";
+            signOut(true);
+            showView("studio");
+            toast("Your account has been deleted. اکاؤنٹ حذف ہو گیا ہے۔");
+          });
+        });
 
         /* ---------- prompt tools ---------- */
         var promptEl = $("#prompt");
@@ -4372,6 +4672,7 @@
         if (!token) renderHistoryState("signedout");
         loadConfig();
         if (token) { loadMe(); loadHistory(); }
+        handleAuthDeepLinks();
       })();
     </script>
     <script>
