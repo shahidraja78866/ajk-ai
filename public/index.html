@@ -171,12 +171,14 @@
       .conn-banner button{ margin-left:auto; flex:none; }
       @keyframes pulse{ 0%,100%{ transform:scale(.65);} 50%{ transform:scale(1.1);} }
 
-      /* ---------- hero (homepage branding) ---------- */
-      .hero{ margin:4px 0 22px; }
-      .hero h1{ font-family:var(--font-display); font-size:32px; line-height:1.15; letter-spacing:-.02em; margin:0 0 7px; }
-      .hero h1 .accent{ color:#a78bfa; }
-      .hero p{ color:var(--muted); margin:0; max-width:660px; font-size:15.5px; }
-      .hero p strong{ color:var(--text); font-weight:600; }
+      /* ---------- home greeting (Phase K) ----------
+         One slim Runway-style greeting line tops the Studio — the
+         header already carries the brand, so Home opens calm and
+         composer-first. Text is set by fillGreeting() from /api/me. */
+      .home-greeting{
+        font-family:var(--font-display); font-size:27px; font-weight:700;
+        line-height:1.25; letter-spacing:-.02em; margin:6px 0 16px;
+      }
 
       /* ---------- studio grid ---------- */
       .studio-grid{ display:grid; grid-template-columns:minmax(0,1fr) 400px; gap:20px; align-items:start; }
@@ -605,17 +607,13 @@
         .topnav{ display:none; }
         .bottomnav{ display:block; }
         .brand .brand-sub{ font-size:9px; }
-        .hero{ margin-bottom:14px; }
-        .hero h1{ font-size:26px; margin-bottom:4px; }
+        .home-greeting{ font-size:23px; margin-bottom:12px; }
         textarea#prompt{ min-height:92px; }
         .wrap{ padding:18px 14px 40px; }
         footer{ padding-bottom:110px; }
         .conn-banner{ flex-wrap:wrap; }
         .conn-banner button{ margin-left:23px; }
         /* Phase C3: keep the prompt reachable in the first screenful */
-        .hero{ margin:0 0 10px; }
-        .hero h1{ font-size:24px; }
-        .hero p{ display:none; }
         .conn-banner{ padding:10px 12px; margin-bottom:14px; }
         .conn-banner p{ font-size:12.5px; }
         #view-studio .card{ padding:16px; }
@@ -626,7 +624,8 @@
       }
       /* ---------- studio: Flow-style composer (Phase F) ----------
          The create surface is composer-first: a quiet template rail,
-         one prompt card, one row of quick chips, then Recent. The
+         one prompt card, one row of quick chips. (Phase K later
+         removed the Recent strip from this surface.) The
          existing controls themselves are reused — aspect/duration are
          the same #aspectSeg/#durationSeg nodes, and AI Auto is the
          same #aiAutoToggle checkbox, only restyled as a switch. */
@@ -703,31 +702,6 @@
       .auto-switch input:checked::after{ transform:translateX(16px); background:#fff; }
       .auto-switch input:focus-visible{ outline:2px solid var(--amber); outline-offset:2px; }
       .studio-auto-panel{ background:var(--panel); margin-top:10px; }
-      .recent-strip{ margin-top:16px; }
-      .recent-strip[hidden]{ display:none !important; }
-      .recent-head{ display:flex; align-items:baseline; justify-content:space-between; margin:0 0 8px; }
-      .recent-head h2{ font-family:var(--font-display); font-size:14px; margin:0; letter-spacing:-.01em; }
-      .recent-head span{ color:var(--faint); font-size:11.5px; }
-      .recent-list{ display:flex; gap:8px; }
-      .recent-item{
-        flex:1 1 0; min-width:0; display:flex; align-items:center; gap:9px;
-        background:var(--panel); border:1px solid var(--line-soft); border-radius:12px;
-        padding:8px; color:var(--text); text-align:left; cursor:pointer;
-      }
-      .recent-item:hover{ background:var(--panel-2); border-color:var(--line); }
-      .recent-thumb,.recent-icon{
-        width:44px; height:44px; border-radius:9px; flex:none; background:#000;
-      }
-      .recent-thumb{ object-fit:cover; display:block; }
-      .recent-icon{
-        display:grid; place-items:center; background:var(--panel-3); color:var(--amber);
-        font-family:var(--font-display); font-size:17px; font-weight:800;
-      }
-      .recent-text{ min-width:0; display:flex; flex-direction:column; line-height:1.3; }
-      .recent-prompt{
-        font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-      }
-      .recent-status{ color:var(--faint); font-size:11.5px; text-transform:capitalize; }
       @media (max-width:640px){
         #view-studio .tpl-card{ padding:0; margin-bottom:10px; }
         .tpl-chip{ min-height:52px; padding:9px 11px; }
@@ -736,92 +710,15 @@
         .composer-model{ max-width:100%; text-align:left; }
         select#promptLang{ min-width:126px; }
         textarea#prompt{ min-height:88px; }
-        .recent-list{ overflow-x:auto; padding-bottom:4px; scrollbar-width:none; }
-        .recent-list::-webkit-scrollbar{ display:none; }
-        .recent-item{ flex:0 0 176px; }
       }
       @media (prefers-reduced-motion: reduce){
         *{ animation:none !important; transition:none !important; }
         html{ scroll-behavior:auto; }
       }
-      /* ---------- home finishing (Phase H) ----------
-         Premium studio finish over the Phase F composer: a slim hero
-         band with a brand gradient glow, a visual showcase rail whose
-         cards are real template controls, a compact feature row, and
-         a "Your creations" gallery fed by the user's real history.
-         CSS only — gradients + transform/opacity transitions, no
-         images in the chrome, no animation loops. */
-      .hero{
-        position:relative; overflow:hidden; padding:15px 18px 14px; margin:4px 0 16px;
-        border:1px solid var(--line-soft); border-radius:16px;
-        background:
-          radial-gradient(130% 170% at 10% 0%, rgba(79,124,255,.22), transparent 55%),
-          radial-gradient(130% 170% at 90% 0%, rgba(154,92,255,.20), transparent 55%),
-          var(--panel);
-      }
-      .hero-eyebrow{
-        font-family:var(--font-display); font-size:11px; font-weight:800;
-        letter-spacing:.22em; text-transform:uppercase; margin:0 0 5px;
-        background:var(--accent-grad); -webkit-background-clip:text; background-clip:text; color:transparent;
-      }
-      @media (max-width:640px){
-        .hero{ padding:12px 14px; margin:0 0 12px; }
-      }
-      .showcase{ margin:0 0 18px; }
-      .showcase-head{ display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin:0 0 10px; }
-      .showcase-head h2{ font-family:var(--font-display); font-size:16px; margin:0; letter-spacing:-.01em; }
-      .showcase-head span{ color:var(--faint); font-size:11.5px; white-space:nowrap; }
-      .showcase-rail{ display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
-      .sc-card{
-        position:relative; display:block; width:100%; padding:0; overflow:hidden;
-        background:var(--panel); border:1px solid var(--line-soft); border-radius:14px;
-        color:var(--text); text-align:left; cursor:pointer;
-        transition:transform .18s, border-color .18s;
-      }
-      .sc-card:hover{ transform:translateY(-2px); border-color:var(--faint); }
-      .sc-card img{ display:block; width:100%; aspect-ratio:4/5; object-fit:cover; }
-      .sc-meta{
-        position:absolute; left:0; right:0; bottom:0; display:block;
-        padding:24px 10px 9px;
-        background:linear-gradient(180deg, transparent, rgba(5,6,12,.9));
-      }
-      .sc-title{ display:block; font-family:var(--font-display); font-size:13.5px; font-weight:700; line-height:1.25; }
-      .sc-label{ display:block; color:#c9d2e0; font-size:10.5px; margin-top:2px; }
-      @media (max-width:640px){
-        .showcase{ margin-bottom:14px; }
-        .showcase-rail{ display:flex; overflow-x:auto; padding-bottom:6px; scrollbar-width:none; }
-        .showcase-rail::-webkit-scrollbar{ display:none; }
-        .sc-card{ flex:0 0 136px; }
-      }
-      .feature-row{ display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:14px; }
-      .feature-item{
-        display:flex; align-items:center; gap:9px; padding:9px 11px;
-        background:var(--panel); border:1px solid var(--line-soft); border-radius:12px;
-        font-size:12.5px; font-weight:600; line-height:1.3;
-      }
-      .feature-item svg{ width:19px; height:19px; flex:none; color:var(--amber); }
-      @media (max-width:640px){
-        .feature-row{ grid-template-columns:repeat(2,1fr); }
-      }
-      .creations{ margin-top:18px; }
-      .creations[hidden]{ display:none !important; }
-      .creations-grid{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-      @media (min-width:641px){
-        .creations-grid{ grid-template-columns:repeat(4,1fr); }
-      }
-      .creation-item{
-        display:block; width:100%; padding:0; overflow:hidden; text-align:left; cursor:pointer;
-        background:var(--panel); border:1px solid var(--line-soft); border-radius:13px; color:var(--text);
-        transition:transform .18s, border-color .18s;
-      }
-      .creation-item:hover{ transform:translateY(-2px); border-color:var(--faint); }
-      .creation-item video{ display:block; width:100%; aspect-ratio:16/10; object-fit:cover; background:#000; }
-      .creation-meta{ display:block; padding:8px 10px 9px; }
-      .creation-prompt{
-        display:block; font-size:12.5px; font-weight:600; line-height:1.3;
-        white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-      }
-      .creation-sub{ display:block; color:var(--faint); font-size:11px; margin-top:1px; }
+      /* Phase K: the Phase H home-finishing CSS (hero band, showcase
+         rail, feature row, creations gallery) was removed with its
+         sections — the owner found the finished Home crowded next to
+         Runway's. Only the slim greeting style above remains. */
     </style>
   </head>
   <body>
@@ -855,11 +752,10 @@
 
       <!-- ================= STUDIO ================= -->
       <section class="view active" id="view-studio">
-        <div class="hero">
-          <p class="hero-eyebrow">AJK AI · AI Video Generator</p>
-          <h1>Your Imagination. <span class="accent">AI Motion.</span></h1>
-          <p><strong>AJK AI — AI Video Generator.</strong> Describe a scene, pick a style and format, and turn your words into a video.</p>
-        </div>
+        <!-- Phase K: one slim greeting tops the Studio (Runway-style).
+             fillGreeting() prefixes "Hi <name>," when /api/me carries a
+             display name; otherwise this generic line stands. -->
+        <h1 class="home-greeting" id="homeGreeting">What are we creating today? · آج کیا بنائیں گے؟</h1>
 
         <div class="conn-banner checking" id="connBanner" role="status">
           <span class="conn-dot"></span>
@@ -900,33 +796,6 @@
             </button>
           </div>
         </div>
-
-        <!-- Phase H: visual showcase — each card is a real control that
-             loads the matching template/mode into the composer below.
-             The pictures are style previews (design artwork), NOT videos
-             this app generated, so every card carries the honest
-             "Style preview · انداز کی جھلک" label. -->
-        <section class="showcase" id="showcaseRail" aria-label="Style showcase">
-          <div class="showcase-head"><h2>Create anything · سب کچھ بنائیں</h2><span>Tap a style to start</span></div>
-          <div class="showcase-rail">
-            <button type="button" class="sc-card" data-showcase="showcase-realistic">
-              <img src="/showcase/showcase-realistic.jpg" alt="Realistic cinematic style preview" loading="lazy" decoding="async" />
-              <span class="sc-meta"><span class="sc-title">Realistic &amp; Cinematic</span><span class="sc-label">Style preview · انداز کی جھلک</span></span>
-            </button>
-            <button type="button" class="sc-card" data-showcase="kids-story">
-              <img src="/showcase/showcase-cartoon.jpg" alt="Cartoon and kids story style preview" loading="lazy" decoding="async" />
-              <span class="sc-meta"><span class="sc-title">Cartoon &amp; Kids</span><span class="sc-label">Style preview · انداز کی جھلک</span></span>
-            </button>
-            <button type="button" class="sc-card" data-showcase="showcase-animals">
-              <img src="/showcase/showcase-animals.jpg" alt="Animals and wildlife style preview" loading="lazy" decoding="async" />
-              <span class="sc-meta"><span class="sc-title">Animals &amp; Wildlife</span><span class="sc-label">Style preview · انداز کی جھلک</span></span>
-            </button>
-            <button type="button" class="sc-card" data-showcase="talking-photo">
-              <img src="/showcase/showcase-speaking.jpg" alt="Talking photo and speaking video style preview" loading="lazy" decoding="async" />
-              <span class="sc-meta"><span class="sc-title">Talking &amp; Speaking</span><span class="sc-label">Style preview · انداز کی جھلک</span></span>
-            </button>
-          </div>
-        </section>
 
         <div class="studio-grid">
           <div>
@@ -977,34 +846,6 @@
               </label>
             </div>
 
-            <!-- Phase H: feature highlights — short, truthful labels only. -->
-            <div class="feature-row" id="featureRow" aria-label="Features">
-              <div class="feature-item">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15z"/></svg>
-                <span>AI Auto Director</span>
-              </div>
-              <div class="feature-item">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4M8 22h8"/></svg>
-                <span>Urdu voice &amp; lip-sync</span>
-              </div>
-              <div class="feature-item">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/><path d="M10 8.8v6.4l5.4-3.2L10 8.8z" fill="currentColor" stroke="none"/></svg>
-                <span>Speaking video</span>
-              </div>
-              <div class="feature-item">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="M10 9.8v4.4l4.2-2.2L10 9.8z" fill="currentColor" stroke="none"/></svg>
-                <span>Native 4K · Extra Pro</span>
-              </div>
-              <div class="feature-item">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.4 5.6a9 9 0 0 1 0 12.8"/></svg>
-                <span>Audio included</span>
-              </div>
-              <div class="feature-item">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="3.6"/><path d="M5 20.2c1.2-3.2 3.8-4.7 7-4.7s5.8 1.5 7 4.7"/></svg>
-                <span>Your characters</span>
-              </div>
-            </div>
-
             <div class="auto-panel studio-auto-panel" id="autoPlanPanel" hidden>
               <h3>AI Auto نے یہ سمجھا</h3>
               <div id="autoPlanSummary"></div>
@@ -1016,19 +857,6 @@
                 <button type="button" class="btn ghost" id="autoPlanCancelBtn">منسوخ — ترتیبات خود رکھوں</button>
               </div>
             </div>
-
-            <section class="recent-strip" aria-label="Recent generations" hidden>
-              <div class="recent-head"><h2>Recent</h2><span>Tap to open History</span></div>
-              <div class="recent-list"></div>
-            </section>
-
-            <!-- Phase H: the user's own finished videos, from the same
-                 /api/history data. Hidden unless at least one completed
-                 generation exists — no placeholder content. -->
-            <section class="creations" id="creationsCard" aria-label="Your creations" hidden>
-              <div class="recent-head"><h2>Your creations · آپ کی ویڈیوز</h2><span>Tap to open History</span></div>
-              <div class="creations-grid"></div>
-            </section>
 
             <!-- Phase E/F: the remaining manual controls — mode, character,
                  start image, style/quality, Voice, Sound, Watermark — live
@@ -2039,10 +1867,6 @@
         // prompt, and (Music Video) preselects the existing music sound
         // mode. Talking Photo just opens the existing voice card.
         var TEMPLATES = {
-          "showcase-realistic": { mode: "realistic", style: "cinematic", aspect: "16:9",
-            prompt: "A lone traveler crosses a misty mountain ridge at sunrise, epic cinematic wide shot, golden light, slow sweeping camera movement" },
-          "showcase-animals": { mode: "realistic", style: "realistic", aspect: "16:9",
-            prompt: "A playful baby elephant splashes in a muddy puddle while monkeys swing in the trees nearby, natural animal movement and sounds, bright daylight, joyful wildlife scene" },
           "kids-story": { mode: "cartoon", style: "cartoon", aspect: "16:9",
             prompt: "A kind cartoon fox helps a lost baby bird find its way home through a sunny forest, gentle storybook colours, soft camera movement" },
           "product-ad": { mode: "realistic", style: "realistic", aspect: "9:16",
@@ -2091,12 +1915,6 @@
         }
         $$("#templateGrid [data-template]").forEach(function (b) {
           b.addEventListener("click", function () { applyTemplate(b.getAttribute("data-template")); });
-        });
-        /* Phase H: showcase cards reuse applyTemplate with the same
-           keys (two are the Phase H presets above, two are existing
-           templates), so a card behaves exactly like its template. */
-        $$("#showcaseRail [data-showcase]").forEach(function (b) {
-          b.addEventListener("click", function () { applyTemplate(b.getAttribute("data-showcase")); });
         });
 
         /* ---------- source image upload ---------- */
@@ -2214,6 +2032,19 @@
           $("#balanceNum").textContent = n;
           $("#meCredits").textContent = n + " credits";
         }
+        /* Phase K: the Studio greeting — Runway-style "Hi <name>,"
+           prefix when the loaded /api/me state carries a display
+           name (me.name / me.display_name); the generic line
+           otherwise (signed out, or an account without a name). */
+        function fillGreeting() {
+          var el = $("#homeGreeting");
+          if (!el) return;
+          var name = "";
+          if (token && me) name = String(me.name || me.display_name || "").trim();
+          el.textContent = name
+            ? "Hi " + name + ", what are we creating today? · آج کیا بنائیں گے؟"
+            : "What are we creating today? · آج کیا بنائیں گے؟";
+        }
         function setSignedInUI() {
           var signed = !!token;
           $("#authBtn").style.display = signed ? "none" : "inline-flex";
@@ -2224,6 +2055,7 @@
           $("#accountSub").textContent = signed ? "Loaded from GET /api/me." : "You are not signed in.";
           $("#balanceLine").classList.toggle("show", signed);
           if (signed && me && me.email) $("#avatarBtn").textContent = me.email.charAt(0).toUpperCase();
+          fillGreeting();
         }
         function fillAccountMeta() {
           if (cfg && cfg.model) $("#meModel").textContent = cfg.model;
@@ -2816,7 +2648,6 @@
           var empty = $("#historyEmpty");
           var btn = $("#historyEmptyBtn");
           $("#jobList").innerHTML = "";
-          if (mode !== "list") { renderRecent([]); renderCreations([]); }
           if (mode === "signedout") {
             empty.style.display = "block";
             $("#historyEmptyText").textContent = "Sign in to see your generation history — it is stored on the server with your account.";
@@ -2844,101 +2675,6 @@
           return "chip other";
         }
         var LANG_NAMES = { en: "English", ur: "Urdu", ks: "Kashmiri", ar: "Arabic", fa: "Persian", hi: "Hindi", zh: "Chinese" };
-        function renderRecent(gens) {
-          var strip = $(".recent-strip");
-          if (!strip) return;
-          var list = $(".recent-list", strip);
-          if (!list) return;
-          list.innerHTML = "";
-          if (!token || !gens || !gens.length) { strip.hidden = true; return; }
-          strip.hidden = false;
-          gens.slice(0, 3).forEach(function (g) {
-            var item = document.createElement("button");
-            item.type = "button";
-            item.className = "recent-item";
-            item.setAttribute("aria-label", "Open History: " + (g.prompt || "generation"));
-            var status = String(g.status || "").toLowerCase();
-            if (status === "completed" && g.video_url && !isAudioOnlyGen(g)) {
-              var thumb = document.createElement("video");
-              thumb.className = "recent-thumb";
-              thumb.muted = true;
-              thumb.playsInline = true;
-              thumb.preload = "metadata";
-              var src = resolveUrl(g.video_url);
-              thumb.src = src + (src.indexOf("#") === -1 ? "#t=0.1" : "");
-              item.appendChild(thumb);
-            } else {
-              var icon = document.createElement("span");
-              icon.className = "recent-icon";
-              icon.textContent = status === "completed" ? "✓" :
-                status === "failed" ? "!" :
-                (status === "processing" || status === "in_progress") ? "…" : "•";
-              item.appendChild(icon);
-            }
-            var text = document.createElement("span");
-            text.className = "recent-text";
-            var prompt = document.createElement("span");
-            prompt.className = "recent-prompt";
-            prompt.textContent = g.prompt || "(no prompt)";
-            var stateLine = document.createElement("span");
-            stateLine.className = "recent-status";
-            stateLine.textContent = g.status || "";
-            text.appendChild(prompt);
-            text.appendChild(stateLine);
-            item.appendChild(text);
-            item.addEventListener("click", function () { showView("history"); });
-            list.appendChild(item);
-          });
-        }
-        /* Phase H: "Your creations" gallery — the latest 4 COMPLETED
-           video generations from the same history data, as a grid of
-           real thumbnails (same <video preload="metadata"> + #t=0.1
-           poster-frame approach as Recent). Hidden entirely when the
-           signed-in user has no completed videos. */
-        function renderCreations(gens) {
-          var card = $("#creationsCard");
-          if (!card) return;
-          var grid = $(".creations-grid", card);
-          if (!grid) return;
-          grid.innerHTML = "";
-          if (!token || !gens || !gens.length) { card.hidden = true; return; }
-          var done = gens.filter(function (g) {
-            return String(g.status || "").toLowerCase() === "completed" &&
-              g.video_url && !isAudioOnlyGen(g);
-          }).slice(0, 4);
-          if (!done.length) { card.hidden = true; return; }
-          card.hidden = false;
-          done.forEach(function (g) {
-            var item = document.createElement("button");
-            item.type = "button";
-            item.className = "creation-item";
-            item.setAttribute("aria-label", "Open History: " + (g.prompt || "generation"));
-            var vid = document.createElement("video");
-            vid.muted = true;
-            vid.playsInline = true;
-            vid.preload = "metadata";
-            var src = resolveUrl(g.video_url);
-            vid.src = src + (src.indexOf("#") === -1 ? "#t=0.1" : "");
-            item.appendChild(vid);
-            var meta = document.createElement("span");
-            meta.className = "creation-meta";
-            var pr = document.createElement("span");
-            pr.className = "creation-prompt";
-            pr.textContent = g.prompt || "(no prompt)";
-            var sub = document.createElement("span");
-            sub.className = "creation-sub";
-            var bits = [];
-            if (g.duration) bits.push(g.duration + "s");
-            if (g.resolution) bits.push(g.resolution);
-            if (g.aspect_ratio) bits.push(g.aspect_ratio);
-            sub.textContent = bits.join(" · ");
-            meta.appendChild(pr);
-            meta.appendChild(sub);
-            item.appendChild(meta);
-            item.addEventListener("click", function () { showView("history"); });
-            grid.appendChild(item);
-          });
-        }
         function loadHistory() {
           if (!token) { renderHistoryState("signedout"); return; }
           api("/api/history").then(function (res) {
@@ -2949,8 +2685,6 @@
             var gens = res.data.generations || [];
             fillVoiceSources(gens);
             if (!gens.length) { renderHistoryState("empty"); return; }
-            renderRecent(gens);
-            renderCreations(gens);
             renderHistoryState("list");
             var list = $("#jobList");
             gens.forEach(function (g) {
@@ -4438,13 +4172,6 @@
         document.querySelectorAll('#templateGrid [data-template]').forEach(function (chip) {
           chip.addEventListener("click", function () { expandCard("advancedCard"); });
         });
-        // Phase H: showcase cards are template controls too — same
-        // open-the-container behaviour (and Voice card for Talking).
-        document.querySelectorAll('#showcaseRail [data-showcase]').forEach(function (chip) {
-          chip.addEventListener("click", function () { expandCard("advancedCard"); });
-        });
-        var scTalking = document.querySelector('#showcaseRail [data-showcase="talking-photo"]');
-        if (scTalking) scTalking.addEventListener("click", function () { expandCard("voiceCard"); });
         // Turning AI Auto OFF means the user wants manual control: open
         // the Advanced settings container (once per page load).
         var autoToggle = document.getElementById("aiAutoToggle");
