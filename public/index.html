@@ -394,6 +394,17 @@
         font-size:12.5px; color:var(--muted); margin-bottom:6px;
       }
       .fb-chip .linkish{ font-size:12.5px; }
+      /* ---------- language lab (Phase M) ---------- */
+      .lang-row{ border:1px solid var(--line); border-radius:12px; padding:10px 12px; margin-top:10px; background:var(--panel-2); }
+      .lang-row-head{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+      .lang-native{ font-size:16px; font-weight:600; }
+      .lang-meta{ color:var(--muted); font-size:12.5px; margin:6px 0 0; }
+      .lang-badge{ font-size:11.5px; border-radius:999px; padding:2px 9px; border:1px solid var(--line); }
+      .lang-badge.available{ background:var(--green-soft); color:#7fd6a2; }
+      .lang-badge.listed{ background:var(--amber-soft); color:#a9bfff; }
+      .lang-badge.unavailable{ background:var(--panel-3); color:var(--muted); }
+      .lang-sample{ margin:8px 0 0; font-size:15px; line-height:1.7; }
+      .lang-actions{ display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; align-items:center; }
       .url-row{ display:flex; gap:9px; flex-wrap:wrap; }
       .url-row input{
         flex:1; min-width:200px; background:var(--panel-2); border:1px solid var(--line); border-radius:10px;
@@ -1001,6 +1012,7 @@
                 <button type="button" class="btn" id="voicePreviewBtn">Preview voice</button>
                 <audio id="voicePreviewAudio" controls style="display:none;width:100%;margin-top:10px;"></audio>
                 <p class="lang-hint" id="voicePreviewStatus"></p>
+                <p style="margin-top:10px;"><button type="button" class="btn small" id="langLabLink">Test languages · زبان آزمائیں</button></p>
 
                 <div class="field-label" style="margin-top:18px;"><span>Talking character (lip-sync)</span></div>
                 <div class="field-label"><span>Saved character (optional)</span></div>
@@ -1346,6 +1358,14 @@
               <div class="result-actions">
                 <button type="button" class="btn primary" id="feedbackSendBtn">Send feedback</button>
               </div>
+            </div>
+
+            <div class="card" id="langLabCard">
+              <h2>Languages · زبانیں</h2>
+              <p class="sub">Pakistan's languages, honestly labelled: a voice is only "available" when a real provider offers it, and Punjabi, Pashto and Sindhi stay marked "listed — testing" until their sample voices have been heard and approved. درج شدہ زبانیں آزمائیں — جہاں آواز ابھی دستیاب نہیں، وہاں صاف لکھا ہے اور متبادل بھی دیا ہے۔</p>
+              <div id="langLabList"></div>
+              <audio id="langLabAudio" controls style="display:none;width:100%;margin-top:10px;"></audio>
+              <p class="lang-hint" id="langLabStatus"></p>
             </div>
           </div>
 
@@ -2082,6 +2102,7 @@
               setConnStatus('<span class="ok">Connected</span> — ' + apiBase + " · model " + modelName);
               fillAccountMeta();
               fillVoiceUI();
+              renderLangLab();
               fillSoundUI();
               fillCharacterVoiceUI();
               updateAdSlots();
@@ -3420,6 +3441,18 @@
             speed: $("#voiceSpeed").value
           };
         }
+        // Phase M: Roman transliteration exists for Urdu/Hindi only —
+        // for Punjabi/Pashto/Sindhi the Roman option is disabled and
+        // native is forced (the server 400s the combination too).
+        var NATIVE_ONLY_VOICE_LANGS = ["pa", "ps", "sd"];
+        function fillScriptMode() {
+          var modeSel = $("#voiceScriptMode");
+          if (!modeSel) return;
+          var nativeOnly = NATIVE_ONLY_VOICE_LANGS.indexOf($("#voiceLang").value) !== -1;
+          var romanOpt = modeSel.querySelector('option[value="roman"]');
+          if (romanOpt) romanOpt.disabled = nativeOnly;
+          if (nativeOnly && modeSel.value === "roman") modeSel.value = "native";
+        }
         function fillVoiceOptions() {
           if (!voiceCfg) return;
           var prov = $("#voiceProvider").value;
@@ -3435,6 +3468,7 @@
             o.textContent = v.label + " (" + v.gender + ")";
             sel.appendChild(o);
           });
+          fillScriptMode();
         }
         function fillVoiceUI() {
           voiceCfg = (cfg && cfg.voice) ? cfg.voice : null;
@@ -4220,6 +4254,116 @@
             attachFeedback(null);
             toast("Feedback sent — thank you! The team will review it.");
           });
+        });
+
+        /* ---------- language lab (Phase M) ---------- */
+        // The Settings card renders entirely from /api/config's
+        // `languages` registry — the client keeps no second list. Badge
+        // wording is presentation only; the statuses come from the
+        // server. Previews run the EXISTING free voice-preview flow
+        // (same endpoint, same daily caps) with the registry sample.
+        var LAB_BADGES = {
+          available: "Voice available · آواز دستیاب",
+          listed: "Listed — testing · درج ہے، جانچ جاری",
+          unavailable: "Voice not yet available · آواز ابھی دستیاب نہیں"
+        };
+        function renderLangLab() {
+          var list = $("#langLabList");
+          if (!list) return;
+          var langs = (cfg && cfg.languages) || [];
+          list.innerHTML = "";
+          langs.forEach(function (l) {
+            var row = document.createElement("div");
+            row.className = "lang-row";
+            var head = document.createElement("div");
+            head.className = "lang-row-head";
+            var nat = document.createElement("span");
+            nat.className = "lang-native";
+            if (l.rtl) nat.setAttribute("dir", "rtl");
+            nat.textContent = l.name_native;
+            var en = document.createElement("span");
+            en.textContent = l.name_en;
+            var badge = document.createElement("span");
+            badge.className = "lang-badge " + (l.voice_status || "unavailable");
+            badge.textContent = LAB_BADGES[l.voice_status] || LAB_BADGES.unavailable;
+            head.appendChild(nat); head.appendChild(en); head.appendChild(badge);
+            row.appendChild(head);
+            var meta = document.createElement("p");
+            meta.className = "lang-meta";
+            meta.textContent = "Script: " + l.script +
+              (l.prompt_status === "supported" ? " · Video prompts in this language are supported" : "");
+            row.appendChild(meta);
+            if (l.sample) {
+              var s = document.createElement("p");
+              s.className = "lang-sample";
+              if (l.rtl) s.setAttribute("dir", "rtl");
+              s.textContent = l.sample;
+              row.appendChild(s);
+            }
+            var acts = document.createElement("div");
+            acts.className = "lang-actions";
+            if (l.voice_status === "available" || l.voice_status === "listed") {
+              var pv = document.createElement("button");
+              pv.type = "button"; pv.className = "btn small";
+              pv.textContent = "Preview voice · آواز سنیں";
+              pv.addEventListener("click", function () { labPreview(l, pv); });
+              acts.appendChild(pv);
+            } else {
+              var alt = document.createElement("span");
+              alt.className = "lang-meta";
+              alt.textContent = "Alternatives: Urdu voice, or prompts in this language where supported · متبادل: اردو آواز";
+              acts.appendChild(alt);
+              var rep = document.createElement("button");
+              rep.type = "button"; rep.className = "btn small";
+              rep.textContent = "Report · رپورٹ";
+              rep.addEventListener("click", function () { labReport(l); });
+              acts.appendChild(rep);
+            }
+            row.appendChild(acts);
+            list.appendChild(row);
+          });
+        }
+        function labPreview(l, btn) {
+          if (!token) { toast("Please sign in first — voice previews are tied to your account."); openAuth("login"); return; }
+          if (!l.sample) return;
+          btn.disabled = true;
+          $("#langLabStatus").textContent = "Synthesizing the " + l.name_en + " preview…";
+          var body = { script: l.sample, spoken_language: l.code, script_mode: "native",
+                       style: "conversation", speed: "normal" };
+          // The listed languages exist on the Gemini provider only —
+          // pin it so a different default can never misroute them.
+          if (l.code === "pa" || l.code === "ps" || l.code === "sd") body.provider = "gemini";
+          api("/api/voice/preview", { method: "POST", body: body }).then(function (res) {
+            btn.disabled = false;
+            if (!res.ok || !res.data) {
+              $("#langLabStatus").textContent = "";
+              toast(errText(res, "The voice preview failed"));
+              return;
+            }
+            var a = $("#langLabAudio");
+            a.src = resolveUrl(res.data.audio_url);
+            a.style.display = "block";
+            a.play().catch(function () {});
+            $("#langLabStatus").textContent = "Playing the " + l.name_en + " sample — voice: " +
+              res.data.voice + " · provider: " + res.data.provider + ".";
+          });
+        }
+        function labReport(l) {
+          $("#feedbackCategory").value = "quality";
+          var msg = $("#feedbackMessage");
+          msg.value = l.name_en + " (" + l.name_native + "): ";
+          $("#feedbackCount").textContent = msg.value.length + " / 1000";
+          showView("settings");
+          var card = $("#feedbackCard");
+          if (card) card.scrollIntoView({ behavior: "smooth", block: "start" });
+          if (msg.focus) msg.focus();
+          toast("Tell us what you need for " + l.name_en + " — it is prefilled in the feedback card above.");
+        }
+        var labLinkBtn = $("#langLabLink");
+        if (labLinkBtn) labLinkBtn.addEventListener("click", function () {
+          showView("settings");
+          var c = $("#langLabCard");
+          if (c) c.scrollIntoView({ behavior: "smooth", block: "start" });
         });
 
         /* ---------- init ---------- */
