@@ -853,10 +853,133 @@
         [dir="rtl"] .conn-banner button{ margin-left:0; margin-right:23px; }
         .hdr-theme{ display:none; }
       }
+
+      /* ---------- Phase Q: rich Home face (brand band, composer footer,
+           quick tiles, showcase preview) — scoped to #view-studio ---------- */
+      .q-brandband{
+        display:flex; align-items:center; gap:16px;
+        padding:20px 22px; margin:4px 0 16px;
+        border-radius:18px; border:1px solid var(--line);
+        background:linear-gradient(120deg, rgba(61,107,255,.22), rgba(139,92,246,.16) 55%, rgba(168,85,247,.10)), var(--panel);
+        box-shadow:0 10px 30px rgba(2,4,12,.28);
+      }
+      .q-brand-mark{
+        width:54px; height:54px; border-radius:15px; flex:none;
+        background:var(--accent-grad); display:grid; place-items:center; color:#fff;
+        box-shadow:0 6px 22px rgba(99,102,241,.5);
+      }
+      .q-brand-mark svg{ width:29px; height:29px; }
+      .q-brand-texts{ display:flex; flex-direction:column; gap:2px; min-width:0; }
+      .q-brand-name{ font-family:var(--font-display); font-size:31px; font-weight:800; letter-spacing:-.01em; line-height:1.05; }
+      .q-brand-name em{ font-style:normal; color:var(--purple); }
+      .q-brand-sub{ font-size:11px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:var(--muted); }
+      .q-brand-tag{ font-size:14.5px; color:var(--text); }
+      #view-studio .composer-card{ border-radius:18px; }
+      #view-studio .studio-actionbar{
+        border-radius:16px; padding:14px 16px;
+        background:linear-gradient(120deg, rgba(61,107,255,.12), rgba(168,85,247,.08)), var(--panel);
+      }
+      #view-studio .actionbar-cost strong{ font-size:19px; }
+      #view-studio #generateBtn{ font-size:17px; padding:14px 32px; border-radius:999px; }
+      .q-tiles{ display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:12px; }
+      .q-tile{
+        display:flex; flex-direction:column; align-items:center; gap:8px;
+        padding:16px 8px; border-radius:16px; text-align:center;
+        background:var(--panel-2); border:1px solid var(--line);
+        color:var(--text); font-weight:600; font-size:14px;
+      }
+      .q-tile:hover{ background:var(--panel-3); }
+      .q-tile svg{ width:24px; height:24px; color:var(--amber); }
+      .q-tile.q-on{ border-color:var(--purple); box-shadow:0 0 0 1px var(--purple); }
+      .q-showcase{
+        position:relative; margin-top:12px; border-radius:18px; overflow:hidden;
+        border:1px solid var(--line); background:var(--panel-2); cursor:pointer; padding:0; width:100%; display:block; text-align:start;
+      }
+      .q-showcase img{ display:block; width:100%; height:210px; object-fit:cover; }
+      .q-showcase-play{
+        position:absolute; top:44%; left:50%; transform:translate(-50%,-50%);
+        width:58px; height:58px; border-radius:50%;
+        background:var(--accent-grad); display:grid; place-items:center; color:#fff;
+        box-shadow:0 8px 26px rgba(0,0,0,.45);
+      }
+      .q-showcase-play svg{ width:26px; height:26px; margin-inline-start:3px; }
+      .q-showcase-label{
+        position:absolute; inset-inline:0; bottom:0; padding:24px 14px 10px;
+        background:linear-gradient(transparent, rgba(4,6,12,.8));
+        color:#fff; font-size:13px; font-weight:600;
+      }
+      .tpl-head{ display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+      .tpl-head-title{ font-family:var(--font-display); font-size:15px; margin:0; }
+
+      /* ---------- Phase R: hamburger side drawer ---------- */
+      .dr-btn{
+        width:38px; height:38px; border-radius:10px; flex:none;
+        display:grid; place-items:center;
+        background:var(--panel-2); border:1px solid var(--line); color:var(--text);
+      }
+      .dr-btn svg{ width:20px; height:20px; }
+      .dr-overlay{
+        position:fixed; inset:0; z-index:70;
+        background:rgba(3,5,10,.55); backdrop-filter:blur(2px);
+      }
+      .dr-drawer{
+        position:fixed; top:0; bottom:0; inset-inline-start:0; z-index:80;
+        width:min(320px, 86vw);
+        background:var(--panel); border-inline-end:1px solid var(--line);
+        transform:translateX(-110%); transition:transform .28s ease;
+        display:flex; flex-direction:column;
+        box-shadow:0 0 44px rgba(0,0,0,.4);
+      }
+      [dir="rtl"] .dr-drawer{ transform:translateX(110%); }
+      .dr-drawer.dr-open{ transform:translateX(0); }
+      .dr-head{
+        display:flex; align-items:center; gap:10px;
+        padding:14px 16px; border-bottom:1px solid var(--line-soft);
+      }
+      .dr-head .brand{ font-size:16px; }
+      .dr-close{
+        margin-inline-start:auto; width:34px; height:34px; border-radius:9px;
+        display:grid; place-items:center;
+        background:var(--panel-2); border:1px solid var(--line); color:var(--text);
+      }
+      .dr-close svg{ width:16px; height:16px; }
+      .dr-user{
+        display:flex; align-items:center; gap:12px;
+        padding:14px 16px; border-bottom:1px solid var(--line-soft);
+      }
+      .dr-avatar{
+        width:42px; height:42px; border-radius:50%; flex:none;
+        background:var(--accent-grad); color:#fff;
+        display:grid; place-items:center;
+        font-family:var(--font-display); font-weight:800; font-size:17px;
+      }
+      .dr-user-texts{ min-width:0; display:flex; flex-direction:column; }
+      .dr-user-email{ font-weight:600; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .dr-user-credits{ font-size:13px; color:var(--muted); }
+      .dr-user-credits strong{ color:var(--text); }
+      .dr-nav{ overflow-y:auto; padding:8px; display:flex; flex-direction:column; gap:2px; }
+      .dr-item{
+        display:flex; align-items:center; gap:12px; width:100%;
+        padding:11px 12px; border-radius:11px; text-align:start;
+        background:none; border:0; color:var(--text); font-size:14.5px; font-weight:500;
+      }
+      .dr-item:hover{ background:var(--panel-2); }
+      .dr-item svg{ width:19px; height:19px; flex:none; color:var(--muted); }
+      body.dr-locked{ overflow:hidden; }
+      @media (max-width:640px){
+        .q-brandband{ padding:16px; }
+        .q-brand-name{ font-size:26px; }
+        .q-brand-mark{ width:46px; height:46px; border-radius:13px; }
+        .q-tile{ font-size:12.5px; padding:13px 4px; }
+        #view-studio #generateBtn{ padding:13px 22px; font-size:16px; }
+      }
     </style>
   </head>
   <body>
     <header class="topbar">
+      <button type="button" class="dr-btn" id="dr_openBtn" aria-label="Menu" data-i18n-aria="dr_menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
       <div class="brand">
         <span class="mark" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5-11-6.5z"/></svg>
@@ -901,6 +1024,19 @@
         <!-- Phase K: one slim greeting tops the Studio (Runway-style).
              fillGreeting() prefixes "Hi <name>," when /api/me carries a
              display name; otherwise this generic line stands. -->
+        <!-- Phase Q: prominent brand band atop Home (logo mark,
+             wordmark, tagline) — the greeting below stays as-is. -->
+        <div class="q-brandband">
+          <span class="q-brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5-11-6.5z"/></svg>
+          </span>
+          <span class="q-brand-texts">
+            <span class="q-brand-name">AJK <em>AI</em></span>
+            <span class="q-brand-sub">AI Video Generator</span>
+            <span class="q-brand-tag"><span data-i18n="q_tagline">Your Imagination. AI Motion.</span><span class="i18n-alt"> · آپ کا تصور، اے آئی کی حرکت</span></span>
+          </span>
+        </div>
+
         <h1 class="home-greeting" id="homeGreeting">What are we creating today? · آج کیا بنائیں گے؟</h1>
 
         <div class="conn-banner checking" id="connBanner" role="status">
@@ -915,6 +1051,9 @@
         <div class="ad-slot" id="adHomeNative" hidden aria-hidden="true">Advertisement</div>
 
         <div class="card tpl-card" id="templateCard">
+          <div class="tpl-head">
+            <h2 class="tpl-head-title"><span data-i18n="q_templates_title">Ready templates</span><span class="i18n-alt"> · تیار ٹیمپلیٹس</span></h2>
+          </div>
           <div class="tpl-strip" id="templateGrid" role="group" aria-label="Templates">
             <button type="button" class="tpl-chip" data-template="talking-photo">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4M8 22h8"/></svg>
@@ -1003,6 +1142,47 @@
                 <button type="button" class="btn ghost" id="autoPlanCancelBtn">منسوخ — ترتیبات خود رکھوں</button>
               </div>
             </div>
+
+        <div class="studio-actionbar" id="studioActionBar">
+          <div class="form-error" id="formError" role="alert"></div>
+          <div class="actionbar-row">
+            <div class="actionbar-cost">
+              <span class="actionbar-label" data-i18n="total_cost">Total cost</span>
+              <strong><span id="costNum">10</span> credits</strong>
+            </div>
+            <button type="button" class="btn primary generate-btn actionbar-btn" id="generateBtn">
+              <svg viewBox="0 0 24 24" fill="currentColor" id="generateIcon"><path d="M8 5.5v13l11-6.5-11-6.5z"/></svg>
+              <span id="generateLabel" data-i18n="generate_video">Generate video</span>
+            </button>
+          </div>
+        </div>
+
+            <!-- Phase Q: three quick-action tiles wired to the real
+                 controls only (prompt focus / source-image upload /
+                 the AI Auto toggle), plus the wide showcase preview.
+                 The image is a style sample, labelled as such. -->
+            <div class="q-tiles">
+              <button type="button" class="q-tile" id="q_tileText">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 6V4h14v2M12 4v16M9 20h6"/></svg>
+                <span><span data-i18n="q_tile_text">Text to Video</span><span class="i18n-alt"> · متن سے ویڈیو</span></span>
+              </button>
+              <button type="button" class="q-tile" id="q_tileImage">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="m4.5 17.5 5-5 3.5 3.5 2.5-2.5 4 4"/></svg>
+                <span><span data-i18n="q_tile_image">Image to Video</span><span class="i18n-alt"> · تصویر سے ویڈیو</span></span>
+              </button>
+              <button type="button" class="q-tile" id="q_tileAuto">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/><path d="M18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2z"/></svg>
+                <span><span data-i18n="q_tile_auto">AI Auto Director</span><span class="i18n-alt"> · اے آئی خودکار ڈائریکٹر</span></span>
+              </button>
+            </div>
+
+            <button type="button" class="q-showcase" id="q_showcaseCard" aria-label="Style preview">
+              <img src="/showcase/showcase-realistic.jpg" alt="" loading="lazy" />
+              <span class="q-showcase-play" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5-11-6.5z"/></svg>
+              </span>
+              <span class="q-showcase-label"><span data-i18n="q_style_preview">Style preview</span><span class="i18n-alt"> · انداز کا نمونہ</span></span>
+            </button>
 
             <!-- Phase E/F: the remaining manual controls — mode, character,
                  start image, style/quality, Voice, Sound, Watermark — live
@@ -1328,20 +1508,6 @@
           </div>
         </div>
 
-        <div class="studio-actionbar" id="studioActionBar">
-          <div class="form-error" id="formError" role="alert"></div>
-          <div class="actionbar-row">
-            <div class="actionbar-cost">
-              <span class="actionbar-label" data-i18n="total_cost">Total cost</span>
-              <strong><span id="costNum">10</span> credits</strong>
-            </div>
-            <button type="button" class="btn primary generate-btn actionbar-btn" id="generateBtn">
-              <svg viewBox="0 0 24 24" fill="currentColor" id="generateIcon"><path d="M8 5.5v13l11-6.5-11-6.5z"/></svg>
-              <span id="generateLabel" data-i18n="generate_video">Generate video</span>
-            </button>
-          </div>
-        </div>
-
         <div class="ad-slot" id="adStudioBottom" hidden aria-hidden="true">Advertisement</div>
       </section>
 
@@ -1381,7 +1547,7 @@
         <div class="plan-grid" id="planGrid">
           <p style="color:var(--muted);">Loading plans…</p>
         </div>
-        <div class="card">
+        <div class="card" id="pay_historyCard">
           <h2 data-i18n="payment_history">Payment history</h2>
           <p class="sub">Payments on your account, loaded from the server.</p>
           <div class="empty-state" id="paymentsEmpty">
@@ -1700,6 +1866,48 @@
         </button>
       </div>
     </nav>
+
+
+    <!-- Phase R: hamburger side drawer — additive navigation over the
+         same real views/controls; the bottom navigation stays. The user
+         block shows only the signed-in email + balance the app already
+         loaded from /api/me (read from the live DOM at open time). -->
+    <div class="dr-overlay" id="dr_overlay" hidden></div>
+    <aside class="dr-drawer" id="dr_drawer" aria-hidden="true" aria-label="Menu">
+      <div class="dr-head">
+        <span class="brand">
+          <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5-11-6.5z"/></svg></span>
+          <span class="brand-text"><span class="name">AJK <em>AI</em></span><span class="brand-sub">AI Video Generator</span></span>
+        </span>
+        <button type="button" class="dr-close" id="dr_closeBtn" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <div class="dr-user">
+        <span class="dr-avatar" id="dr_userAvatar">?</span>
+        <span class="dr-user-texts">
+          <span class="dr-user-email" id="dr_userEmail" style="display:none;"></span>
+          <span class="dr-user-email" id="dr_userAnon"><span data-i18n="dr_not_signed_in">Not signed in</span><span class="i18n-alt"> · لاگ اِن نہیں</span></span>
+          <span class="dr-user-credits" id="dr_userCredits"><strong id="dr_userCreditsNum">–</strong> <span data-i18n="credits_word">credits</span></span>
+        </span>
+      </div>
+      <nav class="dr-nav" aria-label="Menu">
+        <button type="button" class="dr-item" id="dr_itemHome"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 11.5 12 4l8 7.5"/><path d="M6 10v10h12V10"/></svg><span><span data-i18n="dr_home">Home</span><span class="i18n-alt"> · ہوم</span></span></button>
+        <button type="button" class="dr-item" id="dr_itemCreate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10 9.5v5l4.5-2.5L10 9.5z" fill="currentColor" stroke="none"/></svg><span><span data-i18n="dr_create">Create Video</span><span class="i18n-alt"> · ویڈیو بنائیں</span></span></button>
+        <button type="button" class="dr-item" id="dr_itemImage"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="m4.5 17.5 5-5 3.5 3.5 2.5-2.5 4 4"/></svg><span><span data-i18n="dr_image">Image to Video</span><span class="i18n-alt"> · تصویر سے ویڈیو</span></span></button>
+        <button type="button" class="dr-item" id="dr_itemHistory"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/><path d="M12 7v5l3.5 2"/></svg><span><span data-i18n="dr_history">History</span><span class="i18n-alt"> · ہسٹری</span></span></button>
+        <button type="button" class="dr-item" id="dr_itemJoin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 7h11M8 12h11M8 17h11"/><circle cx="4.5" cy="7" r="1.3"/><circle cx="4.5" cy="12" r="1.3"/><circle cx="4.5" cy="17" r="1.3"/></svg><span><span data-i18n="dr_join">Join Clips</span><span class="i18n-alt"> · کلپس جوڑیں</span></span></button>
+        <button type="button" class="dr-item" id="dr_itemWallet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18M16.5 15h.01"/></svg><span><span data-i18n="dr_wallet">Credits &amp; Wallet</span><span class="i18n-alt"> · کریڈٹس اور والیٹ</span></span></button>
+        <button type="button" class="dr-item" id="dr_itemPlans"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18M7 15h4"/></svg><span><span data-i18n="dr_plans">Subscription Plans</span><span class="i18n-alt"> · سبسکرپشن پلانز</span></span></button>
+        <button type="button" class="dr-item" id="dr_itemBuy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v9M14.8 9.4c-.5-.7-1.5-1.1-2.8-1.1-1.6 0-2.8.8-2.8 2 0 2.7 5.6 1.5 5.6 3.9 0 1.2-1.2 2-2.8 2-1.2 0-2.3-.5-2.8-1.2"/></svg><span><span data-i18n="dr_buy">Buy Credits</span><span class="i18n-alt"> · کریڈٹس خریدیں</span></span></button>
+        <button type="button" class="dr-item" id="dr_itemPayments"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3h9l4 4v14H6z"/><path d="M15 3v4h4M9.5 12h5M9.5 15.5h5"/></svg><span><span data-i18n="dr_payments">Payment History</span><span class="i18n-alt"> · ادائیگی کی ہسٹری</span></span></button>
+        <button type="button" class="dr-item" id="dr_itemProfile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8.5" r="3.8"/><path d="M5 20c1.4-3.4 4-5 7-5s5.6 1.6 7 5"/></svg><span><span data-i18n="dr_profile">My Profile</span><span class="i18n-alt"> · میری پروفائل</span></span></button>
+        <button type="button" class="dr-item" id="dr_itemSettings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3.2"/><path d="M19 12a7 7 0 0 0-.14-1.4l2-1.55-2-3.46-2.36.95A7 7 0 0 0 14.1 5.1L13.7 2.6h-3.4l-.4 2.5a7 7 0 0 0-2.4 1.44l-2.36-.95-2 3.46 2 1.55a7 7 0 0 0 0 2.8l-2 1.55 2 3.46 2.36-.95a7 7 0 0 0 2.4 1.44l.4 2.5h3.4l.4-2.5a7 7 0 0 0 2.4-1.44l2.36.95 2-3.46-2-1.55c.1-.45.14-.92.14-1.4z"/></svg><span><span data-i18n="dr_settings">Settings</span><span class="i18n-alt"> · ترتیبات</span></span></button>
+        <button type="button" class="dr-item" id="dr_itemHelp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.3A2.6 2.6 0 1 1 12 12.2c-.8.25-1 .7-1 1.5"/><path d="M12 17h.01"/></svg><span><span data-i18n="dr_help">Help &amp; Support</span><span class="i18n-alt"> · مدد اور معاونت</span></span></button>
+        <button type="button" class="dr-item" id="dr_itemPrivacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l7 3v5c0 4.6-3 8.4-7 10-4-1.6-7-5.4-7-10V6l7-3z"/><path d="m9.5 12 2 2 3.5-4"/></svg><span><span data-i18n="dr_privacy">Terms &amp; Privacy</span><span class="i18n-alt"> · شرائط اور پرائیویسی</span></span></button>
+        <button type="button" class="dr-item" id="dr_itemLogout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 4H6v16h8"/><path d="M10 12h11M17 8l4 4-4 4"/></svg><span><span data-i18n="dr_logout">Logout</span><span class="i18n-alt"> · لاگ آؤٹ</span></span></button>
+      </nav>
+    </aside>
 
     <!-- auth modal -->
     <div class="modal-backdrop" id="authModal">
@@ -2026,7 +2234,29 @@
           tpl_product_ad: { en: "Product Ad", ur: "پراڈکٹ اشتہار" },
           tpl_breaking_news: { en: "Breaking-News Short", ur: "بریکنگ نیوز شارٹ" },
           tpl_music_video: { en: "Music Video", ur: "میوزک ویڈیو" },
-          tpl_cartoon_episode: { en: "Cartoon Episode", ur: "کارٹون قسط" }
+          tpl_cartoon_episode: { en: "Cartoon Episode", ur: "کارٹون قسط" },
+          q_tagline: { en: "Your Imagination. AI Motion.", ur: "آپ کا تصور، اے آئی کی حرکت" },
+          q_templates_title: { en: "Ready templates", ur: "تیار ٹیمپلیٹس" },
+          q_tile_text: { en: "Text to Video", ur: "متن سے ویڈیو" },
+          q_tile_image: { en: "Image to Video", ur: "تصویر سے ویڈیو" },
+          q_tile_auto: { en: "AI Auto Director", ur: "اے آئی خودکار ڈائریکٹر" },
+          q_style_preview: { en: "Style preview", ur: "انداز کا نمونہ" },
+          dr_menu: { en: "Menu", ur: "مینو" },
+          dr_home: { en: "Home", ur: "ہوم" },
+          dr_create: { en: "Create Video", ur: "ویڈیو بنائیں" },
+          dr_image: { en: "Image to Video", ur: "تصویر سے ویڈیو" },
+          dr_history: { en: "History", ur: "ہسٹری" },
+          dr_join: { en: "Join Clips", ur: "کلپس جوڑیں" },
+          dr_wallet: { en: "Credits & Wallet", ur: "کریڈٹس اور والیٹ" },
+          dr_plans: { en: "Subscription Plans", ur: "سبسکرپشن پلانز" },
+          dr_buy: { en: "Buy Credits", ur: "کریڈٹس خریدیں" },
+          dr_payments: { en: "Payment History", ur: "ادائیگی کی ہسٹری" },
+          dr_profile: { en: "My Profile", ur: "میری پروفائل" },
+          dr_settings: { en: "Settings", ur: "ترتیبات" },
+          dr_help: { en: "Help & Support", ur: "مدد اور معاونت" },
+          dr_privacy: { en: "Terms & Privacy", ur: "شرائط اور پرائیویسی" },
+          dr_logout: { en: "Logout", ur: "لاگ آؤٹ" },
+          dr_not_signed_in: { en: "Not signed in", ur: "لاگ اِن نہیں" }
         };
         var uiLang = lsGet(LS_LANG) === "ur" ? "ur" : "en";
         var uiTheme = lsGet(LS_THEME) === "light" ? "light" : "dark";
@@ -5561,6 +5791,143 @@
             expandCard("advancedCard");
           }
         });
+      })();
+    </script>
+
+    <script>
+      // Phase Q + Phase R — additive wiring only. Everything here drives
+      // the app's EXISTING controls: view tabs (showView), the prompt
+      // box, the source-image file input, the Advanced collapse, the
+      // AI Auto toggle and the Settings sign-out button. No new state,
+      // no duplicated handlers.
+      (function () {
+        function el(id) { return document.getElementById(id); }
+        function go(view) {
+          var b = document.querySelector('.topnav .tab[data-view="' + view + '"]') ||
+                  document.querySelector('.tab[data-view="' + view + '"]');
+          if (b) b.click();
+        }
+        function scrollToEl(node, delay) {
+          if (!node) return;
+          setTimeout(function () {
+            try { node.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch (e) { node.scrollIntoView(); }
+          }, delay || 120);
+        }
+        function focusPrompt() {
+          var p = el('prompt');
+          if (!p) return;
+          try { p.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) {}
+          setTimeout(function () { try { p.focus({ preventScroll: true }); } catch (e) { p.focus(); } }, 380);
+        }
+        function expandAdvanced() {
+          var c = el('advancedCard');
+          if (!c) return;
+          c.classList.remove('is-collapsed');
+          var h = c.querySelector('[data-collapse-head]');
+          if (h) h.setAttribute('aria-expanded', 'true');
+        }
+        function clearImage() {
+          var rm = el('removeImageBtn');
+          if (rm && rm.style.display !== 'none') rm.click();
+        }
+        function pickImage() {
+          expandAdvanced();
+          var f = el('sourceImage');
+          if (f) f.click();
+        }
+
+        /* ----- Phase Q tiles + showcase ----- */
+        var tText = el('q_tileText');
+        if (tText) tText.addEventListener('click', function () { clearImage(); focusPrompt(); });
+        var tImg = el('q_tileImage');
+        if (tImg) tImg.addEventListener('click', pickImage);
+        var tAuto = el('q_tileAuto');
+        var autoToggle = el('aiAutoToggle');
+        function syncAutoTile() { if (tAuto && autoToggle) tAuto.classList.toggle('q-on', !!autoToggle.checked); }
+        if (tAuto && autoToggle) {
+          tAuto.addEventListener('click', function () {
+            if (!autoToggle.checked) {
+              autoToggle.checked = true;
+              autoToggle.dispatchEvent(new Event('change'));
+            }
+            syncAutoTile();
+          });
+          autoToggle.addEventListener('change', syncAutoTile);
+          syncAutoTile();
+        }
+        var sc = el('q_showcaseCard');
+        if (sc) sc.addEventListener('click', focusPrompt);
+
+        /* ----- Phase R drawer ----- */
+        var drawer = el('dr_drawer');
+        var overlay = el('dr_overlay');
+        function refreshDrawerUser() {
+          var emailNode = el('meEmail');
+          var email = emailNode ? (emailNode.textContent || '').trim() : '';
+          var signed = email && email !== '–' && email !== '-';
+          var emailOut = el('dr_userEmail');
+          var anonOut = el('dr_userAnon');
+          if (emailOut) {
+            emailOut.textContent = signed ? email : '';
+            emailOut.style.display = signed ? '' : 'none';
+          }
+          if (anonOut) anonOut.style.display = signed ? 'none' : '';
+          var av = el('dr_userAvatar');
+          if (av) av.textContent = signed ? email.charAt(0).toUpperCase() : '?';
+          var num = el('dr_userCreditsNum');
+          var chip = el('creditsNum');
+          if (num) num.textContent = chip ? chip.textContent : '–';
+          var wrap = el('dr_userCredits');
+          if (wrap) wrap.style.visibility = signed ? 'visible' : 'hidden';
+        }
+        function openDrawer() {
+          if (!drawer) return;
+          refreshDrawerUser();
+          drawer.classList.add('dr-open');
+          drawer.setAttribute('aria-hidden', 'false');
+          if (overlay) overlay.hidden = false;
+          document.body.classList.add('dr-locked');
+        }
+        function closeDrawer() {
+          if (!drawer) return;
+          drawer.classList.remove('dr-open');
+          drawer.setAttribute('aria-hidden', 'true');
+          if (overlay) overlay.hidden = true;
+          document.body.classList.remove('dr-locked');
+        }
+        var openBtn = el('dr_openBtn');
+        if (openBtn) openBtn.addEventListener('click', openDrawer);
+        var closeBtn = el('dr_closeBtn');
+        if (closeBtn) closeBtn.addEventListener('click', closeDrawer);
+        if (overlay) overlay.addEventListener('click', closeDrawer);
+        document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeDrawer(); });
+
+        function act(id, fn) { var n = el(id); if (n) n.addEventListener('click', function () { closeDrawer(); fn(); }); }
+        act('dr_itemHome', function () { go('studio'); window.scrollTo({ top: 0, behavior: 'smooth' }); });
+        act('dr_itemCreate', function () { go('studio'); focusPrompt(); });
+        act('dr_itemImage', function () { go('studio'); pickImage(); });
+        act('dr_itemHistory', function () { go('history'); });
+        act('dr_itemJoin', function () {
+          go('history');
+          setTimeout(function () {
+            var bar = el('joinBar');
+            if (bar && bar.classList.contains('show')) scrollToEl(bar, 0);
+            else scrollToEl(el('jobList') || el('balanceLine'), 0);
+          }, 250);
+        });
+        act('dr_itemWallet', function () { go('buy'); scrollToEl(el('packGrid')); });
+        act('dr_itemPlans', function () { go('plans'); });
+        act('dr_itemBuy', function () { go('buy'); scrollToEl(el('buySubmitBtn')); });
+        act('dr_itemPayments', function () { go('plans'); scrollToEl(el('pay_historyCard'), 200); });
+        act('dr_itemProfile', function () {
+          go('settings');
+          var m = el('meEmail');
+          scrollToEl(m ? m.closest('.card') : null, 200);
+        });
+        act('dr_itemSettings', function () { go('settings'); });
+        act('dr_itemHelp', function () { go('settings'); scrollToEl(el('feedbackCard'), 200); });
+        act('dr_itemPrivacy', function () { go('privacy'); });
+        act('dr_itemLogout', function () { var b = el('signOutBtn'); if (b) b.click(); });
       })();
     </script>
   </body>
