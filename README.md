@@ -1447,6 +1447,197 @@ plus the translucent top bar / bottom nav / sticky action bar get
 light overrides so contrast stays readable. Showcase and generated
 media are unaffected.
 
+## Own-voice upload for lip-sync + per-model prices (Phase O2)
+
+Phase O2 implements two owner spec-v2 items: "اپنی آواز کی فائل اپ لوڈ
+برائے لپ سنک" (upload your own voice file for lip-sync) and "ماڈل وار
+لاگت/فیچر ڈسپلے" (per-model cost/feature display).
+
+### Upload your own voice for lip-sync
+
+The standalone lip-sync tool (`POST /api/voice/lipsync`) gains a third
+audio source alongside the typed script and a saved voice job: the
+user's **own recorded voice file**.
+
+- **Upload — `POST /api/uploads/audio`** (signed-in). Transport mirrors
+  the image upload exactly: base64 JSON (`audio_base64`), the global
+  100kb JSON parser skips this path and the route mounts its own 16mb
+  parser. The type is decided by **magic bytes, never the claimed
+  type**: MP3 (ID3 tag or an 0xFFEx frame sync), WAV (RIFF/WAVE), M4A
+  (ftyp box), OGG (OggS), WEBM (EBML header); anything else → 400.
+  Cap: **10 MB** (→ 413, the image endpoint's style). The file is
+  stored per-user under `data/audio-uploads/<userId>/` (migration
+  **v21** adds the `audio_uploads` table: file name, sniffed content
+  type, size, probed duration) and served at
+  `/files/audio/<userId>/<file>` — the public URL fal fetches, the same
+  hosting pattern the synthesized TTS audio uses. Response: `201`
+  `{ id, url, content_type, size_bytes, duration_seconds }`.
+- **Duration guard.** The file is probed at upload time with the
+  pinned ffmpeg binary. (The app ships **no ffprobe** — the existing
+  `probeAudioDuration` pattern parses `ffmpeg -i` output, the same
+  helper the voice system uses.) Recordings over **60 seconds** are
+  rejected with `400 { error: "audio_too_long" }` **before any provider
+  call**, and a file whose duration cannot be probed is rejected too
+  (`audio_unreadable`) — the guard **fails closed**, it is never
+  silently skipped. A rejected upload's file is deleted; nothing is
+  left behind. The lip-sync endpoint re-checks the stored duration.
+- **Use — `audio_upload_id`.** `POST /api/voice/lipsync` accepts
+  `audio_upload_id` **instead of** a script: script / language /
+  provider fields are then not required and **TTS is never called** —
+  the uploaded file's public URL is passed to the existing lip-sync
+  routes (image route and video route alike). Naming both
+  `audio_upload_id` and `voice_job_id` → 400 (ambiguous, mirroring the
+  visual-source rule). **Ownership:** the lookup is scoped to the
+  caller — another user's upload id (or a nonexistent one) → **404**.
+  All other gates are unchanged: Pro/Extra Pro `can_lipsync`, the
+  10/day fair-use cap, and the included price (0 credits). The job is
+  recorded like any other lip-sync job; its `voice_jobs` row carries
+  provider **`upload`** and the generation's `voice_audio_path` points
+  at the `/files/audio/…` path, which History renders as the source
+  note **"voice: upload · اپ لوڈ"**.
+- **Consent.** The upload UI states plainly: *"Use only your own
+  voice, or with the speaker's permission · صرف اپنی آواز استعمال
+  کریں یا اجازت کے ساتھ."* Lip-syncing a real person's voice is
+  powerful; the recording must be the user's own voice or used with
+  the speaker's permission. The app does not verify consent — the
+  note is the contract, and abuse reports apply as usual.
+- **UI.** In the Voice card, a source toggle — **"Type script ·
+  اسکرپٹ لکھیں"** vs **"Upload your voice · اپنی آواز اپ لوڈ کریں"** —
+  switches what the lip-sync button sends. Upload mode: file picker
+  (`accept="audio/*"`), the permission note, and an **Upload & use**
+  button that posts to the new endpoint and arms the lip-sync action
+  with the returned id. Script mode is unchanged; Preview and
+  Voiceover always use the script. New strings live in the Phase O1
+  i18n dictionary with `data-i18n` tags like the rest.
+
+### Per-model cost/feature display
+
+- **`/api/config` gains a `models` array**, computed by
+  `publicModels()` in `server.js`. **Derivation rule:** every value is
+  read from the *same* `CONFIG` constants and the `COST_BY_QUALITY`
+  rate card that the generation router and the credit charges use —
+  there is deliberately **no second hardcoded price list** that could
+  drift. If a value cannot be derived from config, the field is left
+  out rather than invented.
+- **Shape.** One entry per integrated engine/route: `h3`
+  (text/image/reference models), `kling_o3_4k`, `gemini_omni`
+  (speaking), `seedance_2_5` (premium), `lipsync`, and a compact
+  `voice_sound` group. Fields: `id`, `name`, `kind`
+  (`video|speaking|premium|audio`), `model` or `models{}` (the fal
+  endpoint ids), `resolutions[]`, `durations[]`, optional `aspects[]`,
+  `price` (`by_quality` and/or `by_duration` maps of credits, or
+  `flat`), `plan_gate` (`all` | `pro` | `extrapro` — the lowest plan
+  tier that can use the route; omitted on the mixed voice/sound entry
+  rather than misstated), and `notes` (a short honest capability-note
+  key). Example entry, exactly as served:
+
+  ```json
+  {
+    "id": "seedance_2_5",
+    "name": "Seedance 2.5 — premium",
+    "kind": "premium",
+    "model": "bytedance/seedance-2.5/text-to-video",
+    "resolutions": ["720p"],
+    "durations": [5, 10, 15, 20, 30],
+    "aspects": ["16:9", "9:16", "1:1"],
+    "price": { "by_duration": { "5": 60, "10": 120, "15": 180, "20": 240, "30": 360 } },
+    "plan_gate": "extrapro",
+    "notes": "native_audio_included_up_to_720p_route"
+  }
+  ```
+
+- **UI.** Settings gains a **"Models & prices · ماڈلز اور قیمتیں"**
+  card (`modelsCard`) whose rows render from `cfg.models` (name,
+  resolutions, durations, exact credit prices, localized plan-gate
+  badge); the Buy view links to it — **"See what each model costs ·
+  ہر ماڈل کی قیمت دیکھیں"**. The card chrome is localized through the
+  Phase O1 dictionary; the row data is whatever the server's live
+  config says, so the display can never disagree with the charges.
+
+## TikTok + X (Twitter) redirect sign-in (Phase P, migration v22)
+
+Phase P adds the two remaining login options from the owner's
+directive (2026-10-25) on the Phase N identity model — same rules,
+same fail-closed pattern: nothing is offered in the UI and every
+endpoint answers 503 until the OWNER's own developer app is
+configured server-side. Google/Facebook verify a token the client
+posts; TikTok and X have no such flow — both are **OAuth 2.0
+authorization-code redirects**, so the browser leaves for the
+provider and returns to a server callback.
+
+**Flow.** `GET /api/auth/tiktok/start` /
+`GET /api/auth/twitter/start` mint a state row (migration v22,
+table `oauth_states`) and 302 to the provider's authorize URL.
+The callback (`GET /api/auth/<provider>/callback`) consumes the
+state — single-use, 10-minute expiry, bound to one provider and
+one purpose; a replayed, expired, unknown or wrong-provider state
+lands back at `/?auth_error=invalid_state` — then exchanges the
+code server-side, fetches the verified profile, and finishes:
+
+- **Login** runs the shared `socialLoginOrCreate` (known identity
+  → its account; new identity → a NEW account, signup bonus
+  exactly once; **no auto-merge, ever** — neither provider returns
+  a trustworthy email on the basic scope anyway: TikTok returns
+  none at all, X's is not requested, so accounts are keyed purely
+  on the provider user id, `open_id` / the numeric X id).
+- Because a redirect cannot return a JSON JWT, the session is
+  handed over with a **one-time SSO code**: stored SHA-256-hashed
+  in `auth_tokens` with purpose `sso` (the verify/reset token
+  discipline), 5-minute life, single-use. The callback 302s to
+  `/?sso=<code>`; the app strips it from the address bar and
+  exchanges it via `POST /api/auth/sso/exchange` for the usual
+  `{token, credits}` session payload.
+- **Linking** is the signed-in action
+  `POST /api/auth/<provider>/link/start` → `{authorize_url}`: the
+  state is minted with purpose `link` and bound to the caller, and
+  the same callback binds the identity to THAT account. An
+  identity owned by another account is never moved — the callback
+  lands at `/?auth_error=identity_in_use` (the redirect form of
+  the 409 the token flows answer). Unlink covers
+  google/facebook/phone/tiktok/twitter through the Phase N
+  endpoint; the last-sign-in-method guard counts every row.
+
+**Providers.** TikTok (Login Kit): `TIKTOK_CLIENT_KEY` +
+`TIKTOK_CLIENT_SECRET`; authorize at `/v2/auth/authorize/`
+(scope `user.info.basic`), token at `/v2/oauth/token/`, profile
+at `/v2/user/info/?fields=open_id,display_name`. X: `TWITTER_CLIENT_ID`
++ `TWITTER_CLIENT_SECRET` — OAuth 2.0 with **PKCE** (the
+code_verifier is stored in the state row; its S256 challenge goes
+to `/i/oauth2/authorize`, scope `users.read tweet.read`) and a
+confidential client (the token call at `/2/oauth2/token`
+authenticates with HTTP Basic); profile at `/2/users/me`. The
+client secrets are server-side only — they appear in no config
+response, page or log, and because the flow is a plain redirect
+the page never needs the client key/id either, so `/api/config`
+exposes nothing but the booleans `auth: { …, tiktok, twitter }`.
+Test-only host overrides mirror `FB_GRAPH_BASE` /
+`GOOGLE_TOKENINFO_BASE`: `TIKTOK_AUTH_BASE`, `TIKTOK_API_BASE`,
+`TWITTER_AUTH_BASE`, `TWITTER_API_BASE`.
+
+**Owner setup checklist — TikTok:** TikTok for Developers →
+create an app → add the **Login Kit** product → register the
+redirect URI `{PUBLIC_BASE_URL}/api/auth/tiktok/callback` → set
+`TIKTOK_CLIENT_KEY` + `TIKTOK_CLIENT_SECRET` in the server
+environment (Render) → restart. **X:** X Developer Portal →
+create a project + app → enable OAuth 2.0 as a confidential
+("Web App") client → register the callback URL
+`{PUBLIC_BASE_URL}/api/auth/twitter/callback` → set
+`TWITTER_CLIENT_ID` + `TWITTER_CLIENT_SECRET` → restart. Social
+login itself is free on both platforms (no per-login charge);
+TikTok may require app review before real users can sign in.
+
+**Status: built and stub-tested, NOT production-verified.** The
+authorize/token/profile endpoints of both providers are exercised
+against `test-auth-stub.js` with dummy values only — the full
+redirect login, the link-before-login landing, both
+identity-in-use conflicts, unlink round-trips, state
+replay/expiry/wrong-provider rejection, a tampered PKCE verifier
+rejected at the stub, and the SSO code's single-use + hashed-only
+storage all pass in `test.sh`. Each provider counts as
+**complete only after the owner's real-account test** — TikTok
+needs the owner's developer app (and possibly review), X needs
+the owner's developer app credentials.
+
 ## Test results (backend, 2026-10-20)
 Run locally with `bash test.sh` — **19/19 tests passed** with a dummy key (no paid calls):
 - ✅ health + config endpoint exposes no secrets
@@ -2015,5 +2206,5 @@ the privacy policy page is included in the web app.
 - `test-translate-stub.js` — local Google Translate stub used by `test.sh` (tests never call the real translate endpoint)
 - `test-gateway-stub.js` — signs PayFast-shaped webhook bodies for `test.sh` (tests never call the real gateway)
 - `test-fal-stub.js` — local fal.ai stub (TTS endpoints + lip-sync queue + media files) used by the voice tests in `test.sh` (tests never call the real fal API)
-- `test-auth-stub.js` — local Phase N auth stub (Google tokeninfo + mailer `/send`, recording every call) used by the modern-auth tests in `test.sh` (tests never call real Google or email providers)
+- `test-auth-stub.js` — local auth stub (Google tokeninfo + mailer/SMS `/send`, Facebook Graph, and the Phase P TikTok/X OAuth endpoints, recording every call) used by the modern-auth tests in `test.sh` (tests never call real Google, Meta, TikTok, X or email/SMS providers)
 - `.env.example` — copy to `.env` and fill in (never commit the real one)

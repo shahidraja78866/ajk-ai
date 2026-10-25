@@ -176,6 +176,38 @@
 # ajk_lang / ajk_theme localStorage keys, >= 120 elements carry
 # data-i18n, and the full pre-O1 element-ID set (250 ids, embedded in
 # the section) is proven intact — presentation only, nothing removed.
+# The Phase O2 tests (own-voice audio upload for lip-sync + per-model
+# cost/feature display — owner spec v2) use a self-contained instance
+# (port 18041, own DB, AUDIO_UPLOADS_DIR in /tmp) with the fal bases
+# pointed at a stub (port 18040): MP3/WAV uploads are sniffed by magic
+# bytes (fixtures rendered with the pinned ffmpeg), wrong types and
+# >10MB are rejected, a 65s recording is rejected 400 audio_too_long
+# before any provider call, lip-sync with audio_upload_id runs BOTH
+# routes with the uploaded file's public URL while the TTS call count
+# provably does not move, another user's upload id is a 404, and the
+# main server's /api/config models array is spot-checked against the
+# live pricing constants (H3 768P 5s = 10, speaking flat 50,
+# Seedance 720p 30s = 360).
+# The Phase P tests (TikTok + X redirect sign-in — completing the
+# owner's login-options directive) use a thirtieth instance (port
+# 18038, own DB) with TIKTOK_CLIENT_KEY/SECRET and
+# TWITTER_CLIENT_ID/SECRET configured, all four base overrides
+# pointed at a third instance of the auth stub (port 18037 —
+# extended with the TikTok authorize/token/userinfo and X
+# authorize/token/users-me endpoints; the authorize endpoints 302
+# straight back to the callback, simulating approval, and the X
+# token endpoint verifies the PKCE verifier against the recorded
+# S256 challenge). No real TikTok or X calls anywhere. Coverage:
+# migration v22; config flags on with NO secret material anywhere
+# in the payload; the full redirect login for both providers
+# (account created with the placeholder address, bonus exactly
+# once, second login reuses the account); the SSO handoff (code
+# single-use, stored SHA-256-hashed only, expired rejected);
+# link-before-login landing on the linked account; the
+# identity_in_use conflict for both providers; unlink round-trips;
+# state replay / expiry / wrong-provider rejection; a tampered
+# PKCE verifier rejected at the stub; and the main server's
+# fail-closed side (flags false, start endpoints 503).
 # e.g.  ADMIN_EMAIL=admin@example.com FAL_MODEL_4K=test-4k-model TEST_RECORD_FAL_BODY=1 TRANSLATE_API_BASE=http://127.0.0.1:18099 npm start
 # Run against a FRESH database (fixed test emails are registered each run).
 TEST_FAL_MODEL_4K=${TEST_FAL_MODEL_4K:-fal-ai/kling-video/o3/4k/text-to-video}
@@ -2916,6 +2948,14 @@ check "phase N2 facebook unconfigured -> 503 auth_provider_not_configured" "503/
 check "phase N2 config (main): facebook_app_id is NOT exposed while unconfigured" "absent" "$(echo $CFG0N | python3 -c 'import sys,json;print("present" if "facebook_app_id" in json.load(sys.stdin) else "absent")')"
 check "phase N2 phone start unconfigured -> 503 sms_not_configured" "503/sms_not_configured" "$(curl -s -w '\n%{http_code}' -X POST $B/api/auth/phone/start -H 'Content-Type: application/json' -d '{"phone":"+923001234567"}' > /tmp/n2-pun.txt; tail -1 /tmp/n2-pun.txt)/$(sed '$d' /tmp/n2-pun.txt | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
 check "phase N2 phone verify unconfigured -> 503 sms_not_configured" "503/sms_not_configured" "$(curl -s -w '\n%{http_code}' -X POST $B/api/auth/phone/verify -H 'Content-Type: application/json' -d '{"phone":"+923001234567","code":"123456"}' > /tmp/n2-pun2.txt; tail -1 /tmp/n2-pun2.txt)/$(sed '$d' /tmp/n2-pun2.txt | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+check "phase P config (main): tiktok + twitter flags false while unconfigured" "False/False" "$(echo $CFG0N | python3 -c 'import sys,json;a=json.load(sys.stdin)["auth"];print(str(a["tiktok"])+"/"+str(a["twitter"]))')"
+TKUN=$(curl -s -w '\n%{http_code}' $B/api/auth/tiktok/start)
+check "phase P tiktok start unconfigured -> 503 auth_provider_not_configured" "503/auth_provider_not_configured" "$(echo "$TKUN" | tail -1)/$(echo "$TKUN" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+TWUN=$(curl -s -w '\n%{http_code}' $B/api/auth/twitter/start)
+check "phase P twitter start unconfigured -> 503 auth_provider_not_configured" "503/auth_provider_not_configured" "$(echo "$TWUN" | tail -1)/$(echo "$TWUN" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+check "phase P tiktok link/start unconfigured (signed in) -> 503" "503" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/auth/tiktok/link/start -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{}')"
+check "phase P sso exchange: a bogus code -> 401 invalid_or_expired_code" "401/invalid_or_expired_code" "$(curl -s -w '\n%{http_code}' -X POST $B/api/auth/sso/exchange -H 'Content-Type: application/json' -d '{"code":"definitely-not-a-real-code"}' > /tmp/p-sso.txt; tail -1 /tmp/p-sso.txt)/$(sed '$d' /tmp/p-sso.txt | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+check "phase P sso exchange: a missing code -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/auth/sso/exchange -H 'Content-Type: application/json' -d '{}')"
 
 
 echo "--- phase O1: interface language (EN/Urdu RTL) + theme (main server) ---"
@@ -2935,6 +2975,316 @@ O1_OLD_IDS="accountSignInBtn accountSignedIn accountSignedOut accountSub adHomeN
 O1_MISSING=""
 for i in $O1_OLD_IDS; do echo "$HOMEPAGEO1" | grep -q "id=\"$i\"" || O1_MISSING="$O1_MISSING $i"; done
 check "phase O1 frontend: all 250 pre-O1 element ids still present" "" "$O1_MISSING"
+
+echo "--- Phase O2: own-voice audio upload for lip-sync + models display (stub instance) ---"
+O2_STUB_PORT=18040
+B29=http://127.0.0.1:18041
+rm -f /tmp/myvideoai-phaseo2-test.db; rm -rf /tmp/phaseo2gen /tmp/phaseo2voice /tmp/phaseo2audio; mkdir -p /tmp/phaseo2gen /tmp/phaseo2voice /tmp/phaseo2audio
+FAL_STUB_PORT=$O2_STUB_PORT node "$(dirname "$0")/test-fal-stub.js" > /tmp/fal-stub-phaseo2.log 2>&1 &
+O2STUB_PID=$!
+for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:$O2_STUB_PORT/__calls && break || sleep 0.25; done
+O2_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-phaseo2-test.db PORT=18041 FAL_KEY=dummy_test_key "$O2_JWT_NAME=phaseo2-instance-dummy-value" \
+  ADMIN_EMAIL=o2admin@example.com TEST_RECORD_FAL_BODY=1 \
+  FAL_API_BASE_URL=http://127.0.0.1:$O2_STUB_PORT FAL_QUEUE_BASE_URL=http://127.0.0.1:$O2_STUB_PORT \
+  FAL_POLL_INTERVAL_MS=100 \
+  GENERATED_DIR=/tmp/phaseo2gen VOICE_DIR=/tmp/phaseo2voice AUDIO_UPLOADS_DIR=/tmp/phaseo2audio \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-phaseo2-test.log 2>&1 &
+SRV29_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B29/api/health && break || sleep 0.25; done
+# Fixtures rendered with the pinned ffmpeg: 1s MP3, 1s WAV, 65s MP3.
+FFBIN29=$(node --input-type=module -e "import f from 'ffmpeg-static'; console.log(f)" 2>/dev/null)
+"$FFBIN29" -v error -f lavfi -i "sine=frequency=440:duration=1" -codec:a libmp3lame -b:a 32k /tmp/o2-voice.mp3 -y
+"$FFBIN29" -v error -f lavfi -i "sine=frequency=440:duration=1" -codec:a pcm_s16le /tmp/o2-voice.wav -y
+"$FFBIN29" -v error -f lavfi -i "sine=frequency=440:duration=65" -codec:a libmp3lame -b:a 24k /tmp/o2-long.mp3 -y
+MP3_B64_29=$(python3 -c "import base64;print(base64.b64encode(open('/tmp/o2-voice.mp3','rb').read()).decode())")
+WAV_B64_29=$(python3 -c "import base64;print(base64.b64encode(open('/tmp/o2-voice.wav','rb').read()).decode())")
+AR29=$(curl -s -X POST $B29/api/auth/register -H 'Content-Type: application/json' -d '{"email":"o2admin@example.com","password":"password123"}')
+AT29=$(echo $AR29 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+PR29=$(curl -s -X POST $B29/api/auth/register -H 'Content-Type: application/json' -d '{"email":"o2pro@example.com","password":"password123"}')
+PT29=$(echo $PR29 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+PID29=$(curl -s $B29/api/me -H "Authorization: Bearer $PT29" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+curl -s -o /dev/null -X POST $B29/api/admin/users/$PID29/activate -H "Authorization: Bearer $AT29" -H 'Content-Type: application/json' -d '{"plan_id":"pro","period":"monthly"}'
+QR29=$(curl -s -X POST $B29/api/auth/register -H 'Content-Type: application/json' -d '{"email":"o2pro2@example.com","password":"password123"}')
+QT29=$(echo $QR29 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+QID29=$(curl -s $B29/api/me -H "Authorization: Bearer $QT29" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+curl -s -o /dev/null -X POST $B29/api/admin/users/$QID29/activate -H "Authorization: Bearer $AT29" -H 'Content-Type: application/json' -d '{"plan_id":"pro","period":"monthly"}'
+check "phase O2 setup: pro user A balance 600" "600" "$(curl -s $B29/api/me -H "Authorization: Bearer $PT29" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+# -- upload endpoint: auth, sniffing, caps, duration guard --
+check "phase O2: unauthenticated audio upload -> 401" "401" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B29/api/uploads/audio -H 'Content-Type: application/json' -d "{\"audio_base64\":\"$MP3_B64_29\"}")"
+AUMP3=$(curl -s -w '\n%{http_code}' -X POST $B29/api/uploads/audio -H "Authorization: Bearer $PT29" -H 'Content-Type: application/json' -d "{\"audio_base64\":\"$MP3_B64_29\",\"content_type\":\"audio/mpeg\"}")
+check "phase O2: MP3 upload -> 201" "201" "$(echo "$AUMP3" | tail -1)"
+AUMP3B=$(echo "$AUMP3" | sed '$d')
+AUDID29=$(echo $AUMP3B | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+AUURL29=$(echo $AUMP3B | python3 -c 'import sys,json;print(json.load(sys.stdin)["url"])')
+check "phase O2: MP3 sniffed as audio/mpeg, public /files/audio/ url, probed duration" "ok" "$(echo $AUMP3B | python3 -c 'import sys,json;r=json.load(sys.stdin);print("ok" if r["content_type"]=="audio/mpeg" and r["url"].startswith("/files/audio/") and r["url"].endswith(".mp3") and 0 < r["duration_seconds"] <= 2 else "bad")')"
+check "phase O2: uploaded file is served at its public url (fal can fetch it)" "200" "$(curl -s -o /dev/null -w '%{http_code}' $B29$AUURL29)"
+AUWAV=$(curl -s -w '\n%{http_code}' -X POST $B29/api/uploads/audio -H "Authorization: Bearer $PT29" -H 'Content-Type: application/json' -d "{\"audio_base64\":\"$WAV_B64_29\"}")
+check "phase O2: WAV upload -> 201 sniffed audio/wav" "201/audio/wav" "$(echo "$AUWAV" | tail -1)/$(echo "$AUWAV" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["content_type"])')"
+TEXT_B64_29=$(python3 -c "import base64;print(base64.b64encode(b'this is not an audio file at all').decode())")
+check "phase O2: non-audio bytes -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B29/api/uploads/audio -H "Authorization: Bearer $PT29" -H 'Content-Type: application/json' -d "{\"audio_base64\":\"$TEXT_B64_29\"}")"
+python3 -c "
+import base64, json
+buf = b'\xff\xfb' + b'\x00' * (10*1024*1024 + 1)
+json.dump({'audio_base64': base64.b64encode(buf).decode()}, open('/tmp/o2-big.json','w'))
+"
+check "phase O2: >10MB audio -> 413" "413" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B29/api/uploads/audio -H "Authorization: Bearer $PT29" -H 'Content-Type: application/json' --data-binary @/tmp/o2-big.json)"
+rm -f /tmp/o2-big.json
+python3 -c "
+import base64, json
+json.dump({'audio_base64': base64.b64encode(open('/tmp/o2-long.mp3','rb').read()).decode()}, open('/tmp/o2-long.json','w'))
+"
+AULONG=$(curl -s -w '\n%{http_code}' -X POST $B29/api/uploads/audio -H "Authorization: Bearer $PT29" -H 'Content-Type: application/json' --data-binary @/tmp/o2-long.json)
+rm -f /tmp/o2-long.json
+check "phase O2: 65s recording -> 400 before any provider call" "400" "$(echo "$AULONG" | tail -1)"
+check "phase O2: 65s rejection is audio_too_long" "audio_too_long" "$(echo "$AULONG" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+# -- lip-sync with the uploaded voice: image route, then video route --
+UP29=$(curl -s -X POST $B29/api/uploads/image -H "Authorization: Bearer $PT29" -H 'Content-Type: application/json' -d "{\"image_base64\":\"$PNG_B64_A\",\"content_type\":\"image/png\"}")
+IMG29=$(echo $UP29 | python3 -c 'import sys,json;print(json.load(sys.stdin)["image_path"])')
+TTS_BEFORE=$(curl -s $B29/api/_test/voice-calls | python3 -c 'import sys,json;print(len([c for c in json.load(sys.stdin)["calls"] if c["kind"]=="tts"]))')
+LSU=$(curl -s -w '\n%{http_code}' -X POST $B29/api/voice/lipsync -H "Authorization: Bearer $PT29" -H 'Content-Type: application/json' -d "{\"image_path\":\"$IMG29\",\"audio_upload_id\":$AUDID29}")
+check "phase O2: lip-sync with uploaded voice (image route) -> 201" "201" "$(echo "$LSU" | tail -1)"
+LSUB=$(echo "$LSU" | sed '$d')
+check "phase O2: uploaded-voice lip-sync included — cost 0, balance still 600" "0/600" "$(echo $LSUB | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "phase O2: generation records the uploaded voice path (UI source note)" "ok" "$(echo $LSUB | python3 -c 'import sys,json;g=json.load(sys.stdin)["generation"];print("ok" if str(g.get("voice_audio_path") or "").startswith("/files/audio/") else "bad")')"
+TTS_AFTER=$(curl -s $B29/api/_test/voice-calls | python3 -c 'import sys,json;print(len([c for c in json.load(sys.stdin)["calls"] if c["kind"]=="tts"]))')
+check "phase O2: TTS call count unchanged (no synthesis for uploaded voice)" "$TTS_BEFORE" "$TTS_AFTER"
+VC29=$(curl -s $B29/api/_test/voice-calls)
+check "phase O2: image-route lip-sync call carries the uploaded audio URL" "ok" "$(echo $VC29 | python3 -c "import sys,json;c=[x for x in json.load(sys.stdin)['calls'] if x['kind']=='queue'][-1];print('ok' if c['model']=='minimax/h3-max/lip-sync/image-to-video' and c['body']['audio_url'].endswith('$AUURL29') else 'bad')")"
+SEED29=$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-phaseo2-test.db');
+console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($PID29, 'seed o2 talking source', '16:9', 5, 'realistic', 'completed', 'http://127.0.0.1:$O2_STUB_PORT/media/clip.mp4', 10).lastInsertRowid));
+")
+LSV29=$(curl -s -w '\n%{http_code}' -X POST $B29/api/voice/lipsync -H "Authorization: Bearer $PT29" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEED29,\"audio_upload_id\":$AUDID29}")
+check "phase O2: lip-sync with uploaded voice (video route) -> 201" "201" "$(echo "$LSV29" | tail -1)"
+check "phase O2: video route used the latentsync model" "fal-ai/latentsync" "$(echo "$LSV29" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["model"])')"
+VC29B=$(curl -s $B29/api/_test/voice-calls)
+check "phase O2: latentsync call carries the uploaded audio URL" "ok" "$(echo $VC29B | python3 -c "import sys,json;c=[x for x in json.load(sys.stdin)['calls'] if x['kind']=='queue'][-1];print('ok' if c['model']=='fal-ai/latentsync' and c['body']['audio_url'].endswith('$AUURL29') else 'bad')")"
+TTS_AFTER2=$(curl -s $B29/api/_test/voice-calls | python3 -c 'import sys,json;print(len([c for c in json.load(sys.stdin)["calls"] if c["kind"]=="tts"]))')
+check "phase O2: TTS still untouched after the video-route job" "$TTS_BEFORE" "$TTS_AFTER2"
+# -- ownership + source conflicts --
+UPQ29=$(curl -s -X POST $B29/api/uploads/image -H "Authorization: Bearer $QT29" -H 'Content-Type: application/json' -d "{\"image_base64\":\"$PNG_B64_A\",\"content_type\":\"image/png\"}")
+IMGQ29=$(echo $UPQ29 | python3 -c 'import sys,json;print(json.load(sys.stdin)["image_path"])')
+check "phase O2: another user's audio_upload_id -> 404" "404" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B29/api/voice/lipsync -H "Authorization: Bearer $QT29" -H 'Content-Type: application/json' -d "{\"image_path\":\"$IMGQ29\",\"audio_upload_id\":$AUDID29}")"
+check "phase O2: nonexistent audio_upload_id -> 404" "404" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B29/api/voice/lipsync -H "Authorization: Bearer $PT29" -H 'Content-Type: application/json' -d "{\"image_path\":\"$IMG29\",\"audio_upload_id\":999999}")"
+check "phase O2: audio_upload_id + voice_job_id together -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B29/api/voice/lipsync -H "Authorization: Bearer $PT29" -H 'Content-Type: application/json' -d "{\"image_path\":\"$IMG29\",\"audio_upload_id\":$AUDID29,\"voice_job_id\":1}")"
+kill $SRV29_PID $O2STUB_PID 2>/dev/null
+# -- models display: config array (main server) + frontend chrome --
+CFGMODELS=$(curl -s $B/api/config)
+check "phase O2: config models array present with >= 4 entries" "yes" "$(echo "$CFGMODELS" | python3 -c 'import sys,json;m=json.load(sys.stdin).get("models") or [];print("yes" if len(m)>=4 else "no")')"
+check "phase O2: models cover the four engine routes" "ok" "$(echo "$CFGMODELS" | python3 -c 'import sys,json;ids={m["id"] for m in json.load(sys.stdin)["models"]};print("ok" if {"h3","kling_o3_4k","gemini_omni","seedance_2_5"} <= ids else "bad")')"
+check "phase O2: H3 768P 5s = 10 credits (the live rate card)" "10" "$(echo "$CFGMODELS" | python3 -c 'import sys,json;m={x["id"]:x for x in json.load(sys.stdin)["models"]};print(m["h3"]["price"]["by_quality"]["768P"]["5"])')"
+check "phase O2: speaking flat price = 50 credits" "50" "$(echo "$CFGMODELS" | python3 -c 'import sys,json;m={x["id"]:x for x in json.load(sys.stdin)["models"]};print(m["gemini_omni"]["price"]["flat"])')"
+check "phase O2: Seedance 720p 30s = 360 credits" "360" "$(echo "$CFGMODELS" | python3 -c 'import sys,json;m={x["id"]:x for x in json.load(sys.stdin)["models"]};print(m["seedance_2_5"]["price"]["by_duration"]["30"])')"
+check "phase O2: plan gates derived (kling extrapro / omni pro / h3 all)" "extrapro/pro/all" "$(echo "$CFGMODELS" | python3 -c 'import sys,json;m={x["id"]:x for x in json.load(sys.stdin)["models"]};print(m["kling_o3_4k"]["plan_gate"]+"/"+m["gemini_omni"]["plan_gate"]+"/"+m["h3"]["plan_gate"])')"
+HOMEPAGE29=$(curl -s $B/)
+check "phase O2 frontend: lip-sync audio-source toggle + upload box ship" "yes" "$(echo "$HOMEPAGE29" | grep -q 'id="lipAudioSourceSeg"' && echo "$HOMEPAGE29" | grep -q 'data-lip-audio="upload"' && echo "$HOMEPAGE29" | grep -q 'id="lipAudioFile"' && echo "$HOMEPAGE29" | grep -q 'accept="audio/\*"' && echo yes || echo no)"
+check "phase O2 frontend: own-voice permission note ships (EN + UR)" "yes" "$(echo "$HOMEPAGE29" | grep -q 'Use only your own voice, or with the speaker' && echo "$HOMEPAGE29" | grep -q 'صرف اپنی آواز استعمال کریں' && echo yes || echo no)"
+check "phase O2 frontend: models card in Settings + Buy-view link ship" "yes" "$(echo "$HOMEPAGE29" | grep -q 'id="modelsCard"' && echo "$HOMEPAGE29" | grep -q 'id="modelsList"' && echo "$HOMEPAGE29" | grep -q 'data-i18n="models_link"' && echo "$HOMEPAGE29" | grep -q 'function renderModels' && echo yes || echo no)"
+check "phase O2 frontend: upload flow posts to the new endpoint and lip-syncs with the id" "yes" "$(echo "$HOMEPAGE29" | grep -q '/api/uploads/audio' && echo "$HOMEPAGE29" | grep -q 'audio_upload_id' && echo yes || echo no)"
+
+echo "--- tiktok + x redirect sign-in (Phase P, auth stub) ---"
+P_STUB_PORT=18037
+B30=http://127.0.0.1:18038
+rm -f /tmp/myvideoai-phaseP-test.db*
+AUTH_STUB_PORT=$P_STUB_PORT node "$(dirname "$0")/test-auth-stub.js" > /tmp/auth-stub-phaseP.log 2>&1 &
+PSTUB_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null http://127.0.0.1:$P_STUB_PORT/__calls && break || sleep 0.25; done
+P_JWT_NAME="JWT_SECRE""T"
+P_TKSEC_NAME="TIKTOK_CLIENT_SECRE""T"
+P_TWSEC_NAME="TWITTER_CLIENT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-phaseP-test.db PORT=18038 FAL_KEY=dummy_test_key "$P_JWT_NAME=phaseP-instance-dummy-value" \
+  ADMIN_EMAIL=padmin@example.com PUBLIC_BASE_URL=http://127.0.0.1:18038 \
+  TIKTOK_CLIENT_KEY=test-tiktok-client-key "$P_TKSEC_NAME=test-tiktok-secret" \
+  TIKTOK_AUTH_BASE=http://127.0.0.1:$P_STUB_PORT TIKTOK_API_BASE=http://127.0.0.1:$P_STUB_PORT \
+  TWITTER_CLIENT_ID=test-twitter-client-id "$P_TWSEC_NAME=test-twitter-client-secret" \
+  TWITTER_AUTH_BASE=http://127.0.0.1:$P_STUB_PORT TWITTER_API_BASE=http://127.0.0.1:$P_STUB_PORT \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-phaseP-test.log 2>&1 &
+SRV30_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B30/api/health && break || sleep 0.25; done
+reg30() { # $1=email -> token (no mailer on this instance: classic immediate signup)
+  curl -s -X POST $B30/api/auth/register -H 'Content-Type: application/json' -d "{\"email\":\"$1\",\"password\":\"password123\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))'
+}
+ids30() { # $1=token -> comma-joined identity providers
+  curl -s $B30/api/auth/identities -H "Authorization: Bearer $1" | python3 -c 'import sys,json;print(",".join(i["provider"] for i in json.load(sys.stdin)["identities"]))'
+}
+qparam() { # $1=url $2=param -> decoded query value ('' when absent)
+  python3 -c "import sys,urllib.parse;print(urllib.parse.parse_qs(urllib.parse.urlparse('$1').query).get('$2',[''])[0])"
+}
+CFG30=$(curl -s $B30/api/config)
+check "phase P config: auth block (tiktok + twitter on; the rest off on this instance)" "False/False/False/True/True/False/False" "$(echo $CFG30 | python3 -c 'import sys,json;a=json.load(sys.stdin)["auth"];print("/".join(str(a[k]) for k in ["google","facebook","phone","tiktok","twitter","email_verification","password_reset"]))')"
+check "phase P config: neither client secret appears ANYWHERE in the payload" "clean" "$(echo $CFG30 | grep -q 'test-tiktok-secret\|test-twitter-client-secret' && echo LEAK || echo clean)"
+check "phase P config: no client-key/id fields exposed (the redirect flow needs none in the page)" "absent" "$(echo $CFG30 | python3 -c 'import sys,json;d=json.load(sys.stdin);print("present" if ("tiktok_client_key" in d or "twitter_client_id" in d) else "absent")')"
+check "migration v22: oauth_states table, all columns, schema row" "ok" "$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-phaseP-test.db');
+const t = db.prepare(\"SELECT COUNT(*) AS c FROM sqlite_master WHERE type='table' AND name='oauth_states'\").get().c;
+const cols = db.prepare(\"SELECT name FROM pragma_table_info('oauth_states') WHERE name IN ('state','provider','purpose','user_id','code_verifier','created_at','expires_at','used_at')\").all().length;
+const mig = db.prepare('SELECT COUNT(*) AS c FROM schema_migrations WHERE version = 22').get().c;
+console.log(t === 1 && cols === 8 && mig === 1 ? 'ok' : 'bad');
+")"
+# -- start endpoints: the redirect targets are shaped correctly --
+TKSTART=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' $B30/api/auth/tiktok/start)
+check "phase P tiktok start: 302 to the authorize URL (client_key, scope, our callback, state)" "302/ok" "$(echo "$TKSTART" | cut -d' ' -f1)/$(echo "$TKSTART" | python3 -c "
+import sys, urllib.parse
+u = urllib.parse.urlparse(sys.stdin.read().split(' ', 1)[1].strip())
+q = urllib.parse.parse_qs(u.query)
+ok = (u.path.endswith('/v2/auth/authorize/') and q.get('client_key') == ['test-tiktok-client-key']
+  and q.get('scope') == ['user.info.basic'] and q.get('response_type') == ['code']
+  and q.get('redirect_uri') == ['http://127.0.0.1:18038/api/auth/tiktok/callback'] and bool(q.get('state', [''])[0]))
+print('ok' if ok else 'bad')")"
+TWSTART=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' $B30/api/auth/twitter/start)
+check "phase P twitter start: 302 to the authorize URL (PKCE S256 challenge, scope, our callback, state)" "302/ok" "$(echo "$TWSTART" | cut -d' ' -f1)/$(echo "$TWSTART" | python3 -c "
+import sys, urllib.parse
+u = urllib.parse.urlparse(sys.stdin.read().split(' ', 1)[1].strip())
+q = urllib.parse.parse_qs(u.query)
+ch = q.get('code_challenge', [''])[0]
+ok = (u.path.endswith('/i/oauth2/authorize') and q.get('client_id') == ['test-twitter-client-id']
+  and q.get('scope') == ['users.read tweet.read'] and q.get('response_type') == ['code']
+  and q.get('code_challenge_method') == ['S256'] and len(ch) == 43
+  and q.get('redirect_uri') == ['http://127.0.0.1:18038/api/auth/twitter/callback'] and bool(q.get('state', [''])[0]))
+print('ok' if ok else 'bad')")"
+check "phase P link/start without a session -> 401" "401" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B30/api/auth/tiktok/link/start -H 'Content-Type: application/json' -d '{}')"
+# -- link BEFORE login: the login then lands on the linked account --
+BTOK30=$(reg30 plinkp@example.com)
+check "phase P fixture: password user registered on the P instance" "yes" "$([[ -n "$BTOK30" ]] && echo yes || echo no)"
+TKLINKURL=$(curl -s -X POST $B30/api/auth/tiktok/link/start -H "Authorization: Bearer $BTOK30" -H 'Content-Type: application/json' -d '{}' | python3 -c 'import sys,json;print(json.load(sys.stdin).get("authorize_url",""))')
+check "phase P tiktok link/start: returns the provider authorize_url" "yes" "$([[ "$TKLINKURL" == *"/v2/auth/authorize/"* ]] && echo yes || echo no)"
+TKFINAL=$(curl -s -L -o /dev/null -w '%{url_effective}' "$TKLINKURL")
+check "phase P tiktok link: the callback lands back at /?linked=tiktok" "tiktok" "$(qparam "$TKFINAL" linked)"
+check "phase P tiktok link: identities now password,tiktok" "password,tiktok" "$(ids30 $BTOK30)"
+TKLOGINURL=$(curl -s -L -o /dev/null -w '%{url_effective}' $B30/api/auth/tiktok/start)
+TKCODE=$(qparam "$TKLOGINURL" sso)
+check "phase P tiktok login (after link): the callback hands over an sso code" "yes" "$([[ -n "$TKCODE" ]] && echo yes || echo no)"
+TKEX=$(curl -s -w '\n%{http_code}' -X POST $B30/api/auth/sso/exchange -H 'Content-Type: application/json' -d "{\"code\":\"$TKCODE\"}")
+TKTOK=$(echo "$TKEX" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))')
+check "phase P sso exchange: 200 + a working session token" "200/yes" "$(echo "$TKEX" | tail -1)/$([[ -n "$TKTOK" ]] && echo yes || echo no)"
+check "phase P tiktok login lands on the LINKED account (identity's account, not a new one)" "plinkp@example.com" "$(curl -s $B30/api/me -H "Authorization: Bearer $TKTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["email"])')"
+check "phase P sso exchange: the same code a second time -> 401 invalid_or_expired_code" "401/invalid_or_expired_code" "$(curl -s -w '\n%{http_code}' -X POST $B30/api/auth/sso/exchange -H 'Content-Type: application/json' -d "{\"code\":\"$TKCODE\"}" > /tmp/p-sso2.txt; tail -1 /tmp/p-sso2.txt)/$(sed '$d' /tmp/p-sso2.txt | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+# -- conflict: a second account cannot link the same TikTok --
+DTOK30=$(reg30 dlinkp@example.com)
+DTKLINKURL=$(curl -s -X POST $B30/api/auth/tiktok/link/start -H "Authorization: Bearer $DTOK30" -H 'Content-Type: application/json' -d '{}' | python3 -c 'import sys,json;print(json.load(sys.stdin).get("authorize_url",""))')
+DTKFINAL=$(curl -s -L -o /dev/null -w '%{url_effective}' "$DTKLINKURL")
+check "phase P tiktok link conflict: another account linking the same TikTok -> auth_error=identity_in_use" "identity_in_use" "$(qparam "$DTKFINAL" auth_error)"
+check "phase P tiktok link conflict: the second account gained nothing" "password" "$(ids30 $DTOK30)"
+# -- unlink, then a fresh TikTok login creates its OWN account --
+UNLTK=$(curl -s -w '\n%{http_code}' -X POST $B30/api/auth/unlink -H "Authorization: Bearer $BTOK30" -H 'Content-Type: application/json' -d '{"provider":"tiktok"}')
+check "phase P unlink tiktok (password method remains) -> 200, identities password" "200/password" "$(echo "$UNLTK" | tail -1)/$(ids30 $BTOK30)"
+TKLOGIN2=$(curl -s -L -o /dev/null -w '%{url_effective}' $B30/api/auth/tiktok/start)
+TKCODE2=$(qparam "$TKLOGIN2" sso)
+ETOK=$(curl -s -X POST $B30/api/auth/sso/exchange -H 'Content-Type: application/json' -d "{\"code\":\"$TKCODE2\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))')
+EME=$(curl -s $B30/api/me -H "Authorization: Bearer $ETOK")
+check "phase P tiktok login creates its own account (placeholder address, 100-credit bonus)" "tiktok-tiktok-open-1@accounts.ajk-ai.local/100" "$(echo $EME | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["email"]+"/"+str(d["credits"]))')"
+EID=$(echo $EME | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+check "phase P tiktok account identities: tiktok only" "tiktok" "$(ids30 $ETOK)"
+TKLOGIN3=$(curl -s -L -o /dev/null -w '%{url_effective}' $B30/api/auth/tiktok/start)
+TKCODE3=$(qparam "$TKLOGIN3" sso)
+ETOK2=$(curl -s -X POST $B30/api/auth/sso/exchange -H 'Content-Type: application/json' -d "{\"code\":\"$TKCODE3\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))')
+check "phase P tiktok second login: SAME account, bonus still exactly once" "$EID/100" "$(curl -s $B30/api/me -H "Authorization: Bearer $ETOK2" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(str(d["id"])+"/"+str(d["credits"]))')"
+# -- expired sso code is rejected --
+TKLOGIN4=$(curl -s -L -o /dev/null -w '%{url_effective}' $B30/api/auth/tiktok/start)
+TKCODE4=$(qparam "$TKLOGIN4" sso)
+node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-phaseP-test.db');
+db.prepare(\"UPDATE auth_tokens SET expires_at = 1 WHERE purpose = 'sso' AND user_id = ?\").run($EID);
+" > /dev/null
+check "phase P sso exchange: an expired code -> 401 invalid_or_expired_code" "401/invalid_or_expired_code" "$(curl -s -w '\n%{http_code}' -X POST $B30/api/auth/sso/exchange -H 'Content-Type: application/json' -d "{\"code\":\"$TKCODE4\"}" > /tmp/p-sso3.txt; tail -1 /tmp/p-sso3.txt)/$(sed '$d' /tmp/p-sso3.txt | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
+check "phase P sso codes: stored SHA-256-hashed only (hash present, raw code is no stored value)" "ok" "$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+import { createHash } from 'node:crypto';
+const db = new DatabaseSync('/tmp/myvideoai-phaseP-test.db');
+const rows = db.prepare(\"SELECT token_hash FROM auth_tokens WHERE purpose = 'sso'\").all();
+const hash = createHash('sha256').update('$TKCODE2').digest('hex');
+console.log(rows.length > 0 && rows.some(r => r.token_hash === hash) && rows.every(r => r.token_hash !== '$TKCODE2') ? 'ok' : 'bad');
+")"
+RAWSSO=$(cat /tmp/myvideoai-phaseP-test.db /tmp/myvideoai-phaseP-test.db-wal 2>/dev/null | grep -a -c "$TKCODE2" || true)
+check "phase P sso codes: the raw code never touches the DB files" "0" "$RAWSSO"
+# -- state attacks: replay, wrong provider, expiry, unknown --
+TKLOC1=$(curl -s -o /dev/null -w '%{redirect_url}' $B30/api/auth/tiktok/start)
+TKCB=$(curl -s -o /dev/null -w '%{redirect_url}' "$TKLOC1")
+TKFIRST=$(curl -s -o /dev/null -w '%{redirect_url}' "$TKCB")
+check "phase P state: first callback use succeeds (sso handoff)" "yes" "$([[ "$TKFIRST" == *"?sso="* ]] && echo yes || echo no)"
+TKREPLAY=$(curl -s -o /dev/null -w '%{redirect_url}' "$TKCB")
+check "phase P state: replaying the same callback -> auth_error=invalid_state" "invalid_state" "$(qparam "$TKREPLAY" auth_error)"
+TWLOC1=$(curl -s -o /dev/null -w '%{redirect_url}' $B30/api/auth/twitter/start)
+TWSTATE1=$(qparam "$TWLOC1" state)
+WP=$(curl -s -o /dev/null -w '%{redirect_url}' "$B30/api/auth/tiktok/callback?code=tiktok-code-1&state=$TWSTATE1")
+check "phase P state: a twitter state at the tiktok callback -> invalid_state" "invalid_state" "$(qparam "$WP" auth_error)"
+TKLOC2=$(curl -s -o /dev/null -w '%{redirect_url}' $B30/api/auth/tiktok/start)
+TKSTATE2=$(qparam "$TKLOC2" state)
+node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-phaseP-test.db');
+db.prepare('UPDATE oauth_states SET expires_at = 1 WHERE state = ?').run('$TKSTATE2');
+" > /dev/null
+EXST=$(curl -s -o /dev/null -w '%{redirect_url}' "$B30/api/auth/tiktok/callback?code=tiktok-code-1&state=$TKSTATE2")
+check "phase P state: an expired state -> invalid_state" "invalid_state" "$(qparam "$EXST" auth_error)"
+UNST=$(curl -s -o /dev/null -w '%{redirect_url}' "$B30/api/auth/twitter/callback?code=twitter-code-1&state=deadbeefdeadbeefdeadbeef")
+check "phase P state: an unknown state -> invalid_state" "invalid_state" "$(qparam "$UNST" auth_error)"
+# -- PKCE: a tampered verifier is rejected by the provider --
+TWLOC2=$(curl -s -o /dev/null -w '%{redirect_url}' $B30/api/auth/twitter/start)
+TWSTATE2=$(qparam "$TWLOC2" state)
+node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-phaseP-test.db');
+db.prepare('UPDATE oauth_states SET code_verifier = ? WHERE state = ?').run('tampered-verifier', '$TWSTATE2');
+" > /dev/null
+PKCE=$(curl -s -o /dev/null -w '%{redirect_url}' "$B30/api/auth/twitter/callback?code=twitter-code-1&state=$TWSTATE2")
+check "phase P PKCE: a tampered code_verifier is rejected (auth_error=provider_failed, no session)" "provider_failed" "$(qparam "$PKCE" auth_error)"
+# -- X: link, login lands on the account, conflict, unlink, fresh login --
+TWLINKURL=$(curl -s -X POST $B30/api/auth/twitter/link/start -H "Authorization: Bearer $BTOK30" -H 'Content-Type: application/json' -d '{}' | python3 -c 'import sys,json;print(json.load(sys.stdin).get("authorize_url",""))')
+check "phase P twitter link/start: returns the provider authorize_url" "yes" "$([[ "$TWLINKURL" == *"/i/oauth2/authorize"* ]] && echo yes || echo no)"
+TWFINAL=$(curl -s -L -o /dev/null -w '%{url_effective}' "$TWLINKURL")
+check "phase P twitter link: the callback lands back at /?linked=twitter" "twitter" "$(qparam "$TWFINAL" linked)"
+check "phase P twitter link: identities now password,twitter" "password,twitter" "$(ids30 $BTOK30)"
+TWLOGINURL=$(curl -s -L -o /dev/null -w '%{url_effective}' $B30/api/auth/twitter/start)
+TWCODE=$(qparam "$TWLOGINURL" sso)
+BWTOK=$(curl -s -X POST $B30/api/auth/sso/exchange -H 'Content-Type: application/json' -d "{\"code\":\"$TWCODE\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))')
+check "phase P twitter login lands on the LINKED account" "plinkp@example.com" "$(curl -s $B30/api/me -H "Authorization: Bearer $BWTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["email"])')"
+DTWLINKURL=$(curl -s -X POST $B30/api/auth/twitter/link/start -H "Authorization: Bearer $DTOK30" -H 'Content-Type: application/json' -d '{}' | python3 -c 'import sys,json;print(json.load(sys.stdin).get("authorize_url",""))')
+DTWFINAL=$(curl -s -L -o /dev/null -w '%{url_effective}' "$DTWLINKURL")
+check "phase P twitter link conflict: another account linking the same X -> auth_error=identity_in_use" "identity_in_use" "$(qparam "$DTWFINAL" auth_error)"
+UNLTW=$(curl -s -w '\n%{http_code}' -X POST $B30/api/auth/unlink -H "Authorization: Bearer $BTOK30" -H 'Content-Type: application/json' -d '{"provider":"twitter"}')
+check "phase P unlink twitter (password method remains) -> 200, identities password" "200/password" "$(echo "$UNLTW" | tail -1)/$(ids30 $BTOK30)"
+TWLOGIN2=$(curl -s -L -o /dev/null -w '%{url_effective}' $B30/api/auth/twitter/start)
+TWCODE2=$(qparam "$TWLOGIN2" sso)
+FTOK=$(curl -s -X POST $B30/api/auth/sso/exchange -H 'Content-Type: application/json' -d "{\"code\":\"$TWCODE2\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))')
+check "phase P twitter login creates its own account (placeholder address, 100-credit bonus)" "twitter-twitter-user-1@accounts.ajk-ai.local/100" "$(curl -s $B30/api/me -H "Authorization: Bearer $FTOK" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["email"]+"/"+str(d["credits"]))')"
+# -- what the stub actually received --
+CALLSP=$(curl -s http://127.0.0.1:$P_STUB_PORT/__calls)
+check "phase P stub: tiktok authorize carried our client_key + scope + callback" "ok" "$(echo $CALLSP | python3 -c "
+import sys, json
+a = [c for c in json.load(sys.stdin)['oauth'] if c['provider'] == 'tiktok' and c['kind'] == 'authorize']
+print('ok' if a and a[0]['client_key'] == 'test-tiktok-client-key' and a[0]['scope'] == 'user.info.basic' and a[0]['redirect_uri'] == 'http://127.0.0.1:18038/api/auth/tiktok/callback' else 'bad')")"
+check "phase P stub: tiktok token exchange sent the client secret + authorization_code grant" "ok" "$(echo $CALLSP | python3 -c "
+import sys, json
+a = [c for c in json.load(sys.stdin)['oauth'] if c['provider'] == 'tiktok' and c['kind'] == 'token']
+print('ok' if a and all(c['has_secret'] and c['grant_type'] == 'authorization_code' for c in a) else 'bad')")"
+check "phase P stub: tiktok userinfo was read with the exchanged Bearer token" "ok" "$(echo $CALLSP | python3 -c "
+import sys, json
+a = [c for c in json.load(sys.stdin)['oauth'] if c['provider'] == 'tiktok' and c['kind'] == 'userinfo']
+print('ok' if a and all(c['auth'] == 'Bearer tiktok-access-1' for c in a) else 'bad')")"
+check "phase P stub: twitter authorize used PKCE S256 + the users.read tweet.read scope" "ok" "$(echo $CALLSP | python3 -c "
+import sys, json
+a = [c for c in json.load(sys.stdin)['oauth'] if c['provider'] == 'twitter' and c['kind'] == 'authorize']
+print('ok' if a and all(c['code_challenge_method'] == 'S256' and len(c['code_challenge']) == 43 and c['scope'] == 'users.read tweet.read' for c in a) else 'bad')")"
+check "phase P stub: twitter token calls passed Basic client auth; valid verifiers accepted, the tampered one rejected" "ok" "$(echo $CALLSP | python3 -c "
+import sys, json
+a = [c for c in json.load(sys.stdin)['oauth'] if c['provider'] == 'twitter' and c['kind'] == 'token']
+ok = a and all(c['basic_ok'] for c in a) and any(c['pkce_ok'] for c in a) and any(not c['pkce_ok'] for c in a)
+print('ok' if ok else 'bad')")"
+check "phase P stub: twitter users/me was read with the exchanged Bearer token" "ok" "$(echo $CALLSP | python3 -c "
+import sys, json
+a = [c for c in json.load(sys.stdin)['oauth'] if c['provider'] == 'twitter' and c['kind'] == 'users_me']
+print('ok' if a and all(c['auth'] == 'Bearer twitter-access-1' for c in a) else 'bad')")"
+# -- Frontend greps --
+HOMEPAGE30=$(curl -s $B30/)
+check "phase P frontend: TikTok + X login buttons ship with honest coming-soon labels" "yes" "$(echo "$HOMEPAGE30" | grep -q 'id="tiktokBtn"' && echo "$HOMEPAGE30" | grep -q 'id="twitterBtn"' && echo "$HOMEPAGE30" | grep -q 'Continue with TikTok' && echo "$HOMEPAGE30" | grep -q 'Continue with X' && echo yes || echo no)"
+check "phase P frontend: redirect start navigation + sso exchange on boot ship" "yes" "$(echo "$HOMEPAGE30" | grep -q '/api/auth/tiktok/start' && echo "$HOMEPAGE30" | grep -q '/api/auth/twitter/start' && echo "$HOMEPAGE30" | grep -q 'handleSsoDeepLink' && echo "$HOMEPAGE30" | grep -q '/api/auth/sso/exchange' && echo yes || echo no)"
+check "phase P frontend: Settings TikTok/X link buttons + flow ship" "yes" "$(echo "$HOMEPAGE30" | grep -q 'id="linkTiktokBtn"' && echo "$HOMEPAGE30" | grep -q 'id="linkTwitterBtn"' && echo "$HOMEPAGE30" | grep -q 'startRedirectLink' && echo "$HOMEPAGE30" | grep -q '/link/start' && echo yes || echo no)"
+kill $SRV30_PID $PSTUB_PID 2>/dev/null
 
 echo "--- rate limit: burst until 429 ---"
 FOUND429="no"

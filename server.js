@@ -173,6 +173,10 @@ const CONFIG = {
   // --- Voice system (Phase B: TTS + lip-sync + voiceover) -------------------
   // Synthesized audio files live here and are served from /files/voice/.
   voiceDir: process.env.VOICE_DIR || path.join(__dirname, 'data', 'voice'),
+  // Phase O2: the user's own recorded voice files for lip-sync live here
+  // (per-user subfolders), served at /files/audio/ so fal can fetch them —
+  // the same public-URL pattern the synthesized TTS audio uses.
+  audioUploadsDir: process.env.AUDIO_UPLOADS_DIR || path.join(__dirname, 'data', 'audio-uploads'),
   // Which TTS providers are enabled. Empty list = every provider whose
   // credentials exist. Set TTS_PROVIDERS=none (or a comma list like
   // "gemini,azure") to restrict — with NO provider enabled the voice
@@ -411,6 +415,28 @@ const CONFIG = {
     from: (process.env.SMS_FROM || '').trim(),
   },
   otpTtlMs: Math.max(1000, Number(process.env.OTP_TTL_MS || 60 * 1000) || 60 * 1000),
+  // TikTok Login Kit + X (Twitter) OAuth 2.0 (Phase P) — REDIRECT
+  // flows, unlike the token-POST Google/Facebook adapters above:
+  // the browser leaves for the provider and returns to this
+  // server's callback, which verifies the code server-side and
+  // hands the session to the app through a one-time SSO code.
+  // Both are the OWNER's own developer apps and FAIL CLOSED:
+  // nothing is offered and every endpoint answers 503 until BOTH
+  // values of a pair are set. The client secrets are server-side
+  // only — they appear in no config response, page or log (the
+  // TikTok client key / X client id are public identifiers, but
+  // the redirect flow never needs them in the page either, so
+  // nothing is exposed at all).
+  tiktokClientKey: (process.env.TIKTOK_CLIENT_KEY || '').trim(),
+  tiktokClientSecret: (process.env.TIKTOK_CLIENT_SECRET || '').trim(),
+  // Test-only overrides (test.sh points them at the local auth
+  // stub); production values are TikTok's own hosts.
+  tiktokAuthBase: (process.env.TIKTOK_AUTH_BASE || 'https://www.tiktok.com').trim().replace(/\/+$/, ''),
+  tiktokApiBase: (process.env.TIKTOK_API_BASE || 'https://open.tiktokapis.com').trim().replace(/\/+$/, ''),
+  twitterClientId: (process.env.TWITTER_CLIENT_ID || '').trim(),
+  twitterClientSecret: (process.env.TWITTER_CLIENT_SECRET || '').trim(),
+  twitterAuthBase: (process.env.TWITTER_AUTH_BASE || 'https://twitter.com').trim().replace(/\/+$/, ''),
+  twitterApiBase: (process.env.TWITTER_API_BASE || 'https://api.twitter.com').trim().replace(/\/+$/, ''),
 };
 
 // ---------- Prompt languages ----------
@@ -991,6 +1017,47 @@ const MIGRATIONS = [
       created_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_phone_otps_phone ON phone_otps(phone, purpose, id);` },
+  // v21 — own-voice audio uploads (Phase O2): one row per audio file a
+  // user uploaded to drive lip-sync with their own recording (instead of
+  // a synthesized TTS voice). The file itself lives on disk under
+  // CONFIG.audioUploadsDir/<user_id>/<file_name> and is served at
+  // /files/audio/<user_id>/<file_name> — the public URL fal fetches,
+  // mirroring how TTS audio is hosted. duration_seconds is probed with
+  // ffmpeg at upload time (files over 60s are rejected before any row is
+  // written); content_type is the SNIFFED type, never the claimed one.
+  { version: 21, up: `
+    CREATE TABLE IF NOT EXISTS audio_uploads (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      file_name TEXT NOT NULL,
+      content_type TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      duration_seconds REAL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_audio_uploads_user ON audio_uploads(user_id, id);` },
+  // v22 — OAuth 2.0 redirect sign-in state (Phase P: TikTok + X).
+  // Unlike Google/Facebook (the client posts a token the server
+  // verifies), TikTok and X are redirect flows: the server mints a
+  // random `state`, stores it here, and the provider callback must
+  // present it back. A state is single-use (used_at stamped on
+  // consume), expires 10 minutes after creation, and is bound to ONE
+  // provider and ONE purpose ('login' | 'link'); link states also
+  // carry the signed-in user they were minted for, and X states
+  // carry the PKCE code_verifier whose S256 challenge was sent to
+  // the authorize endpoint. Times are epoch ms — the same clock as
+  // auth_tokens / phone_otps.
+  { version: 22, up: `
+    CREATE TABLE IF NOT EXISTS oauth_states (
+      state TEXT PRIMARY KEY,
+      provider TEXT NOT NULL,
+      purpose TEXT NOT NULL DEFAULT 'login',
+      user_id INTEGER REFERENCES users(id),
+      code_verifier TEXT,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      used_at INTEGER
+    );` },
 ];
 {
   const applied = new Set(db.prepare('SELECT version FROM schema_migrations').all().map(r => r.version));
@@ -1241,11 +1308,11 @@ function subscriptionView(sub) {
 // ---------- App ----------
 const app = express();
 app.use(cors({ origin: FRONTEND_ORIGIN || true }));
-// JSON bodies are capped at 100kb — except the image-upload route, whose
-// base64 payload needs its own larger parser (mounted on the route; the
-// global parser is skipped for that exact path).
+// JSON bodies are capped at 100kb — except the image/audio upload routes,
+// whose base64 payloads need their own larger parsers (mounted on the
+// routes; the global parser is skipped for those exact paths).
 const jsonParser = express.json({ limit: '100kb' });
-app.use((req, res, next) => req.path === '/api/uploads/image' ? next() : jsonParser(req, res, next));
+app.use((req, res, next) => (req.path === '/api/uploads/image' || req.path === '/api/uploads/audio') ? next() : jsonParser(req, res, next));
 // Payment gateways post their IPN/webhook callbacks as form data.
 app.use(express.urlencoded({ extended: false, limit: '100kb' }));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
@@ -1406,6 +1473,191 @@ function facebookAuthConfigured() {
 }
 function smsConfigured() {
   return !!(CONFIG.sms.base && CONFIG.sms.key && CONFIG.sms.from);
+}
+
+// ---------- Phase P: TikTok + X redirect OAuth 2.0 ----------
+// Both providers are authorization-code REDIRECT flows (no in-page
+// SDK like Google/Facebook): GET /api/auth/<provider>/start mints a
+// state row and 302s the browser to the provider; the provider
+// returns the browser to /api/auth/<provider>/callback, which
+// consumes the state, exchanges the code server-side, fetches the
+// provider profile and then hands the resulting session to the app
+// through the one-time `sso` code below (the callback is a plain
+// browser navigation, so it cannot return a JSON JWT directly).
+function tiktokAuthConfigured() {
+  return !!(CONFIG.tiktokClientKey && CONFIG.tiktokClientSecret);
+}
+function twitterAuthConfigured() {
+  return !!(CONFIG.twitterClientId && CONFIG.twitterClientSecret);
+}
+
+// Mint a state row (migration v22). 10-minute expiry, single-use;
+// `purpose` is 'login' or 'link' (link rows carry the caller's user
+// id); `codeVerifier` is set only for X (PKCE).
+function createOAuthState(provider, purpose, userId, codeVerifier) {
+  const state = randomBytes(32).toString('hex');
+  const now = Date.now();
+  db.prepare(`INSERT INTO oauth_states (state, provider, purpose, user_id, code_verifier, created_at, expires_at, used_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`)
+    .run(state, provider, purpose, userId || null, codeVerifier || null, now, now + 10 * 60 * 1000);
+  return state;
+}
+
+// Consume a state presented by a provider callback. Returns the row
+// or null — a state is rejected when unknown, minted for a
+// DIFFERENT provider, already used, or expired; on success it is
+// stamped used so it can never be replayed.
+function consumeOAuthState(state, provider) {
+  if (!state || typeof state !== 'string') return null;
+  const row = db.prepare('SELECT * FROM oauth_states WHERE state = ?').get(state);
+  if (!row || row.provider !== provider) return null;
+  if (row.used_at) return null;
+  if (Date.now() > row.expires_at) return null;
+  db.prepare('UPDATE oauth_states SET used_at = ? WHERE state = ?').run(Date.now(), state);
+  return row;
+}
+
+// The SSO handoff: after a successful callback the server cannot
+// hand a JWT to a browser redirect, so it mints a ONE-TIME code —
+// stored SHA-256-hashed in auth_tokens with purpose 'sso', exactly
+// like the verify/reset tokens — and redirects to /?sso=<code>.
+// The app exchanges it via POST /api/auth/sso/exchange for the
+// usual session payload. 5-minute life, single-use.
+function issueSsoRedirect(userId, created) {
+  const code = issueAuthToken(userId, 'sso', 5 * 60 * 1000);
+  const base = (CONFIG.publicBaseUrl || '').replace(/\/+$/, '');
+  return `${base}/?sso=${encodeURIComponent(code)}${created ? '&created=1' : ''}`;
+}
+
+// The public origin a provider callback must target. PUBLIC_BASE_URL
+// is authoritative when set (it is what the owner registers in the
+// provider's developer console); the request origin is the fallback
+// for local runs.
+function oauthCallbackOrigin(req) {
+  if (CONFIG.publicBaseUrl) return CONFIG.publicBaseUrl;
+  return `${req.protocol}://${req.get('host')}`;
+}
+
+// Shared callback tail for both redirect providers. `stateRow` is
+// the already-consumed oauth_states row; `profile` is the VERIFIED
+// provider profile { provider, providerUserId, email }. Link
+// callbacks bind the identity to the user the state was minted for
+// (409 semantics mirror link/google + link/facebook: an identity
+// owned by another account is never moved); login callbacks run
+// the shared socialLoginOrCreate (no auto-merge, bonus once) and
+// finish with the SSO handoff redirect.
+async function completeOAuthCallback(req, res, stateRow, profile) {
+  if (stateRow.purpose === 'link') {
+    const user = db.prepare('SELECT id FROM users WHERE id = ?').get(stateRow.user_id);
+    if (!user) return res.redirect('/?auth_error=link_failed');
+    const existing = db.prepare('SELECT user_id FROM user_identities WHERE provider = ? AND provider_user_id = ?')
+      .get(profile.provider, profile.providerUserId);
+    if (existing && Number(existing.user_id) !== Number(user.id)) {
+      return res.redirect('/?auth_error=identity_in_use');
+    }
+    if (!existing) {
+      db.prepare(`INSERT INTO user_identities (user_id, provider, provider_user_id, email, phone, verified)
+                  VALUES (?, ?, ?, ?, ?, 1)`)
+        .run(user.id, profile.provider, profile.providerUserId, profile.email || null, null);
+    }
+    return res.redirect(`/?linked=${profile.provider}`);
+  }
+  const result = await socialLoginOrCreate({
+    provider: profile.provider,
+    providerUserId: profile.providerUserId,
+    email: profile.email,
+    accountEmailVerified: !!profile.email,
+  });
+  if (!result.body || !result.body.token) return res.redirect('/?auth_error=login_failed');
+  const identity = db.prepare('SELECT user_id FROM user_identities WHERE provider = ? AND provider_user_id = ?')
+    .get(profile.provider, profile.providerUserId);
+  if (!identity) return res.redirect('/?auth_error=login_failed');
+  return res.redirect(issueSsoRedirect(identity.user_id, result.status === 201));
+}
+
+// TikTok (Login Kit): exchange the authorization code, then read
+// the profile. TikTok returns NO email on the basic scope — the
+// account is keyed on open_id alone, which the identity model
+// already supports (Facebook's no-email path proved it).
+async function exchangeTikTokCode(code, redirectUri) {
+  const form = new URLSearchParams({
+    client_key: CONFIG.tiktokClientKey,
+    client_secret: CONFIG.tiktokClientSecret,
+    code,
+    grant_type: 'authorization_code',
+    redirect_uri: redirectUri,
+  });
+  const resp = await fetch(`${CONFIG.tiktokApiBase}/v2/oauth/token/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: form.toString(),
+  });
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok || !data || !data.access_token) throw new Error('TikTok token exchange failed');
+  return data;
+}
+async function fetchTikTokUser(accessToken) {
+  const resp = await fetch(`${CONFIG.tiktokApiBase}/v2/user/info/?fields=open_id,display_name`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const data = await resp.json().catch(() => null);
+  const user = data && data.data && data.data.user;
+  if (!resp.ok || !user || !user.open_id) throw new Error('TikTok user info failed');
+  return user;
+}
+function tiktokAuthorizeUrl(redirectUri, state) {
+  const u = new URL(`${CONFIG.tiktokAuthBase}/v2/auth/authorize/`);
+  u.searchParams.set('client_key', CONFIG.tiktokClientKey);
+  u.searchParams.set('scope', 'user.info.basic');
+  u.searchParams.set('response_type', 'code');
+  u.searchParams.set('redirect_uri', redirectUri);
+  u.searchParams.set('state', state);
+  return u.toString();
+}
+
+// X (Twitter): OAuth 2.0 with PKCE for a confidential client — the
+// token call authenticates with HTTP Basic (client id + secret)
+// AND proves possession of the code_verifier whose S256 challenge
+// went to the authorize endpoint.
+function pkceChallengeS256(verifier) {
+  return createHash('sha256').update(verifier).digest('base64url');
+}
+function twitterAuthorizeUrl(redirectUri, state, codeVerifier) {
+  const u = new URL(`${CONFIG.twitterAuthBase}/i/oauth2/authorize`);
+  u.searchParams.set('response_type', 'code');
+  u.searchParams.set('client_id', CONFIG.twitterClientId);
+  u.searchParams.set('redirect_uri', redirectUri);
+  u.searchParams.set('scope', 'users.read tweet.read');
+  u.searchParams.set('state', state);
+  u.searchParams.set('code_challenge', pkceChallengeS256(codeVerifier));
+  u.searchParams.set('code_challenge_method', 'S256');
+  return u.toString();
+}
+async function exchangeTwitterCode(code, redirectUri, codeVerifier) {
+  const basic = Buffer.from(`${CONFIG.twitterClientId}:${CONFIG.twitterClientSecret}`).toString('base64');
+  const form = new URLSearchParams({
+    grant_type: 'authorization_code',
+    code,
+    redirect_uri: redirectUri,
+    code_verifier: codeVerifier,
+  });
+  const resp = await fetch(`${CONFIG.twitterApiBase}/2/oauth2/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: `Basic ${basic}` },
+    body: form.toString(),
+  });
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok || !data || !data.access_token) throw new Error('X token exchange failed');
+  return data;
+}
+async function fetchTwitterUser(accessToken) {
+  const resp = await fetch(`${CONFIG.twitterApiBase}/2/users/me`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const data = await resp.json().catch(() => null);
+  const me = data && data.data;
+  if (!resp.ok || !me || !me.id) throw new Error('X user lookup failed');
+  return me;
 }
 
 // Generic HTTPS SMS-API adapter (the mailer pattern): POST
@@ -1632,6 +1884,52 @@ function moderated(prompt) {
 }
 
 // ---------- Public config (no secrets) ----------
+// Phase O2: the per-model display list behind the "Models & prices" card.
+// DERIVATION RULE: every value comes from the live CONFIG constants and
+// the COST_BY_QUALITY rate card — the exact objects the generation
+// router and the credit charges read — so this list can never drift
+// from what a user is actually charged. plan_gate names the LOWEST plan
+// tier that can use the route ('all' = every plan incl. free credits at
+// that plan's quality ceiling, 'pro' = Pro/Extra Pro via can_veo /
+// can_lipsync, 'extrapro' = Extra Pro only). notes are short honest
+// capability-note keys the UI renders verbatim next to the entry.
+function publicModels() {
+  return [
+    { id: 'h3', name: 'MiniMax H3', kind: 'video',
+      models: { text_to_video: CONFIG.model, image_to_video: CONFIG.modelI2V,
+                reference_to_video: CONFIG.modelRef },
+      resolutions: Object.keys(COST_BY_QUALITY),
+      durations: CONFIG.durations,
+      price: { by_quality: COST_BY_QUALITY, draft_by_duration: CONFIG.draftCost },
+      plan_gate: 'all', notes: 'native_audio_included' },
+    { id: 'kling_o3_4k', name: 'Kling O3 4K', kind: 'video',
+      model: CONFIG.model4k,
+      resolutions: ['4K'], durations: CONFIG.durations,
+      price: { by_quality: { '4K': COST_BY_QUALITY['4K'] } },
+      plan_gate: 'extrapro', notes: 'native_4k' },
+    { id: 'gemini_omni', name: 'Gemini Omni Flash — speaking video', kind: 'speaking',
+      model: CONFIG.modelOmni,
+      resolutions: [CONFIG.speakingResolution], durations: CONFIG.durations,
+      aspects: CONFIG.speakingAspects,
+      price: { flat: CONFIG.speakingCost },
+      plan_gate: 'pro', notes: 'synchronized_dialogue_audio' },
+    { id: 'seedance_2_5', name: 'Seedance 2.5 — premium', kind: 'premium',
+      model: CONFIG.modelSeedance,
+      resolutions: [CONFIG.seedanceResolution], durations: CONFIG.seedanceDurations,
+      aspects: CONFIG.seedanceAspects,
+      price: { by_duration: CONFIG.seedanceCost },
+      plan_gate: 'extrapro', notes: 'native_audio_included_up_to_720p_route' },
+    { id: 'lipsync', name: 'Lip-sync — talking character', kind: 'speaking',
+      models: { image: CONFIG.lipsyncImageModel, video: CONFIG.lipsyncVideoModel },
+      price: { flat: CONFIG.lipsyncCost },
+      plan_gate: 'pro', notes: 'script_or_uploaded_voice' },
+    { id: 'voice_sound', name: 'Voice & sound tools', kind: 'audio',
+      models: { sound_sync: CONFIG.soundSyncModel, sound_premium_sync: CONFIG.soundSyncPremiumModel,
+                sound_sfx: CONFIG.soundSfxModel, sound_music: CONFIG.soundMusicModel },
+      price: { voiceover_flat: CONFIG.voiceoverCost, sound: CONFIG.soundCosts },
+      notes: 'audio_included_in_generation_price' },
+  ];
+}
 app.get('/api/config', (req, res) => res.json({
   model: CONFIG.model,
   // App version marker (Phase I) — the Settings footer shows it and the
@@ -1696,6 +1994,12 @@ app.get('/api/config', (req, res) => res.json({
     models: { sync: CONFIG.soundSyncModel, premium_sync: CONFIG.soundSyncPremiumModel,
               sfx: CONFIG.soundSfxModel, music: CONFIG.soundMusicModel },
   },
+  // Per-model cost/feature display (Phase O2): one entry per integrated
+  // engine/route, computed by publicModels() from the SAME CONFIG
+  // constants and rate card the router and pricing use — there is no
+  // second price list that could drift. A value that cannot be derived
+  // from config is left out of the entry rather than invented.
+  models: publicModels(),
   // Finishers (Phase C1): one-tap post-processing on a completed video.
   // Each finisher creates a NEW History entry linked to the source video.
   // reframe is local ffmpeg work (free, like clip joining); captions is a
@@ -1785,6 +2089,8 @@ app.get('/api/config', (req, res) => res.json({
     google: googleAuthConfigured(),
     facebook: facebookAuthConfigured(),
     phone: smsConfigured(),
+    tiktok: tiktokAuthConfigured(),
+    twitter: twitterAuthConfigured(),
     email_verification: mailerConfigured(),
     password_reset: mailerConfigured(),
   },
@@ -2083,16 +2389,20 @@ app.get('/api/auth/identities', auth, (req, res) => {
   res.json({ identities: userProviders(req.user.id) });
 });
 
-// Unlink a provider (google | facebook | phone; the password identity
-// is the account's root credential and is never unlinked). The LAST
-// remaining sign-in method can never be removed — an account must
-// always keep a way back in; the guard counts every other identity
-// row, whatever its provider.
+// Unlink a provider (google | facebook | phone | tiktok | twitter;
+// the password identity is the account's root credential and is
+// never unlinked). The LAST remaining sign-in method can never be
+// removed — an account must always keep a way back in; the guard
+// counts every other identity row, whatever its provider.
 app.post('/api/auth/unlink', auth, (req, res) => {
   const provider = String((req.body || {}).provider || '').toLowerCase();
-  if (!['google', 'facebook', 'phone'].includes(provider))
-    return res.status(400).json({ error: 'Only Google, Facebook or a phone number can be unlinked here.' });
-  const label = provider === 'google' ? 'Google' : provider === 'facebook' ? 'Facebook' : 'This phone number';
+  if (!['google', 'facebook', 'phone', 'tiktok', 'twitter'].includes(provider))
+    return res.status(400).json({ error: 'Only Google, Facebook, TikTok, X or a phone number can be unlinked here.' });
+  const label = provider === 'google' ? 'Google'
+    : provider === 'facebook' ? 'Facebook'
+    : provider === 'tiktok' ? 'TikTok'
+    : provider === 'twitter' ? 'X'
+    : 'This phone number';
   const rows = db.prepare('SELECT * FROM user_identities WHERE user_id = ?').all(req.user.id);
   const target = rows.find(r => r.provider === provider);
   if (!target) return res.status(404).json({ error: `${label} is not linked to this account.` });
@@ -2202,6 +2512,110 @@ app.post('/api/auth/link/phone/verify', auth, socialAuthLimiter, async (req, res
   res.status(201).json({ ok: true, linked: 'phone', providers: userProviders(req.user.id) });
 });
 
+// ---------- TikTok + X redirect sign-in (Phase P, config-gated) ----------
+// Redirect-based OAuth 2.0 (see the Phase P helpers above). Every
+// endpoint FAILS CLOSED with 503 auth_provider_not_configured until
+// the owner's own developer app is configured; the login screen
+// renders the matching honest "coming soon" state from /api/config.
+// Semantics mirror Google/Facebook exactly: known identity -> its
+// account; new identity -> a NEW account (signup bonus once); NO
+// AUTO-MERGE — neither provider returns a trustworthy email on the
+// basic scope anyway (TikTok: none at all; X: not requested), so
+// accounts are keyed purely on the provider user id, and linking is
+// the signed-in, state-bound action below.
+
+// Exchange a one-time SSO handoff code (minted by a provider
+// callback) for the usual session payload. Hashed lookup,
+// single-use, 5-minute life — see issueSsoRedirect.
+app.post('/api/auth/sso/exchange', socialAuthLimiter, (req, res) => {
+  const code = String((req.body || {}).code || '');
+  if (!code) return res.status(400).json({ error: 'missing_code',
+    message: 'No sign-in code was provided.' });
+  const row = consumeAuthToken(code, 'sso');
+  if (!row) return res.status(401).json({ error: 'invalid_or_expired_code',
+    message: 'This sign-in link has expired or was already used — please sign in again.' });
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(row.user_id);
+  if (!user) return res.status(401).json({ error: 'invalid_or_expired_code',
+    message: 'This sign-in link has expired or was already used — please sign in again.' });
+  res.json({ token: signUserToken(user), credits: user.credits });
+});
+
+app.get('/api/auth/tiktok/start', socialAuthLimiter, (req, res) => {
+  if (!tiktokAuthConfigured())
+    return res.status(503).json({ error: 'auth_provider_not_configured',
+      message: 'TikTok sign-in is not configured on this server yet.' });
+  const redirectUri = `${oauthCallbackOrigin(req)}/api/auth/tiktok/callback`;
+  const state = createOAuthState('tiktok', 'login', null, null);
+  res.redirect(tiktokAuthorizeUrl(redirectUri, state));
+});
+
+app.post('/api/auth/tiktok/link/start', auth, socialAuthLimiter, (req, res) => {
+  if (!tiktokAuthConfigured())
+    return res.status(503).json({ error: 'auth_provider_not_configured',
+      message: 'TikTok sign-in is not configured on this server yet.' });
+  const redirectUri = `${oauthCallbackOrigin(req)}/api/auth/tiktok/callback`;
+  const state = createOAuthState('tiktok', 'link', req.user.id, null);
+  res.json({ authorize_url: tiktokAuthorizeUrl(redirectUri, state) });
+});
+
+app.get('/api/auth/tiktok/callback', socialAuthLimiter, async (req, res) => {
+  if (!tiktokAuthConfigured())
+    return res.status(503).json({ error: 'auth_provider_not_configured',
+      message: 'TikTok sign-in is not configured on this server yet.' });
+  const stateRow = consumeOAuthState(String(req.query.state || ''), 'tiktok');
+  if (!stateRow) return res.redirect('/?auth_error=invalid_state');
+  const code = String(req.query.code || '');
+  if (!code) return res.redirect('/?auth_error=provider_denied');
+  const redirectUri = `${oauthCallbackOrigin(req)}/api/auth/tiktok/callback`;
+  try {
+    const tokenData = await exchangeTikTokCode(code, redirectUri);
+    const tuser = await fetchTikTokUser(tokenData.access_token);
+    return await completeOAuthCallback(req, res, stateRow,
+      { provider: 'tiktok', providerUserId: String(tuser.open_id), email: null });
+  } catch {
+    return res.redirect('/?auth_error=provider_failed');
+  }
+});
+
+app.get('/api/auth/twitter/start', socialAuthLimiter, (req, res) => {
+  if (!twitterAuthConfigured())
+    return res.status(503).json({ error: 'auth_provider_not_configured',
+      message: 'X sign-in is not configured on this server yet.' });
+  const redirectUri = `${oauthCallbackOrigin(req)}/api/auth/twitter/callback`;
+  const codeVerifier = randomBytes(48).toString('base64url');
+  const state = createOAuthState('twitter', 'login', null, codeVerifier);
+  res.redirect(twitterAuthorizeUrl(redirectUri, state, codeVerifier));
+});
+
+app.post('/api/auth/twitter/link/start', auth, socialAuthLimiter, (req, res) => {
+  if (!twitterAuthConfigured())
+    return res.status(503).json({ error: 'auth_provider_not_configured',
+      message: 'X sign-in is not configured on this server yet.' });
+  const redirectUri = `${oauthCallbackOrigin(req)}/api/auth/twitter/callback`;
+  const codeVerifier = randomBytes(48).toString('base64url');
+  const state = createOAuthState('twitter', 'link', req.user.id, codeVerifier);
+  res.json({ authorize_url: twitterAuthorizeUrl(redirectUri, state, codeVerifier) });
+});
+
+app.get('/api/auth/twitter/callback', socialAuthLimiter, async (req, res) => {
+  if (!twitterAuthConfigured())
+    return res.status(503).json({ error: 'auth_provider_not_configured',
+      message: 'X sign-in is not configured on this server yet.' });
+  const stateRow = consumeOAuthState(String(req.query.state || ''), 'twitter');
+  if (!stateRow) return res.redirect('/?auth_error=invalid_state');
+  const code = String(req.query.code || '');
+  if (!code) return res.redirect('/?auth_error=provider_denied');
+  const redirectUri = `${oauthCallbackOrigin(req)}/api/auth/twitter/callback`;
+  try {
+    const tokenData = await exchangeTwitterCode(code, redirectUri, stateRow.code_verifier || '');
+    const xuser = await fetchTwitterUser(tokenData.access_token);
+    return await completeOAuthCallback(req, res, stateRow,
+      { provider: 'twitter', providerUserId: String(xuser.id), email: null });
+  } catch {
+    return res.redirect('/?auth_error=provider_failed');
+  }
+});
+
 // ---------- Account deletion (Phase N) ----------
 // Self-serve, permanent. Requires the typed word DELETE and — when the
 // account has a password — that password (social-only accounts confirm
@@ -2228,6 +2642,7 @@ app.post('/api/account/delete', auth, async (req, res) => {
     db.prepare('DELETE FROM payments WHERE user_id = ?').run(user.id);
     db.prepare('DELETE FROM subscriptions WHERE user_id = ?').run(user.id);
     db.prepare('DELETE FROM auth_tokens WHERE user_id = ?').run(user.id);
+    db.prepare('DELETE FROM oauth_states WHERE user_id = ?').run(user.id);
     db.prepare('DELETE FROM phone_otps WHERE user_id = ?').run(user.id);
     db.prepare('DELETE FROM user_identities WHERE user_id = ?').run(user.id);
     db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
@@ -2285,6 +2700,76 @@ app.post('/api/uploads/image', auth, express.json({ limit: '8mb' }), (req, res) 
   const imagePath = `data/uploads/${req.user.id}/${name}`;
   res.status(201).json({ image_path: imagePath, content_type: type.contentType,
     size_bytes: buf.length });
+});
+
+// ---------- Own-voice audio upload for lip-sync (Phase O2) ----------
+// The user records their own voice (or a speaker who gave permission) and
+// uploads the file; lip-sync then uses THAT recording instead of a
+// synthesized TTS voice. Transport mirrors the image upload exactly:
+// base64 JSON (the global 100kb parser skips this path; the route mounts
+// its own). The type is decided by MAGIC BYTES, never the claimed type —
+// MP3 (ID3 tag or an 0xFFEx frame sync), WAV (RIFF/WAVE), M4A (ftyp box),
+// OGG (OggS) and WEBM (EBML header). Cap: 10 MB. Duration guard: the file
+// is probed with the pinned ffmpeg binary (the app ships no ffprobe —
+// probeAudioDuration parses `ffmpeg -i` output, the same pattern the
+// voice system uses); over 60 seconds is rejected with 400
+// audio_too_long, and an unprobeable file is rejected too — the guard
+// FAILS CLOSED with a clear error, it is never silently skipped. The
+// file is deleted again on any rejection, so a rejected upload leaves
+// nothing behind. The returned url is the public /files/audio/ path fal
+// fetches for the lip-sync call — the same hosting pattern as TTS audio.
+const AUDIO_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+const AUDIO_UPLOAD_MAX_SECONDS = 60;
+const AUDIO_UPLOAD_TYPES = [
+  { type: 'audio/mpeg', ext: 'mp3', test: (b) =>
+      (b.length >= 3 && b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) || // "ID3"
+      (b.length >= 2 && b[0] === 0xff && (b[1] & 0xe0) === 0xe0) },        // frame sync
+  { type: 'audio/wav', ext: 'wav', test: (b) =>
+      b.length >= 12 && b.toString('latin1', 0, 4) === 'RIFF' && b.toString('latin1', 8, 12) === 'WAVE' },
+  { type: 'audio/mp4', ext: 'm4a', test: (b) =>
+      b.length >= 8 && b.toString('latin1', 4, 8) === 'ftyp' },
+  { type: 'audio/ogg', ext: 'ogg', test: (b) =>
+      b.length >= 4 && b.toString('latin1', 0, 4) === 'OggS' },
+  { type: 'audio/webm', ext: 'webm', test: (b) =>
+      b.length >= 4 && b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3 },
+];
+function sniffAudioType(buf) {
+  return AUDIO_UPLOAD_TYPES.find((t) => t.test(buf)) || null;
+}
+app.post('/api/uploads/audio', auth, express.json({ limit: '16mb' }), async (req, res) => {
+  const raw = String(req.body?.audio_base64 || '').trim();
+  if (!raw) return res.status(400).json({ error: 'audio_base64 is required.' });
+  const base64 = raw.startsWith('data:') ? (raw.split(',', 2)[1] || '') : raw;
+  if (!/^[A-Za-z0-9+/=\s]+$/.test(base64))
+    return res.status(400).json({ error: 'audio_base64 is not valid base64.' });
+  const buf = Buffer.from(base64, 'base64');
+  if (buf.length === 0) return res.status(400).json({ error: 'The uploaded audio is empty.' });
+  if (buf.length > AUDIO_UPLOAD_MAX_BYTES)
+    return res.status(413).json({ error: 'Audio is too large — the limit is 10 MB.' });
+  const type = sniffAudioType(buf);
+  if (!type)
+    return res.status(400).json({ error: 'Only MP3, WAV, M4A, OGG and WebM audio recordings are supported.' });
+  const dir = path.join(CONFIG.audioUploadsDir, String(req.user.id));
+  fs.mkdirSync(dir, { recursive: true });
+  const name = `${randomUUID()}.${type.ext}`;
+  const abs = path.join(dir, name);
+  fs.writeFileSync(abs, buf);
+  const reject = (status, body) => { try { fs.unlinkSync(abs); } catch { /* already gone */ } return res.status(status).json(body); };
+  let seconds = 0;
+  try { seconds = await probeAudioDuration(abs); } catch { seconds = 0; }
+  if (!seconds || !(seconds > 0))
+    return reject(400, { error: 'audio_unreadable', message: 'The recording could not be read, so its length could not be verified. Please upload a standard MP3, WAV, M4A, OGG or WebM file.' });
+  if (seconds > AUDIO_UPLOAD_MAX_SECONDS)
+    return reject(400, { error: 'audio_too_long', message: `The recording is ${Math.round(seconds)} seconds — lip-sync voice uploads are limited to ${AUDIO_UPLOAD_MAX_SECONDS} seconds. Please trim it and upload again.` });
+  const info = db.prepare(`INSERT INTO audio_uploads (user_id, file_name, content_type, size_bytes, duration_seconds)
+    VALUES (?, ?, ?, ?, ?)`)
+    .run(req.user.id, name, type.type, buf.length, Math.round(seconds * 1000) / 1000);
+  res.status(201).json({
+    id: Number(info.lastInsertRowid),
+    url: `/files/audio/${req.user.id}/${name}`,
+    content_type: type.type, size_bytes: buf.length,
+    duration_seconds: Math.round(seconds * 1000) / 1000,
+  });
 });
 
 // Resolve a client-supplied image_path to a stored upload OWNED by this
@@ -4898,14 +5383,33 @@ app.post('/api/voice/lipsync', auth, voiceLimiter, async (req, res) => {
     if (sourceGen.stage === 'draft')
       return res.status(400).json({ error: 'Drafts cannot take voice add-ons. Upgrade this draft to full quality first, then add lip-sync to that version.' });
   }
-  // Audio source: a fresh script (synthesized now) or a previous voice job.
-  let settings = null, audioJob = null;
-  if (b.voice_job_id !== undefined && b.voice_job_id !== null && b.voice_job_id !== '') {
+  // Audio source: a fresh script (synthesized now), a previous voice job,
+  // or the user's own uploaded recording (Phase O2). The sources are
+  // mutually exclusive — naming two is ambiguous and rejected, exactly
+  // like the visual-source rule above.
+  let settings = null, audioJob = null, audioUpload = null;
+  const wantsUpload = b.audio_upload_id !== undefined && b.audio_upload_id !== null && b.audio_upload_id !== '';
+  const wantsJob = b.voice_job_id !== undefined && b.voice_job_id !== null && b.voice_job_id !== '';
+  if (wantsUpload && wantsJob)
+    return res.status(400).json({ error: 'Choose either an uploaded voice recording or a saved voice job for lip-sync, not both.' });
+  if (wantsUpload) {
+    // Ownership is part of the lookup: another user's upload id is a 404,
+    // never a leak of its existence. Script/language/provider fields are
+    // NOT required (and ignored) — TTS is never called for this source.
+    audioUpload = db.prepare('SELECT * FROM audio_uploads WHERE id = ? AND user_id = ?')
+      .get(Number(b.audio_upload_id), req.user.id);
+    if (!audioUpload) return res.status(404).json({ error: 'Uploaded voice recording not found.' });
+    // The duration guard ran at upload time; re-check the stored value so
+    // no row can ever drive a longer call than the upload gate allowed.
+    if (audioUpload.duration_seconds && Number(audioUpload.duration_seconds) > AUDIO_UPLOAD_MAX_SECONDS)
+      return res.status(400).json({ error: 'audio_too_long', message: `That recording is longer than ${AUDIO_UPLOAD_MAX_SECONDS} seconds — lip-sync voice uploads are limited to ${AUDIO_UPLOAD_MAX_SECONDS} seconds.` });
+  }
+  if (wantsJob) {
     audioJob = db.prepare(
       `SELECT * FROM voice_jobs WHERE id = ? AND user_id = ? AND status = 'completed' AND audio_path IS NOT NULL`)
       .get(Number(b.voice_job_id), req.user.id);
     if (!audioJob) return res.status(400).json({ error: 'voice_job_id must be one of your completed voice jobs.' });
-  } else {
+  } else if (!audioUpload) {
     // Voice settings: fields sent explicitly in the request win; any
     // field left out falls back to the character's bound voice (when a
     // character with a bound voice is used), so picking a character is
@@ -4960,10 +5464,14 @@ app.post('/api/voice/lipsync', auth, voiceLimiter, async (req, res) => {
     });
   } catch (e) { return res.status(e.status || 500).json({ error: e.message }); }
   const voiceJobId = recordVoiceJob({ userId: req.user.id, kind: 'lipsync',
-    settings: settings || { provider: audioJob.provider, voiceId: audioJob.voice,
-      language: audioJob.language, scriptMode: audioJob.script_mode,
-      style: audioJob.style, speed: audioJob.speed },
-    text: settings ? settings.text : audioJob.script_text,
+    settings: settings || (audioUpload
+      // Uploaded recording: the voice_jobs row records the source as
+      // provider 'upload' (the durable note that no TTS voice was used).
+      ? { provider: 'upload' }
+      : { provider: audioJob.provider, voiceId: audioJob.voice,
+          language: audioJob.language, scriptMode: audioJob.script_mode,
+          style: audioJob.style, speed: audioJob.speed }),
+    text: settings ? settings.text : (audioJob ? audioJob.script_text : null),
     status: 'processing', generationId: jobId });
   try {
     let audioAbs, audioPublicPath;
@@ -4971,6 +5479,13 @@ app.post('/api/voice/lipsync', auth, voiceLimiter, async (req, res) => {
       audioPublicPath = audioJob.audio_path;
       audioAbs = path.join(CONFIG.voiceDir, path.basename(audioJob.audio_path));
       if (!fs.existsSync(audioAbs)) throw new Error('The referenced voice audio no longer exists.');
+    } else if (audioUpload) {
+      // The uploaded file itself is the audio: its public /files/audio/
+      // URL goes to the lip-sync route and TTS is never called.
+      audioPublicPath = `/files/audio/${req.user.id}/${audioUpload.file_name}`;
+      audioAbs = path.join(CONFIG.audioUploadsDir, String(req.user.id), audioUpload.file_name);
+      if (!fs.existsSync(audioAbs)) throw new Error('The uploaded voice file is missing — please upload it again.');
+      db.prepare('UPDATE generations SET voice_audio_path = ? WHERE id = ?').run(audioPublicPath, jobId);
     } else {
       const out = await synthesizeScript(settings, settings.text);
       audioAbs = out.absPath; audioPublicPath = out.audioPath;
@@ -6888,6 +7403,7 @@ fs.mkdirSync(CONFIG.generatedDir, { recursive: true });
 fs.mkdirSync(CONFIG.voiceDir, { recursive: true });
 fs.mkdirSync(CONFIG.soundsDir, { recursive: true });
 fs.mkdirSync(CONFIG.uploadsDir, { recursive: true });
+fs.mkdirSync(CONFIG.audioUploadsDir, { recursive: true });
 app.use('/files/joined', express.static(CONFIG.joinedDir));
 // Uploaded source images are served so the app can show them (character
 // thumbnails, the starting-image preview). Filenames are unguessable
@@ -6895,6 +7411,10 @@ app.use('/files/joined', express.static(CONFIG.joinedDir));
 app.use('/files/uploads', express.static(CONFIG.uploadsDir));
 app.use('/files/generated', express.static(CONFIG.generatedDir));
 app.use('/files/voice', express.static(CONFIG.voiceDir));
+// Phase O2: uploaded own-voice recordings for lip-sync — fal fetches the
+// audio from this mount during a lip-sync call (filenames are UUIDs, the
+// same exposure model as the other /files mounts).
+app.use('/files/audio', express.static(CONFIG.audioUploadsDir));
 app.use('/files/sounds', express.static(CONFIG.soundsDir));
 app.use(express.static(path.join(__dirname, 'public')));
 app.get(/^\/(?!api\/).*/, (req, res) =>

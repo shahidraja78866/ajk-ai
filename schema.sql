@@ -238,3 +238,49 @@ CREATE TABLE IF NOT EXISTS characters (
 --   auto_voice_cost   INTEGER — credits of the voice add-on inside
 --                      the job's total, refunded alone (exactly once)
 --                      when only the voice step fails.
+
+-- === Own-voice audio uploads (migration v21, applied automatically by
+-- === server.js) ===
+-- One row per audio file a user uploaded to drive lip-sync with their
+-- own recording (Phase O2) instead of a synthesized TTS voice. The file
+-- itself lives on disk at data/audio-uploads/<userId>/<file_name> and
+-- is served at /files/audio/<userId>/<file_name> — the public URL fal
+-- fetches, mirroring how TTS audio is hosted. duration_seconds is
+-- probed with ffmpeg at upload time; uploads over 60 seconds are
+-- rejected before any row is written. content_type is the type SNIFFED
+-- from the file's magic bytes (MP3/WAV/M4A/OGG/WEBM), never the
+-- client-claimed type. A lip-sync job that used an upload records its
+-- voice_jobs row with provider 'upload'.
+CREATE TABLE IF NOT EXISTS audio_uploads (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id          INTEGER NOT NULL REFERENCES users(id),
+  file_name        TEXT NOT NULL,
+  content_type     TEXT NOT NULL,
+  size_bytes       INTEGER NOT NULL,
+  duration_seconds REAL,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- === OAuth 2.0 redirect sign-in state (migration v22, applied
+-- === automatically by server.js) ===
+-- One row per in-flight TikTok / X (Twitter) authorization (Phase P).
+-- Unlike Google/Facebook (the client posts a token the server
+-- verifies), these providers are redirect flows: the server mints a
+-- random `state`, stores it here, and the provider callback must
+-- present it back. A state is single-use (used_at stamped on
+-- consume), expires 10 minutes after creation, and is bound to ONE
+-- provider and ONE purpose ('login' | 'link'); link states also
+-- carry the signed-in user they were minted for, and X states carry
+-- the PKCE code_verifier whose S256 challenge was sent to the
+-- authorize endpoint. created_at / expires_at / used_at are epoch
+-- milliseconds — the same clock as auth_tokens / phone_otps.
+CREATE TABLE IF NOT EXISTS oauth_states (
+  state         TEXT PRIMARY KEY,
+  provider      TEXT NOT NULL,
+  purpose       TEXT NOT NULL DEFAULT 'login',
+  user_id       INTEGER REFERENCES users(id),
+  code_verifier TEXT,
+  created_at    INTEGER NOT NULL,
+  expires_at    INTEGER NOT NULL,
+  used_at       INTEGER
+);
