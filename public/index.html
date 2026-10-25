@@ -1150,6 +1150,23 @@
                 <p style="margin-top:10px;"><button type="button" class="btn small" id="langLabLink" data-i18n="test_languages">Test languages · زبان آزمائیں</button></p>
 
                 <div class="field-label" style="margin-top:18px;"><span data-i18n="talking_character">Talking character (lip-sync)</span></div>
+                <!-- Phase O2: the lip-sync audio can be a typed script
+                     (synthesized voice, above) OR your own uploaded
+                     recording. The toggle only changes which audio the
+                     lip-sync button sends — preview/voiceover always use
+                     the script above. -->
+                <div class="field-label"><span data-i18n="audio_source">Voice source for lip-sync</span></div>
+                <div class="seg" id="lipAudioSourceSeg" role="group" aria-label="Lip-sync voice source">
+                  <button type="button" class="sel" data-lip-audio="script" data-i18n="audio_source_script">Type script</button>
+                  <button type="button" data-lip-audio="upload" data-i18n="audio_source_upload">Upload your voice</button>
+                </div>
+                <div id="lipUploadBox" style="display:none;margin-top:10px;">
+                  <input type="file" id="lipAudioFile" accept="audio/*" />
+                  <p class="lang-hint" data-i18n="upload_voice_note">Use only your own voice, or with the speaker's permission · صرف اپنی آواز استعمال کریں یا اجازت کے ساتھ</p>
+                  <p class="lang-hint">MP3, WAV, M4A, OGG or WebM — up to 10 MB and 60 seconds. Your recording is used as-is; no voice is synthesized.</p>
+                  <button type="button" class="btn" id="lipUploadBtn" data-i18n="upload_and_use">Upload &amp; use</button>
+                  <p class="lang-hint" id="lipUploadStatus"></p>
+                </div>
                 <div class="field-label"><span data-i18n="saved_character">Saved character (optional)</span></div>
                 <select id="lipsyncCharacter">
                   <option value="">No character — use the image or video below</option>
@@ -1384,6 +1401,7 @@
         <div class="page-head">
           <h1 data-i18n="buy_credits_h1">Buy credits</h1>
           <p>One-time credit packs — they never expire and are added on top of any plan credits. Pay by easypaisa, JazzCash, NayaPay or bank transfer, then submit the transaction ID from your payment. Credits are added as soon as the payment is verified (usually within a few hours).</p>
+          <p><button type="button" class="btn small" data-goto="settings" data-i18n="models_link">See what each model costs · ہر ماڈل کی قیمت دیکھیں</button></p>
         </div>
         <div class="card">
           <h2 data-i18n="choose_pack">1 · Choose a pack</h2>
@@ -1519,6 +1537,15 @@
               <audio id="langLabAudio" controls style="display:none;width:100%;margin-top:10px;"></audio>
               <p class="lang-hint" id="langLabStatus"></p>
             </div>
+
+            <!-- Phase O2: per-model costs/features, rendered from the
+                 server's live models list (the same constants the app
+                 charges by) — never a second hardcoded price list. -->
+            <div class="card" id="modelsCard">
+              <h2 data-i18n="models_title">Models &amp; prices · ماڈلز اور قیمتیں</h2>
+              <p class="sub" data-i18n="models_sub">Every model actually connected to AJK AI, with the exact credits it charges — the same live price list the app itself uses.</p>
+              <div id="modelsList"></div>
+            </div>
           </div>
 
           <div class="card">
@@ -1551,6 +1578,8 @@
               <div class="result-actions">
                 <button type="button" class="btn small" id="linkGoogleBtn" style="display:none;" data-i18n="link_google">Link Google · Google جوڑیں</button>
                 <button type="button" class="btn small" id="linkFacebookBtn" style="display:none;" data-i18n="link_facebook">Link Facebook · Facebook جوڑیں</button>
+                <button type="button" class="btn small" id="linkTiktokBtn" style="display:none;" data-i18n="link_tiktok">Link TikTok · TikTok جوڑیں</button>
+                <button type="button" class="btn small" id="linkTwitterBtn" style="display:none;" data-i18n="link_twitter">Link X · X جوڑیں</button>
               </div>
               <!-- Phase N2: link a phone number (OTP sent to that number). -->
               <div id="linkPhoneBox" style="display:none;">
@@ -1687,6 +1716,12 @@
           <button type="button" class="btn" id="googleFallbackBtn">Continue with Google</button>
           <button type="button" class="btn" id="facebookBtn" disabled>Continue with Facebook — coming soon · جلد آ رہا ہے</button>
           <button type="button" class="btn" id="phoneBtn" disabled>Continue with Phone Number — coming soon · جلد آ رہا ہے</button>
+          <!-- Phase P: TikTok + X are redirect flows — an enabled
+               button simply navigates to the server's start
+               endpoint; the session returns via a one-time ?sso=
+               code exchanged on load. -->
+          <button type="button" class="btn" id="tiktokBtn" disabled>Continue with TikTok — coming soon · جلد آ رہا ہے</button>
+          <button type="button" class="btn" id="twitterBtn" disabled>Continue with X — coming soon · جلد آ رہا ہے</button>
         </div>
         <div class="auth-divider"><span data-i18n="or_with_email">or with email · یا ای میل سے</span></div>
         <div class="auth-switch" role="group" aria-label="Sign in or register">
@@ -1917,6 +1952,18 @@
           your_message: { en: "Your message", ur: "آپ کا پیغام" },
           send_feedback: { en: "Send feedback", ur: "رائے بھیجیں" },
           languages_title: { en: "Languages", ur: "زبانیں" },
+          audio_source: { en: "Voice source for lip-sync", ur: "لپ سنک کے لیے آواز کا ذریعہ" },
+          audio_source_script: { en: "Type script", ur: "اسکرپٹ لکھیں" },
+          audio_source_upload: { en: "Upload your voice", ur: "اپنی آواز اپ لوڈ کریں" },
+          upload_voice_note: { en: "Use only your own voice, or with the speaker's permission", ur: "صرف اپنی آواز استعمال کریں یا بولنے والے کی اجازت کے ساتھ" },
+          upload_and_use: { en: "Upload & use", ur: "اپ لوڈ کریں اور استعمال کریں" },
+          models_title: { en: "Models & prices", ur: "ماڈلز اور قیمتیں" },
+          models_sub: { en: "Every model actually connected to AJK AI, with the exact credits it charges — the same live price list the app itself uses.", ur: "AJK AI سے حقیقتاً جڑا ہر ماڈل، اس کے عین کریڈٹ نرخوں کے ساتھ — وہی لائیو فہرست جو ایپ خود استعمال کرتی ہے۔" },
+          models_link: { en: "See what each model costs", ur: "ہر ماڈل کی قیمت دیکھیں" },
+          models_gate_all: { en: "All plans", ur: "تمام پلانز" },
+          models_gate_pro: { en: "Pro / Extra Pro", ur: "Pro / Extra Pro" },
+          models_gate_extrapro: { en: "Extra Pro only", ur: "صرف Extra Pro" },
+          models_flat: { en: "flat", ur: "فلیٹ" },
           account_title: { en: "Account", ur: "اکاؤنٹ" },
           sign_in_create: { en: "Sign in / Create account", ur: "لاگ اِن / اکاؤنٹ بنائیں" },
           email_label: { en: "Email", ur: "ای میل" },
@@ -1930,6 +1977,8 @@
           signin_methods: { en: "Sign-in methods", ur: "لاگ اِن کے طریقے" },
           link_google: { en: "Link Google", ur: "Google جوڑیں" },
           link_facebook: { en: "Link Facebook", ur: "Facebook جوڑیں" },
+          link_tiktok: { en: "Link TikTok", ur: "TikTok جوڑیں" },
+          link_twitter: { en: "Link X", ur: "X جوڑیں" },
           link_phone: { en: "Link a phone number", ur: "فون نمبر جوڑیں" },
           send_code: { en: "Send code", ur: "کوڈ بھیجیں" },
           six_digit_code: { en: "6-digit code", ur: "6 ہندسوں کا کوڈ" },
@@ -1962,6 +2011,10 @@
           continue_facebook_soon: { en: "Continue with Facebook — coming soon", ur: "Facebook سے جاری رکھیں — جلد آ رہا ہے" },
           continue_phone: { en: "Continue with Phone Number", ur: "فون نمبر سے جاری رکھیں" },
           continue_phone_soon: { en: "Continue with Phone Number — coming soon", ur: "فون نمبر سے جاری رکھیں — جلد آ رہا ہے" },
+          continue_tiktok: { en: "Continue with TikTok", ur: "TikTok سے جاری رکھیں" },
+          continue_tiktok_soon: { en: "Continue with TikTok — coming soon", ur: "TikTok سے جاری رکھیں — جلد آ رہا ہے" },
+          continue_twitter: { en: "Continue with X", ur: "X سے جاری رکھیں" },
+          continue_twitter_soon: { en: "Continue with X — coming soon", ur: "X سے جاری رکھیں — جلد آ رہا ہے" },
           report_title: { en: "Report content", ur: "مواد کی رپورٹ" },
           reason_label: { en: "Reason", ur: "وجہ" },
           details_label: { en: "Details (optional)", ur: "تفصیل (اختیاری)" },
@@ -2021,6 +2074,7 @@
           if (typeof fillAuthUI === "function" && typeof cfg !== "undefined" && cfg) fillAuthUI();
           if (typeof setAuthMode === "function" && typeof authMode !== "undefined") setAuthMode(authMode);
           if (typeof renderLangLab === "function" && typeof cfg !== "undefined" && cfg) renderLangLab();
+          if (typeof renderModels === "function" && typeof cfg !== "undefined" && cfg) renderModels();
         }
         function applyTheme(theme) {
           uiTheme = theme === "light" ? "light" : "dark";
@@ -2599,6 +2653,7 @@
               fillAccountMeta();
               fillVoiceUI();
               renderLangLab();
+              renderModels();
               fillAuthUI();
               fillSoundUI();
               fillCharacterVoiceUI();
@@ -2838,6 +2893,19 @@
           ph.disabled = !phOn;
           ph.textContent = phOn ? t("continue_phone")
             : t("continue_phone_soon");
+          // Phase P: TikTok + X activate exactly when the server
+          // reports them configured; otherwise the honest
+          // coming-soon label stays.
+          var tk = $("#tiktokBtn");
+          var tkOn = !!(cfg && cfg.auth && cfg.auth.tiktok);
+          tk.disabled = !tkOn;
+          tk.textContent = tkOn ? t("continue_tiktok")
+            : t("continue_tiktok_soon");
+          var tw = $("#twitterBtn");
+          var twOn = !!(cfg && cfg.auth && cfg.auth.twitter);
+          tw.disabled = !twOn;
+          tw.textContent = twOn ? t("continue_twitter")
+            : t("continue_twitter_soon");
         }
 
         function loadGis(done) {
@@ -3063,6 +3131,61 @@
           });
         });
 
+        /* ----- TikTok + X redirect sign-in (Phase P) ----- */
+        // These providers have no in-page SDK: an enabled button
+        // navigates the whole page to the server's start endpoint,
+        // the provider sends the browser back to the server
+        // callback, and the callback hands the session over
+        // through a one-time ?sso= code that is exchanged on load
+        // (hashed server-side, single-use, ≤5 minutes) — the same
+        // deep-link discipline as ?verify= / ?reset= below.
+        $("#tiktokBtn").addEventListener("click", function () { window.location.href = "/api/auth/tiktok/start"; });
+        $("#twitterBtn").addEventListener("click", function () { window.location.href = "/api/auth/twitter/start"; });
+        function startRedirectLink(provider) {
+          api("/api/auth/" + provider + "/link/start", { method: "POST", body: {} }).then(function (res) {
+            if (!res.ok || !res.data || !res.data.authorize_url) { toast(errText(res, "Could not start linking")); return; }
+            window.location.href = res.data.authorize_url;
+          });
+        }
+        $("#linkTiktokBtn").addEventListener("click", function () { startRedirectLink("tiktok"); });
+        $("#linkTwitterBtn").addEventListener("click", function () { startRedirectLink("twitter"); });
+
+        function handleSsoDeepLink() {
+          var q;
+          try { q = new URLSearchParams(window.location.search); } catch (e) { return; }
+          var code = q.get("sso"), authErr = q.get("auth_error"), linked = q.get("linked");
+          if (!code && !authErr && !linked) return;
+          // Strip the parameters from the address bar at once — the
+          // one-time code must not linger in history or screenshots.
+          try { window.history.replaceState(null, "", window.location.pathname); } catch (e) {}
+          if (authErr) {
+            toast(authErr === "identity_in_use"
+              ? "That account is already linked to a different AJK AI account. وہ اکاؤنٹ پہلے ہی کسی اور اکاؤنٹ سے جڑا ہے۔"
+              : "Sign-in didn't complete — please try again. لاگ اِن مکمل نہیں ہوا — دوبارہ کوشش کریں۔");
+            return;
+          }
+          if (linked) {
+            toast(humanize(linked) + " linked to your account.");
+            if (token) loadIdentities();
+            return;
+          }
+          api("/api/auth/sso/exchange", { method: "POST", body: { code: code } }).then(function (res) {
+            if (!res.ok || !res.data || !res.data.token) {
+              toast("That sign-in link expired — please sign in again. لاگ اِن لنک کی میعاد ختم ہو گئی ہے۔");
+              openAuth("login");
+              return;
+            }
+            token = res.data.token;
+            lsSet(LS_TOKEN, token);
+            if (res.data.credits !== undefined) setCredits(res.data.credits);
+            setSignedInUI();
+            toast(q.get("created") ? "Account created — welcome! اکاؤنٹ بن گیا — خوش آمدید!" : "Signed in");
+            loadMe();
+            loadHistory();
+            loadIdentities();
+          });
+        }
+
         function handleAuthDeepLinks() {
           var q;
           try { q = new URLSearchParams(window.location.search); } catch (e) { return; }
@@ -3106,7 +3229,7 @@
                 (it.email ? " — " + it.email : "") + (it.phone ? " — " + it.phone : "") +
                 (it.verified ? " · verified" : " · not verified");
               box.appendChild(p);
-              var unlinkLabels = { google: "Unlink Google", facebook: "Unlink Facebook", phone: "Unlink phone" };
+              var unlinkLabels = { google: "Unlink Google", facebook: "Unlink Facebook", phone: "Unlink phone", tiktok: "Unlink TikTok", twitter: "Unlink X" };
               if (unlinkLabels[it.provider]) {
                 var ub = document.createElement("button");
                 ub.type = "button"; ub.className = "btn small"; ub.textContent = unlinkLabels[it.provider];
@@ -3131,6 +3254,12 @@
             var hasPhone = ids.some(function (i) { return i.provider === "phone"; });
             var lpb = $("#linkPhoneBox");
             if (lpb) lpb.style.display = (!hasPhone && cfg && cfg.auth && cfg.auth.phone) ? "block" : "none";
+            var hasTiktok = ids.some(function (i) { return i.provider === "tiktok"; });
+            var ltk = $("#linkTiktokBtn");
+            if (ltk) ltk.style.display = (!hasTiktok && cfg && cfg.auth && cfg.auth.tiktok) ? "inline-flex" : "none";
+            var hasTwitter = ids.some(function (i) { return i.provider === "twitter"; });
+            var ltw = $("#linkTwitterBtn");
+            if (ltw) ltw.style.display = (!hasTwitter && cfg && cfg.auth && cfg.auth.twitter) ? "inline-flex" : "none";
           });
         }
         $("#deleteAccountBtn").addEventListener("click", function () {
@@ -3684,6 +3813,10 @@
               modeLine.appendChild(modeBadge);
               var extras = [];
               if (g.kind === "lipsync") extras.push("Talking / Lip-Sync");
+              // Phase O2: a lip-sync job whose voice track is the user's
+              // own uploaded recording (its /files/audio/ path) says so.
+              if (g.kind === "lipsync" && g.voice_audio_path && String(g.voice_audio_path).indexOf("/files/audio/") === 0)
+                extras.push("voice: upload · اپ لوڈ");
               if (g.kind === "voiceover") extras.push("Voiceover");
               if (g.kind === "reframe") extras.push("Reframed" + (g.source_generation_id ? " from job " + g.source_generation_id : ""));
               if (g.kind === "captions") extras.push("Captions burned in" + (g.source_generation_id ? " from job " + g.source_generation_id : ""));
@@ -4476,18 +4609,65 @@
             $("#voicePreviewStatus").textContent = note;
           });
         });
+        // Phase O2: lip-sync audio source — 'script' (synthesized voice,
+        // the original flow) or 'upload' (the user's own recording,
+        // uploaded via /api/uploads/audio; no TTS is involved).
+        var lipAudioMode = "script";
+        var lipAudioUploadId = null;
+        $$("#lipAudioSourceSeg [data-lip-audio]").forEach(function (b) {
+          b.addEventListener("click", function () {
+            lipAudioMode = b.getAttribute("data-lip-audio") || "script";
+            $$("#lipAudioSourceSeg [data-lip-audio]").forEach(function (x) {
+              x.classList.toggle("sel", x === b);
+            });
+            $("#lipUploadBox").style.display = lipAudioMode === "upload" ? "block" : "none";
+          });
+        });
+        $("#lipUploadBtn").addEventListener("click", function () {
+          voiceShowError("");
+          if (!voiceRequireSignIn()) return;
+          var input = $("#lipAudioFile");
+          var file = input && input.files && input.files[0];
+          var status = $("#lipUploadStatus");
+          if (!file) { status.textContent = "Choose an audio file first."; return; }
+          if (file.size > 10 * 1024 * 1024) { status.textContent = "That recording is over 10 MB — please choose a smaller file."; return; }
+          var btn = this;
+          btn.disabled = true;
+          status.textContent = "Uploading " + file.name + "…";
+          readFileAsDataUrl(file).then(function (dataUrl) {
+            return api("/api/uploads/audio", {
+              method: "POST",
+              body: { audio_base64: dataUrl, content_type: file.type || "" }
+            });
+          }).then(function (res) {
+            btn.disabled = false;
+            if (!res.ok || !res.data || !res.data.id) {
+              status.textContent = errText(res, "The audio upload failed");
+              return;
+            }
+            lipAudioUploadId = res.data.id;
+            status.textContent = "Voice ready: " + file.name + " (" + Math.round(res.data.duration_seconds || 0) + "s) — now press “Create talking character”.";
+          }).catch(function () {
+            btn.disabled = false;
+            status.textContent = "The audio file could not be read or uploaded.";
+          });
+        });
         $("#lipsyncBtn").addEventListener("click", function () {
           voiceShowError("");
           if (!voiceRequireSignIn()) return;
-          var body = voiceSettingsBody();
-          if (!body.script.trim()) { voiceShowError("Write the script the character should say first."); return; }
+          var uploadMode = lipAudioMode === "upload";
+          if (uploadMode && !lipAudioUploadId) { voiceShowError("Upload your voice recording first (Upload & use), then create the talking character."); return; }
+          var body = uploadMode ? {} : voiceSettingsBody();
+          if (!uploadMode && !body.script.trim()) { voiceShowError("Write the script the character should say first."); return; }
           var lipCharId = $("#lipsyncCharacter") ? $("#lipsyncCharacter").value : "";
           var source = ($('input[name="lipsyncSource"]:checked') || {}).value || "image";
           if (lipCharId) {
-            // A saved character supplies the photo AND its bound voice —
-            // only the script fields travel with the request.
-            body = { script: body.script, script_mode: body.script_mode,
-                     character_id: Number(lipCharId) };
+            // A saved character supplies the photo AND (in script mode)
+            // its bound voice — only the audio-source fields travel.
+            body = uploadMode
+              ? { audio_upload_id: lipAudioUploadId, character_id: Number(lipCharId) }
+              : { script: body.script, script_mode: body.script_mode,
+                  character_id: Number(lipCharId) };
           } else if (source === "image") {
             if (!state.imagePath) {
               voiceShowError("Upload a starting image in the form above first — the talking character is animated from it.");
@@ -4499,6 +4679,7 @@
             if (!gid) { voiceShowError("Pick a finished video for lip-sync first."); return; }
             body.generation_id = Number(gid);
           }
+          if (uploadMode && !lipCharId) body.audio_upload_id = lipAudioUploadId;
           var btn = this;
           btn.disabled = true;
           api("/api/voice/lipsync", { method: "POST", body: body }).then(function (res) {
@@ -5150,6 +5331,79 @@
           if (parts.length < 2) return full;
           return uiLang === "ur" ? parts.slice(1).join(" · ") : parts[0];
         }
+        // Phase O2: Models & prices — rows come from cfg.models, which
+        // the server derives from the same pricing constants it charges
+        // by (single source of truth). This function only formats what
+        // the server sent; it invents nothing.
+        var MODEL_GATES = { all: "models_gate_all", pro: "models_gate_pro", extrapro: "models_gate_extrapro" };
+        var MODEL_NOTES = {
+          native_audio_included: "Native audio included in the price",
+          native_4k: "True native 4K route",
+          synchronized_dialogue_audio: "Video with synchronized dialogue audio in one step",
+          native_audio_included_up_to_720p_route: "Native audio included · this route runs at 720p (never sold as 4K)",
+          script_or_uploaded_voice: "Typed script, a saved voice, or your own uploaded recording",
+          audio_included_in_generation_price: "Audio included in the generation price"
+        };
+        function modelPriceText(m) {
+          var p = m.price || {};
+          var parts = [];
+          if (p.by_quality) Object.keys(p.by_quality).forEach(function (q) {
+            var per = p.by_quality[q];
+            parts.push(q + ": " + Object.keys(per).map(function (d) { return per[d] + " cr / " + d + "s"; }).join(" · "));
+          });
+          if (p.by_duration) parts.push(Object.keys(p.by_duration).map(function (d) { return p.by_duration[d] + " cr / " + d + "s"; }).join(" · "));
+          if (p.flat !== undefined) parts.push(p.flat === 0 ? "Included · شامل" : p.flat + " " + t("credits_word") + " " + t("models_flat"));
+          if (p.draft_by_duration) parts.push("Draft: " + Object.keys(p.draft_by_duration).map(function (d) { return p.draft_by_duration[d] + " cr / " + d + "s"; }).join(" · "));
+          if (p.voiceover_flat !== undefined) parts.push("Voiceover: " + (p.voiceover_flat === 0 ? "included" : p.voiceover_flat + " cr") + " · Sound: included");
+          return parts.join(" — ");
+        }
+        function renderModels() {
+          var list = $("#modelsList");
+          if (!list) return;
+          var models = (cfg && cfg.models) || [];
+          list.innerHTML = "";
+          if (!models.length) {
+            var none = document.createElement("p");
+            none.className = "lang-meta";
+            none.textContent = "Model list unavailable right now.";
+            list.appendChild(none);
+            return;
+          }
+          models.forEach(function (m) {
+            var row = document.createElement("div");
+            row.className = "lang-row";
+            var head = document.createElement("div");
+            head.className = "lang-row-head";
+            var nm = document.createElement("span");
+            nm.className = "lang-native";
+            nm.textContent = m.name;
+            head.appendChild(nm);
+            if (m.plan_gate && MODEL_GATES[m.plan_gate]) {
+              var gate = document.createElement("span");
+              gate.className = "lang-badge available";
+              gate.textContent = t(MODEL_GATES[m.plan_gate]);
+              head.appendChild(gate);
+            }
+            row.appendChild(head);
+            var meta = document.createElement("p");
+            meta.className = "lang-meta";
+            var bits = [];
+            if (m.resolutions && m.resolutions.length) bits.push(m.resolutions.join(" · "));
+            if (m.durations && m.durations.length) bits.push(m.durations.join("/") + "s");
+            if (m.aspects && m.aspects.length) bits.push(m.aspects.join(" · "));
+            var price = modelPriceText(m);
+            if (price) bits.push(price);
+            meta.textContent = bits.join(" — ");
+            row.appendChild(meta);
+            if (m.notes && MODEL_NOTES[m.notes]) {
+              var note = document.createElement("p");
+              note.className = "lang-meta";
+              note.textContent = MODEL_NOTES[m.notes];
+              row.appendChild(note);
+            }
+            list.appendChild(row);
+          });
+        }
         function renderLangLab() {
           var list = $("#langLabList");
           if (!list) return;
@@ -5260,6 +5514,7 @@
         if (!token) renderHistoryState("signedout");
         loadConfig();
         if (token) { loadMe(); loadHistory(); }
+        handleSsoDeepLink();
         handleAuthDeepLinks();
       })();
     </script>
