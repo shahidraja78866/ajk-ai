@@ -966,12 +966,165 @@
       .dr-item:hover{ background:var(--panel-2); }
       .dr-item svg{ width:19px; height:19px; flex:none; color:var(--muted); }
       body.dr-locked{ overflow:hidden; }
+
+      /* ---------- Phase S: user dashboard — scoped .db- classes; the
+           cards/rows reuse .card, .kv, .chip and .empty-state, and all
+           colors stay on the existing theme variables ---------- */
+      .db-tiles{ display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
+      @media (min-width:641px){ .db-tiles{ grid-template-columns:repeat(4,1fr); } }
+      .db-tile{
+        display:flex; flex-direction:column; align-items:center; gap:8px;
+        padding:16px 8px; border-radius:16px; text-align:center; cursor:pointer;
+        background:var(--panel-2); border:1px solid var(--line);
+        color:var(--text); font-weight:600; font-size:14px;
+      }
+      .db-tile:hover{ background:var(--panel-3); }
+      .db-tile svg{ width:24px; height:24px; color:var(--amber); }
+      .db-job{
+        display:flex; align-items:center; gap:12px; width:100%;
+        padding:11px 12px; border-radius:12px; text-align:start; cursor:pointer;
+        background:var(--panel-2); border:1px solid var(--line); color:var(--text);
+      }
+      .db-job + .db-job{ margin-top:8px; }
+      .db-job:hover{ background:var(--panel-3); }
+      .db-job-main{ flex:1; min-width:0; }
+      .db-job-prompt{ margin:0; font-size:14px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .db-job-meta{ margin:2px 0 0; font-size:12.5px; color:var(--muted); }
+      .db-job .chip{ flex:none; }
       @media (max-width:640px){
         .q-brandband{ padding:16px; }
         .q-brand-name{ font-size:26px; }
         .q-brand-mark{ width:46px; height:46px; border-radius:13px; }
         .q-tile{ font-size:12.5px; padding:13px 4px; }
         #view-studio #generateBtn{ padding:13px 22px; font-size:16px; }
+      }
+
+      /* ---------- Phase T: professional redesign — mockup-style Home
+           (large brand header, slim ready pill, central composer, big
+           gradient Generate, tiles, premium preview, templates, Video
+           Tools), technical card moved to Settings, 13-item drawer,
+           4-item bottom nav. Colors stay on the theme variables. ------ */
+      .q-brandband{ padding:26px 26px; border-radius:22px; margin-bottom:14px; }
+      .q-brand-mark{ width:66px; height:66px; border-radius:18px; }
+      .q-brand-mark svg{ width:36px; height:36px; }
+      .q-brand-name{ font-size:42px; }
+      .q-brand-sub{ font-size:12.5px; }
+      .q-brand-tag{ font-size:15.5px; }
+      .home-status-pill{
+        display:inline-flex; align-items:center; gap:8px;
+        padding:7px 14px; margin-bottom:14px; border-radius:999px;
+        border:1px solid var(--line); background:var(--panel-2);
+        font-size:13px; font-weight:600; color:var(--text);
+      }
+      .home-status-pill .conn-dot{ width:9px; height:9px; border-radius:50%; background:var(--amber); flex:none; }
+      .home-status-pill.checking .conn-dot{ background:var(--amber); animation:pulse 1s ease-in-out infinite; }
+      .home-status-pill.ok{ border-color:rgba(67,176,110,.5); }
+      .home-status-pill.ok .conn-dot{ background:var(--green); }
+      .home-status-pill.bad{ border-color:rgba(240,168,50,.45); }
+      .home-status-pill.bad .conn-dot{ background:var(--warn); }
+      #view-studio .composer-card{ padding:22px; box-shadow:0 12px 34px rgba(2,4,12,.30); }
+      #view-studio .composer-model{ display:none; }
+      #view-studio #prompt{ min-height:110px; font-size:15.5px; }
+      #view-studio #generateBtn{
+        padding:16px 38px; font-size:18px; border-radius:999px;
+        background:var(--accent-grad); box-shadow:0 10px 28px rgba(99,102,241,.45);
+      }
+      .q-tiles{ gap:12px; margin-top:14px; }
+      .q-tile{ padding:20px 10px; border-radius:18px; font-size:15px; }
+      .q-tile svg{ width:28px; height:28px; }
+      .q-showcase{ margin-top:14px; border-radius:20px; }
+      .q-showcase img{ height:250px; }
+      .q-showcase-play{ width:64px; height:64px; }
+      #view-studio .tpl-card{ margin-top:14px; margin-bottom:0; }
+      .vt-card{ margin-top:14px; }
+      .vt-grid{ display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
+      @media (min-width:641px){ .vt-grid{ grid-template-columns:repeat(3,1fr); } }
+      .vt-row{
+        display:flex; flex-direction:column; align-items:center; gap:8px;
+        padding:16px 8px; border-radius:16px; text-align:center; cursor:pointer;
+        background:var(--panel-2); border:1px solid var(--line);
+        color:var(--text); font-weight:600; font-size:14px;
+      }
+      .vt-row:hover{ background:var(--panel-3); }
+      .vt-row svg{ width:24px; height:24px; color:var(--amber); }
+      #techStatusCard .conn-banner{ margin:0 0 10px; }
+      .dr-divider{ height:1px; background:var(--line-soft); margin:8px 6px; flex:none; }
+      @media (min-width:900px){
+        .q-showcase img{ height:290px; }
+        #view-studio .studio-grid{ gap:26px; }
+      }
+      @media (max-width:640px){
+        .q-brandband{ padding:18px; }
+        .q-brand-name{ font-size:30px; }
+        .q-brand-mark{ width:52px; height:52px; border-radius:15px; }
+        .q-brand-mark svg{ width:29px; height:29px; }
+        #view-studio .composer-card{ padding:16px; }
+        #view-studio #generateBtn{ padding:14px 24px; font-size:16.5px; }
+        .q-showcase img{ height:210px; }
+      }
+
+      /* ---------- Phase T2: competitor-cue pass — Kling-style wide
+           hero banner + thumbnail rails, Flow-clean composer, Runway
+           single dominant action. The featured image stays a labelled
+           style preview: NO 4K badge, by the owner's honesty rules. -- */
+      .t-section-head{
+        font-family:var(--font-display); font-size:17px; font-weight:700;
+        margin:18px 0 4px; color:var(--text);
+      }
+      #view-studio .q-showcase{ aspect-ratio:16/9; }
+      #view-studio .q-showcase img{ height:100%; }
+      #view-studio .actionbar-row{ flex-direction:column; align-items:stretch; gap:10px; }
+      #view-studio .actionbar-cost{ flex-direction:row; align-items:baseline; gap:8px; }
+      #view-studio #generateBtn{ width:100%; }
+      .sr-cardwrap{ margin-top:14px; }
+      .sr-rail{
+        display:flex; gap:10px; overflow-x:auto; padding-bottom:4px;
+        scrollbar-width:none;
+      }
+      .sr-rail::-webkit-scrollbar{ display:none; }
+      .sr-card{
+        position:relative; flex:0 0 148px; border-radius:14px; overflow:hidden;
+        border:1px solid var(--line); background:var(--panel-2);
+        padding:0; cursor:pointer; text-align:start; color:#fff;
+      }
+      .sr-card img{ display:block; width:100%; height:96px; object-fit:cover; }
+      .sr-label{
+        position:absolute; inset-inline:0; bottom:14px; padding:16px 10px 0;
+        background:linear-gradient(transparent, rgba(4,6,12,.82));
+        font-size:13.5px; font-weight:700;
+      }
+      .sr-sub{
+        position:absolute; inset-inline:0; bottom:0; padding:0 10px 6px;
+        font-size:10.5px; font-weight:600; color:rgba(255,255,255,.85);
+      }
+      #view-studio .tpl-chip{ padding:10px 14px; font-size:14px; }
+      @media (min-width:900px){ .sr-card{ flex-basis:176px; } .sr-card img{ height:110px; } }
+      /* Phase T2: Home recent-creations strip (hidden unless the signed-in
+         user actually has creations — no placeholder or empty state). */
+      .hr-rail{
+        display:flex; gap:10px; overflow-x:auto; padding:4px 2px 8px;
+        scrollbar-width:none;
+      }
+      .hr-rail::-webkit-scrollbar{ display:none; }
+      .hr-item{
+        flex:0 0 150px; text-align:start; cursor:pointer; padding:0 0 8px;
+        background:var(--panel-2); border:1px solid var(--line); border-radius:14px;
+        overflow:hidden; color:var(--text); font:inherit;
+      }
+      .hr-item video{ display:block; width:100%; height:96px; object-fit:cover; background:#000; pointer-events:none; }
+      .hr-ph{
+        display:flex; align-items:center; justify-content:center;
+        width:100%; height:96px; font-size:13px; font-weight:700; color:var(--muted);
+        background:linear-gradient(135deg, rgba(59,130,246,.25), rgba(168,85,247,.25));
+      }
+      .hr-prompt{
+        display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
+        overflow:hidden; margin:8px 10px 6px; font-size:12.5px; line-height:1.35;
+      }
+      .hr-item .chip{ margin:0 10px; }
+      .hr-all{
+        background:none; border:0; cursor:pointer; font:inherit;
+        font-size:13px; font-weight:700; color:var(--accent);
       }
     </style>
   </head>
@@ -1037,53 +1190,17 @@
           </span>
         </div>
 
-        <h1 class="home-greeting" id="homeGreeting">What are we creating today? · آج کیا بنائیں گے؟</h1>
-
-        <div class="conn-banner checking" id="connBanner" role="status">
+                <div class="home-status-pill checking" id="homeStatusPill" role="status">
           <span class="conn-dot"></span>
-          <div>
-            <strong id="connTitle">Checking the backend connection…</strong>
-            <p id="connText">Contacting the API to load the model, styles, and prices.</p>
-          </div>
-          <button type="button" class="btn small" data-goto="settings" data-i18n="api_settings">API settings</button>
+          <span id="homeStatusText">Checking the backend connection…</span>
         </div>
 
         <div class="ad-slot" id="adHomeNative" hidden aria-hidden="true">Advertisement</div>
 
-        <div class="card tpl-card" id="templateCard">
-          <div class="tpl-head">
-            <h2 class="tpl-head-title"><span data-i18n="q_templates_title">Ready templates</span><span class="i18n-alt"> · تیار ٹیمپلیٹس</span></h2>
-          </div>
-          <div class="tpl-strip" id="templateGrid" role="group" aria-label="Templates">
-            <button type="button" class="tpl-chip" data-template="talking-photo">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4M8 22h8"/></svg>
-              <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_talking_photo">Talking Photo</span></span>
-            </button>
-            <button type="button" class="tpl-chip" data-template="kids-story">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 6c-1.6-1.6-4.2-2.2-8-2.2v14.4c3.8 0 6.4.6 8 2.2 1.6-1.6 4.2-2.2 8-2.2V3.8C16.2 3.8 13.6 4.4 12 6z"/><path d="M12 6v14.4"/></svg>
-              <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_kids_story">Kids Story</span></span>
-            </button>
-            <button type="button" class="tpl-chip" data-template="product-ad">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1.3"/></svg>
-              <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_product_ad">Product Ad</span></span>
-            </button>
-            <button type="button" class="tpl-chip" data-template="breaking-news">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="2"/><path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M4.9 4.9a10 10 0 0 0 0 14.2M19.1 4.9a10 10 0 0 1 0 14.2"/></svg>
-              <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_breaking_news">Breaking-News Short</span></span>
-            </button>
-            <button type="button" class="tpl-chip" data-template="music-video">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
-              <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_music_video">Music Video</span></span>
-            </button>
-            <button type="button" class="tpl-chip" data-template="cartoon-episode">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M8.5 14s1.2 2.2 3.5 2.2 3.5-2.2 3.5-2.2"/><circle cx="9" cy="9.5" r=".6" fill="currentColor"/><circle cx="15" cy="9.5" r=".6" fill="currentColor"/></svg>
-              <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_cartoon_episode">Cartoon Episode</span></span>
-            </button>
-          </div>
-        </div>
-
-        <div class="studio-grid">
+                <div class="studio-grid">
           <div>
+            <h1 class="home-greeting" id="homeGreeting">What are we creating today? · آج کیا بنائیں گے؟</h1>
+
             <div class="card composer-card">
               <div class="composer-head">
                 <h2 data-i18n="describe_video">Describe your video</h2>
@@ -1104,7 +1221,7 @@
               </div>
 
               <div class="field-label"><span data-i18n="prompt_label">Prompt</span><span class="count"><span id="charCount">0</span> / 500</span></div>
-              <textarea id="prompt" maxlength="500" data-i18n-ph="prompt_ph" placeholder="What do you want to make? · آپ کیا بنانا چاہتے ہیں؟ Describe the scene, action and camera…"></textarea>
+              <textarea id="prompt" maxlength="500" data-i18n-ph="prompt_ph" placeholder="Describe your imagination…"></textarea>
               <div class="prompt-tools">
                 <button type="button" class="tool-btn" id="enhanceBtn">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg>
@@ -1161,6 +1278,7 @@
                  controls only (prompt focus / source-image upload /
                  the AI Auto toggle), plus the wide showcase preview.
                  The image is a style sample, labelled as such. -->
+            <h2 class="t-section-head"><span data-i18n="tools_heading">Your creative tools</span><span class="i18n-alt"> · آپ کے تخلیقی ٹولز</span></h2>
             <div class="q-tiles">
               <button type="button" class="q-tile" id="q_tileText">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 6V4h14v2M12 4v16M9 20h6"/></svg>
@@ -1176,6 +1294,7 @@
               </button>
             </div>
 
+            <h2 class="t-section-head"><span data-i18n="featured_heading">Featured Creation</span><span class="i18n-alt"> · نمایاں تخلیق</span></h2>
             <button type="button" class="q-showcase" id="q_showcaseCard" aria-label="Style preview">
               <img src="/showcase/showcase-realistic.jpg" alt="" loading="lazy" />
               <span class="q-showcase-play" aria-hidden="true">
@@ -1183,6 +1302,111 @@
               </span>
               <span class="q-showcase-label"><span data-i18n="q_style_preview">Style preview</span><span class="i18n-alt"> · انداز کا نمونہ</span></span>
             </button>
+
+            <div class="card sr-cardwrap" id="stylesRailCard">
+              <div class="tpl-head">
+                <h2 class="tpl-head-title"><span data-i18n="styles_heading">Styles</span><span class="i18n-alt"> · انداز</span></h2>
+              </div>
+              <div class="sr-rail" role="group" aria-label="Styles">
+                <button type="button" class="sr-card" id="sr_realistic">
+                  <img src="/showcase/showcase-realistic.jpg" alt="" loading="lazy" />
+                  <span class="sr-label"><span data-i18n="sr_realistic">Realistic</span><span class="i18n-alt"> · حقیقت پسندانہ</span></span>
+                  <span class="sr-sub">Style preview · انداز کا نمونہ</span>
+                </button>
+                <button type="button" class="sr-card" id="sr_cartoon">
+                  <img src="/showcase/showcase-cartoon.jpg" alt="" loading="lazy" />
+                  <span class="sr-label"><span data-i18n="sr_cartoon">Cartoon</span><span class="i18n-alt"> · کارٹون</span></span>
+                  <span class="sr-sub">Style preview · انداز کا نمونہ</span>
+                </button>
+                <button type="button" class="sr-card" id="sr_animals">
+                  <img src="/showcase/showcase-animals.jpg" alt="" loading="lazy" />
+                  <span class="sr-label"><span data-i18n="sr_animals">Animals</span><span class="i18n-alt"> · جانور</span></span>
+                  <span class="sr-sub">Style preview · انداز کا نمونہ</span>
+                </button>
+                <button type="button" class="sr-card" id="sr_speaking">
+                  <img src="/showcase/showcase-speaking.jpg" alt="" loading="lazy" />
+                  <span class="sr-label"><span data-i18n="sr_speaking">Speaking</span><span class="i18n-alt"> · بولتا کردار</span></span>
+                  <span class="sr-sub">Style preview · انداز کا نمونہ</span>
+                </button>
+              </div>
+              <p class="lang-hint">Tap a style to set it in the studio — the pictures are style previews, not finished videos.</p>
+            </div>
+
+<div class="card tpl-card" id="templateCard">
+          <div class="tpl-head">
+            <h2 class="tpl-head-title"><span data-i18n="q_templates_title">Ready templates</span><span class="i18n-alt"> · تیار ٹیمپلیٹس</span></h2>
+          </div>
+          <div class="tpl-strip" id="templateGrid" role="group" aria-label="Templates">
+            <button type="button" class="tpl-chip" data-template="talking-photo">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4M8 22h8"/></svg>
+              <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_talking_photo">Talking Photo</span></span>
+            </button>
+            <button type="button" class="tpl-chip" data-template="kids-story">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 6c-1.6-1.6-4.2-2.2-8-2.2v14.4c3.8 0 6.4.6 8 2.2 1.6-1.6 4.2-2.2 8-2.2V3.8C16.2 3.8 13.6 4.4 12 6z"/><path d="M12 6v14.4"/></svg>
+              <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_kids_story">Kids Story</span></span>
+            </button>
+            <button type="button" class="tpl-chip" data-template="product-ad">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1.3"/></svg>
+              <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_product_ad">Product Ad</span></span>
+            </button>
+            <button type="button" class="tpl-chip" data-template="breaking-news">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="2"/><path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M4.9 4.9a10 10 0 0 0 0 14.2M19.1 4.9a10 10 0 0 1 0 14.2"/></svg>
+              <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_breaking_news">Breaking-News Short</span></span>
+            </button>
+            <button type="button" class="tpl-chip" data-template="music-video">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+              <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_music_video">Music Video</span></span>
+            </button>
+            <button type="button" class="tpl-chip" data-template="cartoon-episode">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M8.5 14s1.2 2.2 3.5 2.2 3.5-2.2 3.5-2.2"/><circle cx="9" cy="9.5" r=".6" fill="currentColor"/><circle cx="15" cy="9.5" r=".6" fill="currentColor"/></svg>
+              <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_cartoon_episode">Cartoon Episode</span></span>
+            </button>
+          </div>
+        </div>
+
+            <!-- Phase T2: Recent creations — populated from the same
+                 /api/history data as the History view; stays hidden unless
+                 the signed-in user has at least one creation. -->
+            <div class="card hr-card" id="homeRecentCard" style="display:none">
+              <div class="tpl-head">
+                <h2 class="tpl-head-title"><span data-i18n="hr_heading">Recent creations</span><span class="i18n-alt"> · حالیہ تخلیقات</span></h2>
+                <button type="button" class="hr-all" id="homeRecentAll"><span data-i18n="hr_view_all">View all</span></button>
+              </div>
+              <div class="hr-rail" id="homeRecentRail" role="group" aria-label="Recent creations"></div>
+            </div>
+
+            <div class="card vt-card" id="vt_toolsCard">
+              <div class="tpl-head">
+                <h2 class="tpl-head-title"><span data-i18n="vt_title">Video Tools</span><span class="i18n-alt"> · ویڈیو ٹولز</span></h2>
+              </div>
+              <p class="sub">Every tool below is a real, working part of the studio — each one opens its own controls.</p>
+              <div class="vt-grid">
+                <button type="button" class="vt-row" id="vt_toolImage">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="m4.5 17.5 5-5 3.5 3.5 2.5-2.5 4 4"/></svg>
+                  <span><span data-i18n="vt_image">Image to Video</span><span class="i18n-alt"> · تصویر سے ویڈیو</span></span>
+                </button>
+                <button type="button" class="vt-row" id="vt_toolVoice">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4M8 22h8"/></svg>
+                  <span><span data-i18n="vt_voice">Voice &amp; Lip Sync</span><span class="i18n-alt"> · آواز اور لپ سنک</span></span>
+                </button>
+                <button type="button" class="vt-row" id="vt_toolSound">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                  <span><span data-i18n="vt_sound">Sound &amp; Effects</span><span class="i18n-alt"> · ساؤنڈ اور ایفیکٹس</span></span>
+                </button>
+                <button type="button" class="vt-row" id="vt_toolCharacters">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8.5" r="3.8"/><path d="M5 20c1.4-3.4 4-5 7-5s5.6 1.6 7 5"/></svg>
+                  <span><span data-i18n="vt_characters">My Characters</span><span class="i18n-alt"> · میرے کردار</span></span>
+                </button>
+                <button type="button" class="vt-row" id="vt_toolJoin">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 7h11M8 12h11M8 17h11"/><circle cx="4.5" cy="7" r="1.3"/><circle cx="4.5" cy="12" r="1.3"/><circle cx="4.5" cy="17" r="1.3"/></svg>
+                  <span><span data-i18n="vt_join">Join Clips</span><span class="i18n-alt"> · کلپس جوڑیں</span></span>
+                </button>
+                <button type="button" class="vt-row" id="vt_toolTemplates">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="8" height="8" rx="2"/><rect x="13" y="4" width="8" height="8" rx="2"/><rect x="3" y="14" width="8" height="6" rx="2"/><rect x="13" y="14" width="8" height="6" rx="2"/></svg>
+                  <span><span data-i18n="vt_templates">Templates</span><span class="i18n-alt"> · ٹیمپلیٹس</span></span>
+                </button>
+              </div>
+            </div>
 
             <!-- Phase E/F: the remaining manual controls — mode, character,
                  start image, style/quality, Voice, Sound, Watermark — live
@@ -1619,6 +1843,59 @@
         </div>
       </section>
 
+      <!-- ================= DASHBOARD ================= -->
+      <!-- Phase S: the signed-in user's own dashboard. Every value is
+           read from the endpoints the app already calls — GET /api/me
+           (through loadMe) for the account summary, and GET /api/history
+           (the exact call the History view renders) for recent
+           creations. No field is displayed that the server does not
+           actually return: /api/me carries credits (= free + plan),
+           free_credits and plan_credits, so those are the buckets
+           shown — there is no separate purchased-credits field. -->
+      <section class="view" id="view-dashboard">
+        <div class="page-head">
+          <h1 data-i18n="db_title">Dashboard</h1>
+          <p data-i18n="db_sub">Your account at a glance — balance, plan and your latest videos, loaded from the server.</p>
+        </div>
+        <div class="empty-state" id="db_signedOut" style="display:none;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>
+          <p data-i18n="db_signin_text">Sign in to see your dashboard — your balance, plan and latest videos live with your account.</p>
+          <button type="button" class="btn small" id="db_signInBtn" data-i18n="sign_in">Sign in</button>
+        </div>
+        <div id="db_content" style="display:none;">
+          <div class="card" id="db_accountCard">
+            <h2 data-i18n="db_account">Account summary</h2>
+            <dl class="kv">
+              <dt data-i18n="email_label">Email</dt><dd id="db_email">–</dd>
+              <dt data-i18n="credit_balance_nc">Credit balance</dt><dd id="db_creditsTotal">–</dd>
+              <dt data-i18n="db_free_credits">Free credits</dt><dd id="db_creditsFree">–</dd>
+              <dt data-i18n="plan_credits">Plan credits</dt><dd id="db_creditsPlan">–</dd>
+              <dt data-i18n="plan_label">Plan</dt><dd id="db_plan">Free</dd>
+              <dt data-i18n="member_since">Member since</dt><dd id="db_since">–</dd>
+            </dl>
+          </div>
+          <div class="card" id="db_recentCard">
+            <h2 data-i18n="db_recent">Recent creations</h2>
+            <div class="empty-state" id="db_recentEmpty" style="display:none;">
+              <p id="db_recentEmptyText">No videos yet. Videos you create in the Studio will appear here.</p>
+            </div>
+            <div id="db_recentList"></div>
+            <div class="result-actions">
+              <button type="button" class="btn small" id="db_viewAllBtn" data-i18n="db_view_all">View all in History</button>
+            </div>
+          </div>
+          <div class="card" id="db_shortcutsCard">
+            <h2 data-i18n="db_shortcuts">Shortcuts</h2>
+            <div class="db-tiles">
+              <button type="button" class="db-tile" id="db_tileCreate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10 9.5v5l4.5-2.5L10 9.5z" fill="currentColor" stroke="none"/></svg><span data-i18n="db_create">Create Video</span></button>
+              <button type="button" class="db-tile" id="db_tileBuy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v9M14.8 9.4c-.5-.7-1.5-1.1-2.8-1.1-1.6 0-2.8.8-2.8 2 0 2.7 5.6 1.5 5.6 3.9 0 1.2-1.2 2-2.8 2-1.2 0-2.3-.5-2.8-1.2"/></svg><span data-i18n="db_buy">Buy Credits</span></button>
+              <button type="button" class="db-tile" id="db_tilePlans"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18M7 15h4"/></svg><span data-i18n="db_plans">Subscription Plans</span></button>
+              <button type="button" class="db-tile" id="db_tileHelp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.3A2.6 2.6 0 1 1 12 12.2c-.8.25-1 .7-1 1.5"/><path d="M12 17h.01"/></svg><span data-i18n="db_help">Help &amp; Support</span></button>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- ================= SETTINGS ================= -->
       <section class="view" id="view-settings">
         <div class="page-head">
@@ -1642,6 +1919,19 @@
                 <button type="button" data-theme-choice="dark" class="sel" data-i18n="theme_dark">Dark</button>
                 <button type="button" data-theme-choice="light" data-i18n="theme_light">Light</button>
               </div>
+            </div>
+
+            <div class="card" id="techStatusCard">
+              <h2><span data-i18n="tech_status">Technical status</span><span class="i18n-alt"> · تکنیکی حالت</span></h2>
+<div class="conn-banner checking" id="connBanner" role="status">
+          <span class="conn-dot"></span>
+          <div>
+            <strong id="connTitle">Checking the backend connection…</strong>
+            <p id="connText">Contacting the API to load the model, styles, and prices.</p>
+          </div>
+          <button type="button" class="btn small" data-goto="settings" data-i18n="api_settings">API settings</button>
+        </div>
+              <p class="lang-hint">Connection details live here, in Settings — the Home screen only shows whether the generator is ready.</p>
             </div>
 
             <div class="card">
@@ -1840,29 +2130,21 @@
 
     <nav class="bottomnav" aria-label="Main">
       <div class="row">
-        <button type="button" class="tab active" data-view="studio">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10 9.5v5l4.5-2.5L10 9.5z" fill="currentColor" stroke="none"/></svg>
-          <span data-i18n="nav_studio">Studio</span>
+        <button type="button" class="tab active" id="bn_homeBtn" data-view="studio">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 11.5 12 4l8 7.5"/><path d="M6 10v10h12V10"/></svg>
+          <span data-i18n="bn_home">Home</span>
         </button>
-        <button type="button" class="tab" data-view="history">
+        <button type="button" class="tab" id="bn_historyBtn" data-view="history">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/><path d="M12 7v5l3.5 2"/></svg>
           <span data-i18n="nav_history">History</span>
         </button>
-        <button type="button" class="tab" data-view="plans">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18M7 15h4"/></svg>
-          <span data-i18n="nav_plans">Plans</span>
+        <button type="button" class="tab" id="bn_joinBtn" data-view="history">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 7h11M8 12h11M8 17h11"/><circle cx="4.5" cy="7" r="1.3"/><circle cx="4.5" cy="12" r="1.3"/><circle cx="4.5" cy="17" r="1.3"/></svg>
+          <span data-i18n="dr_join">Join Clips</span>
         </button>
-        <button type="button" class="tab" data-view="buy">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v9M14.8 9.4c-.5-.7-1.5-1.1-2.8-1.1-1.6 0-2.8.8-2.8 2 0 2.7 5.6 1.5 5.6 3.9 0 1.2-1.2 2-2.8 2-1.2 0-2.3-.5-2.8-1.2"/></svg>
-          <span data-i18n="nav_buy_short">Buy</span>
-        </button>
-        <button type="button" class="tab" data-view="settings">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3.2"/><path d="M19 12a7 7 0 0 0-.14-1.4l2-1.55-2-3.46-2.36.95A7 7 0 0 0 14.1 5.1L13.7 2.6h-3.4l-.4 2.5a7 7 0 0 0-2.4 1.44l-2.36-.95-2 3.46 2 1.55a7 7 0 0 0 0 2.8l-2 1.55 2 3.46 2.36-.95a7 7 0 0 0 2.4 1.44l.4 2.5h3.4l.4-2.5a7 7 0 0 0 2.4-1.44l2.36.95 2-3.46-2-1.55c.1-.45.14-.92.14-1.4z"/></svg>
-          <span data-i18n="nav_settings">Settings</span>
-        </button>
-        <button type="button" class="tab" data-view="privacy">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l7 3v5c0 4.6-3 8.4-7 10-4-1.6-7-5.4-7-10V6l7-3z"/><path d="m9.5 12 2 2 3.5-4"/></svg>
-          <span data-i18n="nav_privacy">Privacy</span>
+        <button type="button" class="tab" id="bn_dashboardBtn" data-view="dashboard">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>
+          <span data-i18n="dr_dashboard">Dashboard</span>
         </button>
       </div>
     </nav>
@@ -1893,17 +2175,21 @@
       </div>
       <nav class="dr-nav" aria-label="Menu">
         <button type="button" class="dr-item" id="dr_itemHome"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 11.5 12 4l8 7.5"/><path d="M6 10v10h12V10"/></svg><span><span data-i18n="dr_home">Home</span><span class="i18n-alt"> · ہوم</span></span></button>
-        <button type="button" class="dr-item" id="dr_itemCreate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10 9.5v5l4.5-2.5L10 9.5z" fill="currentColor" stroke="none"/></svg><span><span data-i18n="dr_create">Create Video</span><span class="i18n-alt"> · ویڈیو بنائیں</span></span></button>
+        <button type="button" class="dr-item" id="dr_itemCreate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10 9.5v5l4.5-2.5L10 9.5z" fill="currentColor" stroke="none"/></svg><span><span data-i18n="dr_create">Text to Video</span><span class="i18n-alt"> · متن سے ویڈیو</span></span></button>
         <button type="button" class="dr-item" id="dr_itemImage"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="m4.5 17.5 5-5 3.5 3.5 2.5-2.5 4 4"/></svg><span><span data-i18n="dr_image">Image to Video</span><span class="i18n-alt"> · تصویر سے ویڈیو</span></span></button>
+        <button type="button" class="dr-item" id="dr_itemAuto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/><path d="M18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2z"/></svg><span><span data-i18n="dr_auto">AI Auto Director</span><span class="i18n-alt"> · اے آئی خودکار ڈائریکٹر</span></span></button>
+        <button type="button" class="dr-item" id="dr_itemTools"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14.5 6.5a4 4 0 0 1 5.6-3.7l-2.8 2.8.7 2.4 2.4.7a4 4 0 0 1-5.5 5L8 20.9a2 2 0 0 1-2.8 0l-2.1-2.1a2 2 0 0 1 0-2.8l6.9-6.9a4 4 0 0 1 4.5-2.6z"/></svg><span><span data-i18n="dr_tools">Video Tools</span><span class="i18n-alt"> · ویڈیو ٹولز</span></span></button>
         <button type="button" class="dr-item" id="dr_itemHistory"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/><path d="M12 7v5l3.5 2"/></svg><span><span data-i18n="dr_history">History</span><span class="i18n-alt"> · ہسٹری</span></span></button>
         <button type="button" class="dr-item" id="dr_itemJoin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 7h11M8 12h11M8 17h11"/><circle cx="4.5" cy="7" r="1.3"/><circle cx="4.5" cy="12" r="1.3"/><circle cx="4.5" cy="17" r="1.3"/></svg><span><span data-i18n="dr_join">Join Clips</span><span class="i18n-alt"> · کلپس جوڑیں</span></span></button>
-        <button type="button" class="dr-item" id="dr_itemWallet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18M16.5 15h.01"/></svg><span><span data-i18n="dr_wallet">Credits &amp; Wallet</span><span class="i18n-alt"> · کریڈٹس اور والیٹ</span></span></button>
-        <button type="button" class="dr-item" id="dr_itemPlans"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18M7 15h4"/></svg><span><span data-i18n="dr_plans">Subscription Plans</span><span class="i18n-alt"> · سبسکرپشن پلانز</span></span></button>
-        <button type="button" class="dr-item" id="dr_itemBuy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v9M14.8 9.4c-.5-.7-1.5-1.1-2.8-1.1-1.6 0-2.8.8-2.8 2 0 2.7 5.6 1.5 5.6 3.9 0 1.2-1.2 2-2.8 2-1.2 0-2.3-.5-2.8-1.2"/></svg><span><span data-i18n="dr_buy">Buy Credits</span><span class="i18n-alt"> · کریڈٹس خریدیں</span></span></button>
-        <button type="button" class="dr-item" id="dr_itemPayments"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3h9l4 4v14H6z"/><path d="M15 3v4h4M9.5 12h5M9.5 15.5h5"/></svg><span><span data-i18n="dr_payments">Payment History</span><span class="i18n-alt"> · ادائیگی کی ہسٹری</span></span></button>
-        <button type="button" class="dr-item" id="dr_itemProfile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8.5" r="3.8"/><path d="M5 20c1.4-3.4 4-5 7-5s5.6 1.6 7 5"/></svg><span><span data-i18n="dr_profile">My Profile</span><span class="i18n-alt"> · میری پروفائل</span></span></button>
+        <button type="button" class="dr-item" id="dr_itemDashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg><span><span data-i18n="dr_dashboard">Dashboard</span><span class="i18n-alt"> · ڈیش بورڈ</span></span></button>
+        <button type="button" class="dr-item" id="dr_itemPlans"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18M7 15h4"/></svg><span><span data-i18n="dr_plans">Plans &amp; Pricing</span><span class="i18n-alt"> · پلانز اور قیمتیں</span></span></button>
+        <button type="button" class="dr-item" id="dr_itemWallet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18M16.5 15h.01"/></svg><span><span data-i18n="dr_wallet">Credits</span><span class="i18n-alt"> · کریڈٹس</span></span></button>
+        <button type="button" class="dr-item" id="dr_itemPayments"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3h9l4 4v14H6z"/><path d="M15 3v4h4M9.5 12h5M9.5 15.5h5"/></svg><span><span data-i18n="dr_payments">Payments</span><span class="i18n-alt"> · ادائیگیاں</span></span></button>
         <button type="button" class="dr-item" id="dr_itemSettings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3.2"/><path d="M19 12a7 7 0 0 0-.14-1.4l2-1.55-2-3.46-2.36.95A7 7 0 0 0 14.1 5.1L13.7 2.6h-3.4l-.4 2.5a7 7 0 0 0-2.4 1.44l-2.36-.95-2 3.46 2 1.55a7 7 0 0 0 0 2.8l-2 1.55 2 3.46 2.36-.95a7 7 0 0 0 2.4 1.44l.4 2.5h3.4l.4-2.5a7 7 0 0 0 2.4-1.44l2.36.95 2-3.46-2-1.55c.1-.45.14-.92.14-1.4z"/></svg><span><span data-i18n="dr_settings">Settings</span><span class="i18n-alt"> · ترتیبات</span></span></button>
         <button type="button" class="dr-item" id="dr_itemHelp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.3A2.6 2.6 0 1 1 12 12.2c-.8.25-1 .7-1 1.5"/><path d="M12 17h.01"/></svg><span><span data-i18n="dr_help">Help &amp; Support</span><span class="i18n-alt"> · مدد اور معاونت</span></span></button>
+        <div class="dr-divider" role="separator"></div>
+        <button type="button" class="dr-item" id="dr_itemBuy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v9M14.8 9.4c-.5-.7-1.5-1.1-2.8-1.1-1.6 0-2.8.8-2.8 2 0 2.7 5.6 1.5 5.6 3.9 0 1.2-1.2 2-2.8 2-1.2 0-2.3-.5-2.8-1.2"/></svg><span><span data-i18n="dr_buy">Buy Credits</span><span class="i18n-alt"> · کریڈٹس خریدیں</span></span></button>
+        <button type="button" class="dr-item" id="dr_itemProfile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8.5" r="3.8"/><path d="M5 20c1.4-3.4 4-5 7-5s5.6 1.6 7 5"/></svg><span><span data-i18n="dr_profile">My Profile</span><span class="i18n-alt"> · میری پروفائل</span></span></button>
         <button type="button" class="dr-item" id="dr_itemPrivacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l7 3v5c0 4.6-3 8.4-7 10-4-1.6-7-5.4-7-10V6l7-3z"/><path d="m9.5 12 2 2 3.5-4"/></svg><span><span data-i18n="dr_privacy">Terms &amp; Privacy</span><span class="i18n-alt"> · شرائط اور پرائیویسی</span></span></button>
         <button type="button" class="dr-item" id="dr_itemLogout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 4H6v16h8"/><path d="M10 12h11M17 8l4 4-4 4"/></svg><span><span data-i18n="dr_logout">Logout</span><span class="i18n-alt"> · لاگ آؤٹ</span></span></button>
       </nav>
@@ -2068,7 +2354,7 @@
           describe_video: { en: "Describe your video", ur: "اپنی ویڈیو بیان کریں" },
           prompt_language: { en: "Language", ur: "زبان" },
           prompt_label: { en: "Prompt", ur: "پرامپٹ" },
-          prompt_ph: { en: "What do you want to make? Describe the scene, action and camera…", ur: "آپ کیا بنانا چاہتے ہیں؟ منظر، حرکت اور کیمرہ بیان کریں…" },
+          prompt_ph: { en: "Describe your imagination…", ur: "اپنے تخیل کی وضاحت کریں…" },
           enhance_prompt: { en: "Enhance prompt", ur: "پرامپٹ بہتر کریں" },
           format_label: { en: "Format", ur: "فارمیٹ" },
           length_label: { en: "Length", ur: "دورانیہ" },
@@ -2241,22 +2527,57 @@
           q_tile_image: { en: "Image to Video", ur: "تصویر سے ویڈیو" },
           q_tile_auto: { en: "AI Auto Director", ur: "اے آئی خودکار ڈائریکٹر" },
           q_style_preview: { en: "Style preview", ur: "انداز کا نمونہ" },
+          hr_heading: { en: "Recent creations", ur: "حالیہ تخلیقات" },
+          hr_view_all: { en: "View all", ur: "سب دیکھیں" },
           dr_menu: { en: "Menu", ur: "مینو" },
           dr_home: { en: "Home", ur: "ہوم" },
-          dr_create: { en: "Create Video", ur: "ویڈیو بنائیں" },
+          dr_create: { en: "Text to Video", ur: "متن سے ویڈیو" },
           dr_image: { en: "Image to Video", ur: "تصویر سے ویڈیو" },
           dr_history: { en: "History", ur: "ہسٹری" },
           dr_join: { en: "Join Clips", ur: "کلپس جوڑیں" },
-          dr_wallet: { en: "Credits & Wallet", ur: "کریڈٹس اور والیٹ" },
-          dr_plans: { en: "Subscription Plans", ur: "سبسکرپشن پلانز" },
+          dr_wallet: { en: "Credits", ur: "کریڈٹس" },
+          dr_plans: { en: "Plans & Pricing", ur: "پلانز اور قیمتیں" },
           dr_buy: { en: "Buy Credits", ur: "کریڈٹس خریدیں" },
-          dr_payments: { en: "Payment History", ur: "ادائیگی کی ہسٹری" },
+          dr_payments: { en: "Payments", ur: "ادائیگیاں" },
           dr_profile: { en: "My Profile", ur: "میری پروفائل" },
           dr_settings: { en: "Settings", ur: "ترتیبات" },
           dr_help: { en: "Help & Support", ur: "مدد اور معاونت" },
           dr_privacy: { en: "Terms & Privacy", ur: "شرائط اور پرائیویسی" },
           dr_logout: { en: "Logout", ur: "لاگ آؤٹ" },
-          dr_not_signed_in: { en: "Not signed in", ur: "لاگ اِن نہیں" }
+          dr_not_signed_in: { en: "Not signed in", ur: "لاگ اِن نہیں" },
+          dr_dashboard: { en: "Dashboard", ur: "ڈیش بورڈ" },
+          tools_heading: { en: "Your creative tools", ur: "آپ کے تخلیقی ٹولز" },
+          featured_heading: { en: "Featured Creation", ur: "نمایاں تخلیق" },
+          styles_heading: { en: "Styles", ur: "انداز" },
+          sr_realistic: { en: "Realistic", ur: "حقیقت پسندانہ" },
+          sr_cartoon: { en: "Cartoon", ur: "کارٹون" },
+          sr_animals: { en: "Animals", ur: "جانور" },
+          sr_speaking: { en: "Speaking", ur: "بولتا کردار" },
+          dr_auto: { en: "AI Auto Director", ur: "اے آئی خودکار ڈائریکٹر" },
+          dr_tools: { en: "Video Tools", ur: "ویڈیو ٹولز" },
+          bn_home: { en: "Home", ur: "ہوم" },
+          tech_status: { en: "Technical status", ur: "تکنیکی حالت" },
+          vt_title: { en: "Video Tools", ur: "ویڈیو ٹولز" },
+          vt_image: { en: "Image to Video", ur: "تصویر سے ویڈیو" },
+          vt_voice: { en: "Voice & Lip Sync", ur: "آواز اور لپ سنک" },
+          vt_sound: { en: "Sound & Effects", ur: "ساؤنڈ اور ایفیکٹس" },
+          vt_characters: { en: "My Characters", ur: "میرے کردار" },
+          vt_join: { en: "Join Clips", ur: "کلپس جوڑیں" },
+          vt_templates: { en: "Templates", ur: "ٹیمپلیٹس" },
+          db_title: { en: "Dashboard", ur: "ڈیش بورڈ" },
+          db_sub: { en: "Your account at a glance — balance, plan and your latest videos, loaded from the server.", ur: "آپ کے اکاؤنٹ کا خلاصہ — بیلنس، پلان اور آپ کی تازہ ویڈیوز، سرور سے لوڈ شدہ۔" },
+          db_account: { en: "Account summary", ur: "اکاؤنٹ کا خلاصہ" },
+          db_free_credits: { en: "Free credits", ur: "مفت کریڈٹس" },
+          db_recent: { en: "Recent creations", ur: "حالیہ تخلیقات" },
+          db_no_videos: { en: "No videos yet. Videos you create in the Studio will appear here.", ur: "ابھی کوئی ویڈیو نہیں۔ اسٹوڈیو میں بنائی گئی ویڈیوز یہاں نظر آئیں گی۔" },
+          db_load_failed: { en: "Couldn't load your latest videos — open History to try again.", ur: "آپ کی تازہ ویڈیوز لوڈ نہیں ہو سکیں — دوبارہ کوشش کے لیے ہسٹری کھولیں۔" },
+          db_view_all: { en: "View all in History", ur: "تمام ہسٹری میں دیکھیں" },
+          db_shortcuts: { en: "Shortcuts", ur: "شارٹ کٹس" },
+          db_create: { en: "Create Video", ur: "ویڈیو بنائیں" },
+          db_buy: { en: "Buy Credits", ur: "کریڈٹس خریدیں" },
+          db_plans: { en: "Subscription Plans", ur: "سبسکرپشن پلانز" },
+          db_help: { en: "Help & Support", ur: "مدد اور معاونت" },
+          db_signin_text: { en: "Sign in to see your dashboard — your balance, plan and latest videos live with your account.", ur: "اپنا ڈیش بورڈ دیکھنے کے لیے سائن اِن کریں — آپ کا بیلنس، پلان اور تازہ ویڈیوز آپ کے اکاؤنٹ کے ساتھ ہیں۔" }
         };
         var uiLang = lsGet(LS_LANG) === "ur" ? "ur" : "en";
         var uiTheme = lsGet(LS_THEME) === "light" ? "light" : "dark";
@@ -2443,6 +2764,7 @@
           if (name === "plans") { renderPlans(); loadPayments(); }
           if (name === "buy") loadBuy();
           if (name === "settings" && token) loadMe();
+          if (name === "dashboard") loadDashboard();
         }
         $$(".tab").forEach(function (b) {
           b.addEventListener("click", function () { showView(b.getAttribute("data-view")); });
@@ -2469,6 +2791,17 @@
           b.classList.add(mode);
           $("#connTitle").textContent = title;
           $("#connText").textContent = text;
+          // Phase T: the same status drives the slim Home pill — the
+          // technical detail stays in Settings (Technical status card);
+          // Home shows only "ready" (when the check really succeeded)
+          // or the honest not-connected title.
+          var pill = $("#homeStatusPill");
+          if (pill) {
+            pill.classList.remove("checking", "ok", "bad");
+            pill.classList.add(mode);
+            var pt = $("#homeStatusText");
+            if (pt) pt.textContent = mode === "ok" ? "AI Video Generator Ready · تیار ہے" : title;
+          }
         }
         function setConnStatus(html) { $("#connStatus").innerHTML = html; }
 
@@ -3975,6 +4308,79 @@
           toast("Stopped watching. The job continues on the server — see History.");
         });
 
+        /* ---------- dashboard (Phase S) ----------
+           Filled only from state the app already loads: `me` (GET
+           /api/me, via loadMe) for the account summary, and GET
+           /api/history — the same call, payload and status labels
+           loadHistory renders — for recent creations. /api/me has no
+           separate purchased-credits bucket (pack credits land in
+           free_credits server-side), so the summary shows exactly
+           the buckets that exist: total, free and plan credits. */
+        function fillDashboard() {
+          var signed = !!token;
+          $("#db_signedOut").style.display = signed ? "none" : "block";
+          $("#db_content").style.display = signed ? "block" : "none";
+          if (!signed || !me) return;
+          $("#db_email").textContent = me.email || "–";
+          $("#db_creditsTotal").textContent = (me.credits !== undefined && me.credits !== null) ? me.credits + " " + t("credits_word") : "–";
+          $("#db_creditsFree").textContent = (me.free_credits !== undefined && me.free_credits !== null) ? me.free_credits + " " + t("credits_word") : "–";
+          $("#db_creditsPlan").textContent = (me.plan_credits !== undefined && me.plan_credits !== null) ? me.plan_credits + " " + t("credits_word") : "–";
+          $("#db_plan").textContent = ((me.plan && me.plan.name) ? me.plan.name : "Free") +
+            (me.subscription && me.subscription.status ? " (" + me.subscription.status + ")" : "");
+          $("#db_since").textContent = fmtDate(me.created_at);
+        }
+        function renderDashboardRecent(gens, failed) {
+          var list = $("#db_recentList");
+          list.innerHTML = "";
+          var empty = $("#db_recentEmpty");
+          if (!gens || !gens.length) {
+            $("#db_recentEmptyText").textContent = t(failed ? "db_load_failed" : "db_no_videos");
+            empty.style.display = "block";
+            return;
+          }
+          empty.style.display = "none";
+          gens.slice(0, 4).forEach(function (g) {
+            var row = document.createElement("button");
+            row.type = "button";
+            row.className = "db-job";
+            var main = document.createElement("span");
+            main.className = "db-job-main";
+            var p = document.createElement("p");
+            p.className = "db-job-prompt";
+            p.textContent = g.prompt || "(no prompt)";
+            var m = document.createElement("p");
+            m.className = "db-job-meta";
+            m.textContent = fmtDate(g.created_at) + (g.cost_credits !== undefined ? " · " + g.cost_credits + " " + t("credits_word") : "");
+            main.appendChild(p);
+            main.appendChild(m);
+            var chip = document.createElement("span");
+            chip.className = chipClass(g.status);
+            chip.textContent = g.status || "";
+            row.appendChild(main);
+            row.appendChild(chip);
+            row.addEventListener("click", function () { showView("history"); });
+            list.appendChild(row);
+          });
+        }
+        function loadDashboard() {
+          if (!token) {
+            $("#db_signedOut").style.display = "block";
+            $("#db_content").style.display = "none";
+            return;
+          }
+          $("#db_signedOut").style.display = "none";
+          $("#db_content").style.display = "block";
+          loadMe().then(function () { fillDashboard(); });
+          api("/api/history").then(function (res) {
+            if (res.status === 401) { signOut(true); fillDashboard(); return; }
+            if (!res.ok || !res.data) { renderDashboardRecent(null, true); return; }
+            if (res.data.credits !== undefined) setCredits(res.data.credits);
+            renderDashboardRecent(res.data.generations || [], false);
+          });
+        }
+        $("#db_signInBtn").addEventListener("click", function () { openAuth("login"); });
+        $("#db_viewAllBtn").addEventListener("click", function () { showView("history"); });
+
         /* ---------- history ---------- */
         function renderHistoryState(mode) {
           var empty = $("#historyEmpty");
@@ -4007,16 +4413,65 @@
           return "chip other";
         }
         var LANG_NAMES = { en: "English", ur: "Urdu", ks: "Kashmiri", ar: "Arabic", fa: "Persian", hi: "Hindi", zh: "Chinese" };
+        // Phase T2: Home "Recent creations" strip. Fed by the SAME
+        // generations array loadHistory() just fetched (one fetch, two
+        // renders). STRICT honesty rule: the section stays hidden unless
+        // the signed-in user has at least one creation — no placeholder
+        // cards and no empty-state text on Home. Media mirrors History:
+        // g.video_url via resolveUrl() (a muted metadata-only <video>
+        // shows the first frame as the preview; History itself plays the
+        // same URL through the Studio player).
+        function renderHomeRecent(gens) {
+          var card = el("homeRecentCard");
+          var rail = el("homeRecentRail");
+          if (!card || !rail) return;
+          function hide() { rail.innerHTML = ""; card.style.display = "none"; }
+          if (!token || !gens || !gens.length) { hide(); return; }
+          var done = gens.filter(function (g) { return String(g.status || "").toLowerCase() === "completed"; });
+          var items = (done.length ? done : gens).slice(0, 4);
+          if (!items.length) { hide(); return; }
+          rail.innerHTML = "";
+          items.forEach(function (g) {
+            var b = document.createElement("button");
+            b.type = "button";
+            b.className = "hr-item";
+            var isDone = String(g.status || "").toLowerCase() === "completed";
+            if (isDone && g.video_url && !isAudioOnlyGen(g)) {
+              var v = document.createElement("video");
+              v.src = resolveUrl(g.video_url);
+              v.preload = "metadata";
+              v.muted = true;
+              v.playsInline = true;
+              b.appendChild(v);
+            } else {
+              var ph = document.createElement("span");
+              ph.className = "hr-ph";
+              ph.textContent = isAudioOnlyGen(g) ? "Audio" : "Video";
+              b.appendChild(ph);
+            }
+            var p = document.createElement("span");
+            p.className = "hr-prompt";
+            p.textContent = g.prompt || "(no prompt)";
+            b.appendChild(p);
+            var chip = document.createElement("span");
+            chip.className = chipClass(g.status);
+            chip.textContent = g.status || "";
+            b.appendChild(chip);
+            b.addEventListener("click", function () { showView("history"); });
+            rail.appendChild(b);
+          });
+          card.style.display = "";
+        }
         function loadHistory() {
-          if (!token) { renderHistoryState("signedout"); return; }
+          if (!token) { renderHomeRecent(null); renderHistoryState("signedout"); return; }
           api("/api/history").then(function (res) {
-            if (res.network) { renderHistoryState("unreachable"); return; }
-            if (res.status === 401) { signOut(true); renderHistoryState("signedout"); return; }
-            if (!res.ok || !res.data) { renderHistoryState("unreachable"); return; }
+            if (res.network) { renderHomeRecent(null); renderHistoryState("unreachable"); return; }
+            if (res.status === 401) { signOut(true); renderHomeRecent(null); renderHistoryState("signedout"); return; }
+            if (!res.ok || !res.data) { renderHomeRecent(null); renderHistoryState("unreachable"); return; }
             if (res.data.credits !== undefined) setCredits(res.data.credits);
             var gens = res.data.generations || [];
             fillVoiceSources(gens);
-            if (!gens.length) { renderHistoryState("empty"); return; }
+            if (!gens.length) { renderHomeRecent(gens); renderHistoryState("empty"); return; }
             renderHistoryState("list");
             var list = $("#jobList");
             gens.forEach(function (g) {
@@ -4203,9 +4658,12 @@
               if (finishPanel) item.appendChild(finishPanel);
               list.appendChild(item);
             });
+            renderHomeRecent(gens);
           });
         }
         $("#refreshHistoryBtn").addEventListener("click", function () { loadHistory(); toast("History refreshed."); });
+        var hrAllBtn = el("homeRecentAll");
+        if (hrAllBtn) hrAllBtn.addEventListener("click", function () { showView("history"); });
 
         /* ---------- Google Play Billing (Digital Goods API) + gateway checkout ---------- */
         // The Digital Goods API exists ONLY inside the installed Play
@@ -5915,6 +6373,7 @@
             else scrollToEl(el('jobList') || el('balanceLine'), 0);
           }, 250);
         });
+        act('dr_itemDashboard', function () { if (typeof showView === 'function') showView('dashboard'); });
         act('dr_itemWallet', function () { go('buy'); scrollToEl(el('packGrid')); });
         act('dr_itemPlans', function () { go('plans'); });
         act('dr_itemBuy', function () { go('buy'); scrollToEl(el('buySubmitBtn')); });
@@ -5928,6 +6387,137 @@
         act('dr_itemHelp', function () { go('settings'); scrollToEl(el('feedbackCard'), 200); });
         act('dr_itemPrivacy', function () { go('privacy'); });
         act('dr_itemLogout', function () { var b = el('signOutBtn'); if (b) b.click(); });
+
+        /* ----- Phase S: dashboard shortcut tiles (same helpers) ----- */
+        var dbCreate = el('db_tileCreate');
+        if (dbCreate) dbCreate.addEventListener('click', function () { go('studio'); focusPrompt(); });
+        var dbBuy = el('db_tileBuy');
+        if (dbBuy) dbBuy.addEventListener('click', function () { go('buy'); });
+        var dbPlans = el('db_tilePlans');
+        if (dbPlans) dbPlans.addEventListener('click', function () { go('plans'); });
+        var dbHelp = el('db_tileHelp');
+        if (dbHelp) dbHelp.addEventListener('click', function () { go('settings'); scrollToEl(el('feedbackCard'), 200); });
+      })();
+    </script>
+
+    <script>
+      // Phase T — additive wiring for the redesign only: the two new
+      // drawer items (AI Auto Director, Video Tools), the Video Tools
+      // card rows, and the bottom-nav Join Clips behaviour. Everything
+      // drives the app's EXISTING controls (showView, the AI Auto
+      // toggle, the collapse cards, the source-image input, the join
+      // bar) — no new state, no duplicated generation logic.
+      (function () {
+        function el(id) { return document.getElementById(id); }
+        function scrollToEl(node, delay) {
+          if (!node) return;
+          setTimeout(function () {
+            try { node.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch (e) { node.scrollIntoView(); }
+          }, delay || 120);
+        }
+        function focusPrompt() {
+          var p = el('prompt');
+          if (!p) return;
+          try { p.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) {}
+          setTimeout(function () { try { p.focus({ preventScroll: true }); } catch (e) { p.focus(); } }, 380);
+        }
+        function expandCard(id) {
+          var c = el(id);
+          if (!c) return;
+          c.classList.remove('is-collapsed');
+          var h = c.querySelector('[data-collapse-head]');
+          if (h) h.setAttribute('aria-expanded', 'true');
+        }
+        function closeDrawer() {
+          var d = el('dr_drawer');
+          if (d) { d.classList.remove('dr-open'); d.setAttribute('aria-hidden', 'true'); }
+          var o = el('dr_overlay');
+          if (o) o.hidden = true;
+          document.body.classList.remove('dr-locked');
+        }
+        function goStudio() { if (typeof showView === 'function') showView('studio'); }
+        function ensureAutoOn() {
+          var t = el('aiAutoToggle');
+          if (t && !t.checked) { t.checked = true; t.dispatchEvent(new Event('change')); }
+        }
+        function joinScroll() {
+          setTimeout(function () {
+            var bar = el('joinBar');
+            if (bar && bar.classList.contains('show')) scrollToEl(bar, 0);
+            else scrollToEl(el('jobList') || el('balanceLine'), 0);
+          }, 250);
+        }
+
+        /* drawer: AI Auto Director (position 4) + Video Tools (5) */
+        var dAuto = el('dr_itemAuto');
+        if (dAuto) dAuto.addEventListener('click', function () { closeDrawer(); goStudio(); ensureAutoOn(); focusPrompt(); });
+        var dTools = el('dr_itemTools');
+        if (dTools) dTools.addEventListener('click', function () { closeDrawer(); goStudio(); scrollToEl(el('vt_toolsCard'), 200); });
+
+        /* Video Tools card rows */
+        var vImage = el('vt_toolImage');
+        if (vImage) vImage.addEventListener('click', function () {
+          expandCard('advancedCard');
+          var f = el('sourceImage');
+          if (f) f.click();
+        });
+        var vVoice = el('vt_toolVoice');
+        if (vVoice) vVoice.addEventListener('click', function () {
+          expandCard('advancedCard'); expandCard('voiceCard'); scrollToEl(el('voiceCard'), 200);
+        });
+        var vSound = el('vt_toolSound');
+        if (vSound) vSound.addEventListener('click', function () {
+          expandCard('advancedCard'); expandCard('soundCard'); scrollToEl(el('soundCard'), 200);
+        });
+        var vChars = el('vt_toolCharacters');
+        if (vChars) vChars.addEventListener('click', function () { scrollToEl(el('charactersCard'), 120); });
+        var vJoin = el('vt_toolJoin');
+        if (vJoin) vJoin.addEventListener('click', function () {
+          if (typeof showView === 'function') showView('history');
+          joinScroll();
+        });
+        var vTpl = el('vt_toolTemplates');
+        if (vTpl) vTpl.addEventListener('click', function () { scrollToEl(el('templateCard'), 120); });
+
+        /* Styles rail: each card drives the REAL mode/style cards in
+           Advanced (mode card click re-renders the style grid, then the
+           matching style card is clicked) — the same controls the
+           templates preset. Speaking has no style: it routes through
+           the real Talking Photo template chip (voice/lip-sync flow).
+           Animals have no dedicated style either: realistic mode is
+           what generates them, so the card sets realistic + prompt. */
+        function applyModeStyle(mode, style) {
+          expandCard('advancedCard');
+          var mc = document.querySelector('#modeGrid .mode-card[data-mode="' + mode + '"]');
+          if (mc) mc.click();
+          if (style) {
+            var sc2 = document.querySelector('#styleGrid .style-card[data-style="' + style + '"]');
+            if (sc2) sc2.click();
+          }
+        }
+        function bindStyle(id, fn) { var n = el(id); if (n) n.addEventListener('click', fn); }
+        bindStyle('sr_realistic', function () { applyModeStyle('realistic', 'realistic'); scrollToEl(el('advancedCard'), 150); });
+        bindStyle('sr_cartoon', function () { applyModeStyle('cartoon', 'cartoon'); scrollToEl(el('advancedCard'), 150); });
+        bindStyle('sr_animals', function () { applyModeStyle('realistic', 'realistic'); focusPrompt(); });
+        bindStyle('sr_speaking', function () {
+          expandCard('advancedCard');
+          var chip = document.querySelector('#templateGrid [data-template="talking-photo"]');
+          if (chip) chip.click();
+        });
+
+        /* bottom nav: Join Clips shares the History view (data-view=
+           history, so the generic tab handler + showView highlighting
+           work unchanged) — this only adds the join-bar scroll and
+           keeps exactly one of History / Join Clips highlighted. */
+        var bnJoin = el('bn_joinBtn');
+        var bnHist = el('bn_historyBtn');
+        if (bnJoin) bnJoin.addEventListener('click', function () {
+          if (bnHist) bnHist.classList.remove('active');
+          joinScroll();
+        });
+        if (bnHist) bnHist.addEventListener('click', function () {
+          if (bnJoin) bnJoin.classList.remove('active');
+        });
       })();
     </script>
   </body>
