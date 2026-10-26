@@ -4422,8 +4422,8 @@
         // shows the first frame as the preview; History itself plays the
         // same URL through the Studio player).
         function renderHomeRecent(gens) {
-          var card = el("homeRecentCard");
-          var rail = el("homeRecentRail");
+          var card = document.getElementById("homeRecentCard");
+          var rail = document.getElementById("homeRecentRail");
           if (!card || !rail) return;
           function hide() { rail.innerHTML = ""; card.style.display = "none"; }
           if (!token || !gens || !gens.length) { hide(); return; }
@@ -4662,7 +4662,7 @@
           });
         }
         $("#refreshHistoryBtn").addEventListener("click", function () { loadHistory(); toast("History refreshed."); });
-        var hrAllBtn = el("homeRecentAll");
+        var hrAllBtn = document.getElementById("homeRecentAll");
         if (hrAllBtn) hrAllBtn.addEventListener("click", function () { showView("history"); });
 
         /* ---------- Google Play Billing (Digital Goods API) + gateway checkout ---------- */
