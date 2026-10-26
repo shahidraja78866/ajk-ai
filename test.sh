@@ -29,7 +29,7 @@
 # test-gateway-stub.js). No real Google or PayFast calls anywhere.
 # The pricing-v9 tests are self-contained too: a sixth instance (port
 # 18092, own DB) started by this script covers the Weekly plan lifecycle,
-# the per-quality rate card charges and the 400-credit daily cap, so the
+# the per-quality rate card charges and the 4000-credit daily cap, so the
 # main server's generation budget is not touched.
 # The voice-system tests (Phase B) use a seventh instance (port 18091,
 # own DB) whose fal bases (FAL_API_BASE_URL + FAL_QUEUE_BASE_URL) point
@@ -100,7 +100,7 @@
 # instance (port 18058, own DB) with the fal bases pointed at a stub
 # (port 18059) extended with a Seedance FAILME hook: config block, the
 # can_seedance plan flag (Extra Pro only) + migration v17, exactly 10
-# generate calls (happy paths at 60/120 credits with the fal body
+# generate calls (happy paths at 600/1200 credits with the fal body
 # asserted field-for-field against the verified schema via both the
 # TEST_RECORD hook and the stub's recorded calls, the 403 entitlement
 # gate, the draft/character/image/aspect/sound/voice 400 gates — all
@@ -117,7 +117,7 @@
 # charging, an H3 generation whose recorded fal prompt carries the
 # appended directives and whose History row exposes the choices + the
 # exact directive phrase, the chip-overrides-prompt note on a confirmed
-# auto plan, Seedance 15s/30s happy paths (180/360 credits, string
+# auto plan, Seedance 15s/30s happy paths (1800/3600 credits, string
 # durations at the stub), a non-offered Seedance duration -> 400, and an
 # H3 15s request -> 400 (long durations are never faked for engines
 # whose schemas cap at 10s). 8 generate-family calls, inside the shared
@@ -186,8 +186,8 @@
 # routes with the uploaded file's public URL while the TTS call count
 # provably does not move, another user's upload id is a 404, and the
 # main server's /api/config models array is spot-checked against the
-# live pricing constants (H3 768P 5s = 10, speaking flat 50,
-# Seedance 720p 30s = 360).
+# live pricing constants (H3 768P 5s = 120, speaking flat 250,
+# Seedance 720p 30s = 3600).
 # The Phase P tests (TikTok + X redirect sign-in — completing the
 # owner's login-options directive) use a thirtieth instance (port
 # 18038, own DB) with TIKTOK_CLIENT_KEY/SECRET and
@@ -229,7 +229,7 @@ echo "--- auth ---"
 R=$(curl -s -X POST $B/api/auth/register -H 'Content-Type: application/json' -d '{"email":"test@example.com","password":"password123"}')
 echo "$R"
 TOKEN=$(echo $R | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
-check "register gives 100 credits" "100" "$(echo $R | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "register gives 1000 credits" "1000" "$(echo $R | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 DUP=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/auth/register -H 'Content-Type: application/json' -d '{"email":"test@example.com","password":"password123"}')
 check "duplicate register rejected" "409" "$DUP"
 BAD=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/auth/login -H 'Content-Type: application/json' -d '{"email":"test@example.com","password":"wrongpass1"}')
@@ -237,7 +237,7 @@ check "wrong password rejected" "401" "$BAD"
 L=$(curl -s -X POST $B/api/auth/login -H 'Content-Type: application/json' -d '{"email":"test@example.com","password":"password123"}')
 TOKEN=$(echo $L | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 ME=$(curl -s $B/api/me -H "Authorization: Bearer $TOKEN"); echo "$ME"
-check "me credits = 100" "100" "$(echo $ME | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "me credits = 1000" "1000" "$(echo $ME | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 NOAUTH=$(curl -s -o /dev/null -w '%{http_code}' $B/api/history)
 check "history requires auth" "401" "$NOAUTH"
 
@@ -247,14 +247,14 @@ check "bad aspect ratio rejected" "400" "$V"
 M=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/generate -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"prompt":"gore and violence scene"}')
 check "blocked prompt rejected" "400" "$M"
 ME2=$(curl -s $B/api/me -H "Authorization: Bearer $TOKEN")
-check "credits untouched by rejected prompts" "100" "$(echo $ME2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "credits untouched by rejected prompts" "1000" "$(echo $ME2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 echo "--- generation with dummy key: submit fails -> 502 + refund ---"
 G=$(curl -s -w '\n%{http_code}' -X POST $B/api/generate -H "Authorization: Bearer $TOKEN" -H 'Idempotency-Key: test-key-001' -H 'Content-Type: application/json' -d '{"prompt":"a kitten chasing a butterfly in a sunny garden","aspect_ratio":"16:9","duration":5,"style":"realistic"}')
 echo "$G"
 check "dummy-key generation returns 502" "502" "$(echo "$G" | tail -1)"
 HIST=$(curl -s $B/api/history -H "Authorization: Bearer $TOKEN"); echo "$HIST" | head -c 400; echo
-check "credits refunded after failure" "100" "$(echo $HIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "credits refunded after failure" "1000" "$(echo $HIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "history has 1 failed job" "failed" "$(echo $HIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["status"])')"
 JOBID=$(echo $HIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["id"])')
 
@@ -264,7 +264,7 @@ echo "$G2"
 check "duplicate flagged" "True" "$(echo $G2 | python3 -c 'import sys,json;print(json.load(sys.stdin).get("duplicate"))')"
 HIST2=$(curl -s $B/api/history -H "Authorization: Bearer $TOKEN")
 check "still only 1 job in history" "1" "$(echo $HIST2 | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["generations"]))')"
-check "credits still 100" "100" "$(echo $HIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "credits still 1000" "1000" "$(echo $HIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 echo "--- report endpoint ---"
 RP=$(curl -s -X POST $B/api/report -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "{\"generation_id\":$JOBID,\"reason\":\"test report\"}")
@@ -276,10 +276,10 @@ echo "--- automatic payments: FAIL CLOSED while unconfigured (main server) ---"
 CFG0=$(curl -s $B/api/config)
 check "config: play_billing_configured is false" "False" "$(echo $CFG0 | python3 -c 'import sys,json;print(json.load(sys.stdin)["play_billing_configured"])')"
 check "config: gateway_configured is false" "False" "$(echo $CFG0 | python3 -c 'import sys,json;print(json.load(sys.stdin)["gateway_configured"])')"
-UNCONF=$(curl -s -w '\n%{http_code}' -X POST $B/api/billing/play/verify -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"credits_100","purchase_token":"valid-pack-100"}')
+UNCONF=$(curl -s -w '\n%{http_code}' -X POST $B/api/billing/play/verify -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"credits_1000","purchase_token":"valid-pack-1000"}')
 check "play verify unconfigured -> 503" "503" "$(echo "$UNCONF" | tail -1)"
 check "play verify unconfigured error is billing_not_configured" "billing_not_configured" "$(echo "$UNCONF" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
-check "unconfigured play verify granted nothing" "100" "$(curl -s $B/api/me -H "Authorization: Bearer $TOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "unconfigured play verify granted nothing" "1000" "$(curl -s $B/api/me -H "Authorization: Bearer $TOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 GWUNCONF=$(curl -s -w '\n%{http_code}' -X POST $B/api/billing/gateway/checkout -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"pack_id":1}')
 check "gateway checkout unconfigured -> 503" "503" "$(echo "$GWUNCONF" | tail -1)"
 check "gateway checkout unconfigured error is gateway_not_configured" "gateway_not_configured" "$(echo "$GWUNCONF" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
@@ -287,15 +287,18 @@ check "gateway webhook unconfigured -> 503" "503" "$(curl -s -o /dev/null -w '%{
 
 echo "--- monetization: plans API (public) ---"
 PLANS=$(curl -s $B/api/plans); echo "$PLANS" | head -c 400; echo
-check "plans list has 4 plans" "4" "$(echo $PLANS | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["plans"]))')"
+check "plans list has 5 plans" "5" "$(echo $PLANS | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["plans"]))')"
 check "normal plan price Rs 5600" "5600" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="normal"][0]["price_monthly"])')"
 check "normal plan yearly Rs 56000" "56000" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="normal"][0]["price_yearly"])')"
-check "normal plan 400 credits/mo" "400" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="normal"][0]["credits_monthly"])')"
-check "weekly plan: Rs 1800/week, 80 credits/wk" "1800/80" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["plans"] if x["id"]=="weekly"][0];print(str(p["price_weekly"])+"/"+str(p["credits_weekly"]))')"
+check "normal plan 4000 credits/mo" "4000" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="normal"][0]["credits_monthly"])')"
+check "weekly plan: Rs 1800/week, 800 credits/wk" "1800/800" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["plans"] if x["id"]=="weekly"][0];print(str(p["price_weekly"])+"/"+str(p["credits_weekly"]))')"
 check "weekly plan has no monthly price (null)" "None" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="weekly"][0]["price_monthly"])')"
 check "normal plan: Veo flag off" "False" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="normal"][0]["features"]["can_veo"])')"
 check "pro plan: Veo + lip-sync flags on" "True/True" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["plans"] if x["id"]=="pro"][0];print(str(p["features"]["can_veo"])+"/"+str(p["features"]["can_lipsync"]))')"
 check "extrapro label is Native 4K" "Native 4K" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);print([p for p in d["plans"] if p["id"]=="extrapro"][0]["quality_label"])')"
+check "extrapremier plan: Rs 19999/mo, Rs 199990/yr, 10000 credits" "19999/199990/10000" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["plans"] if x["id"]=="extrapremier"][0];print(str(p["price_monthly"])+"/"+str(p["price_yearly"])+"/"+str(p["credits_monthly"]))')"
+check "extrapremier plan: all premium flags on (veo/lipsync/seedance)" "True/True/True" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);f=[x for x in d["plans"] if x["id"]=="extrapremier"][0]["features"];print(str(f["can_veo"])+"/"+str(f["can_lipsync"])+"/"+str(f["can_seedance"]))')"
+check "extrapremier plan: Native 4K, sorts last" "Native 4K/extrapremier" "$(echo $PLANS | python3 -c 'import sys,json;d=json.load(sys.stdin);ps=d["plans"];print([x for x in ps if x["id"]=="extrapremier"][0]["quality_label"]+"/"+ps[-1]["id"])')"
 
 echo "--- monetization: admin auth ---"
 AR=$(curl -s -X POST $B/api/auth/register -H 'Content-Type: application/json' -d '{"email":"admin@example.com","password":"password123"}')
@@ -314,9 +317,9 @@ MP=$(curl -s -X POST $B/api/admin/users/$PID/manual-payment -H "Authorization: B
 echo "$MP"
 check "manual payment ok" "True" "$(echo $MP | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
 PME=$(curl -s $B/api/me -H "Authorization: Bearer $PTOKEN")
-check "activation: total credits 100 free + 400 plan = 500" "500" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
-check "activation: plan bucket = 400" "400" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
-check "activation: free bucket untouched = 100" "100" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
+check "activation: total credits 1000 free + 4000 plan = 5000" "5000" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "activation: plan bucket = 4000" "4000" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
+check "activation: free bucket untouched = 1000" "1000" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
 check "activation: current plan is normal" "normal" "$(echo $PME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan"]["id"])')"
 PAY=$(curl -s $B/api/payments -H "Authorization: Bearer $PTOKEN")
 check "user payment history has 1 payment" "1" "$(echo $PAY | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["payments"]))')"
@@ -337,28 +340,28 @@ curl -s -o /dev/null -X POST $B/api/generate -H "Authorization: Bearer $PTOKEN" 
 PHIST=$(curl -s $B/api/history -H "Authorization: Bearer $PTOKEN")
 check "normal job routed at 768P" "768P" "$(echo $PHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["resolution"])')"
 check "normal job model is H3" "minimax/h3/text-to-video" "$(echo $PHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["model"])')"
-check "normal 10s job cost 20 credits" "20" "$(echo $PHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
-check "credits refunded to 500 after failed normal job" "500" "$(echo $PHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "normal 10s job cost 240 credits" "240" "$(echo $PHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
+check "credits refunded to 5000 after failed normal job" "5000" "$(echo $PHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 echo "--- monetization: extrapro native-4K routing + 4K rate card ---"
 MP2=$(curl -s -X POST $B/api/admin/users/$PID/manual-payment -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{"plan_id":"extrapro","period":"monthly"}')
 check "extrapro activation ok" "True" "$(echo $MP2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
 PME2=$(curl -s $B/api/me -H "Authorization: Bearer $PTOKEN")
-check "extrapro: total credits 100 free + 600 plan = 700" "700" "$(echo $PME2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "extrapro: total credits 1000 free + 6000 plan = 7000" "7000" "$(echo $PME2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "extrapro: plan switched" "extrapro" "$(echo $PME2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan"]["id"])')"
 curl -s -o /dev/null -X POST $B/api/generate -H "Authorization: Bearer $PTOKEN" -H 'Idempotency-Key: plan-4k-1' -H 'Content-Type: application/json' -d '{"prompt":"a mountain sunrise above the clouds","aspect_ratio":"16:9","duration":5}'
 PHIST2=$(curl -s $B/api/history -H "Authorization: Bearer $PTOKEN")
 check "4K job routed at 4K" "4K" "$(echo $PHIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["resolution"])')"
 check "4K job uses FAL_MODEL_4K model" "$TEST_FAL_MODEL_4K" "$(echo $PHIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["model"])')"
-check "4K 5s job cost (rate card) = 40 credits" "40" "$(echo $PHIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
-check "credits refunded to 700 after failed 4K job" "700" "$(echo $PHIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "4K 5s job cost (rate card) = 450 credits" "450" "$(echo $PHIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
+check "credits refunded to 7000 after failed 4K job" "7000" "$(echo $PHIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 JOB4K=$(echo $PHIST2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["id"])')
 curl -s $B/api/generations/$JOB4K -H "Authorization: Bearer $PTOKEN" > /dev/null
-check "no double refund after polling failed 4K job" "700" "$(curl -s $B/api/me -H "Authorization: Bearer $PTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "no double refund after polling failed 4K job" "7000" "$(curl -s $B/api/me -H "Authorization: Bearer $PTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 curl -s -o /dev/null -X POST $B/api/generate -H "Authorization: Bearer $PTOKEN" -H 'Idempotency-Key: plan-4k-low' -H 'Content-Type: application/json' -d '{"prompt":"a quiet forest stream in soft light","aspect_ratio":"16:9","duration":5,"resolution":"768P"}'
 PHIST3=$(curl -s $B/api/history -H "Authorization: Bearer $PTOKEN")
 check "extrapro lower-quality pick routed at 768P" "768P" "$(echo $PHIST3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["resolution"])')"
-check "lower-quality pick cost normal = 10 credits" "10" "$(echo $PHIST3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
+check "lower-quality pick cost normal = 120 credits" "120" "$(echo $PHIST3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
 check "lower-quality pick uses H3 model" "minimax/h3/text-to-video" "$(echo $PHIST3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["model"])')"
 
 echo "--- monetization: 4K fal request body shape (o3 schema: no resolution, string duration) ---"
@@ -375,18 +378,18 @@ R2119=$(curl -s -X POST $B/api/generate -H "Authorization: Bearer $PTOKEN" -H 'I
 PHIST4=$(curl -s $B/api/history -H "Authorization: Bearer $PTOKEN")
 check "21:9 fallback routed at 2K" "2K" "$(echo $PHIST4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["resolution"])')"
 check "21:9 fallback uses H3 model" "minimax/h3/text-to-video" "$(echo $PHIST4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["model"])')"
-check "21:9 fallback cost (2K rate) = 15 credits" "15" "$(echo $PHIST4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
+check "21:9 fallback cost (2K rate) = 180 credits" "180" "$(echo $PHIST4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
 # (The fallback `note` only appears on a successful provider response, which is
 #  unreachable with a dummy key; routing/cost/refund are fully asserted above.)
 FB2=$(curl -s $B/api/_test/fal-body)
 check "fallback fal body keeps resolution param" "2K" "$(echo $FB2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["body"].get("resolution","absent"))')"
 check "fallback fal body duration is integer" "5-int" "$(echo $FB2 | python3 -c 'import sys,json;b=json.load(sys.stdin)["body"];print(str(b["duration"])+("-int" if isinstance(b["duration"],int) else "-NOTINT"))')"
-check "credits refunded to 700 after failed fallback job" "700" "$(echo $PHIST4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "credits refunded to 7000 after failed fallback job" "7000" "$(echo $PHIST4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 echo "--- monetization: renewal grant + cancel ---"
 RG=$(curl -s -X POST $B/api/admin/users/$PID/grant-renewal -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{}')
 check "renewal grant ok" "True" "$(echo $RG | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
-check "renewal resets plan bucket to 600" "600" "$(curl -s $B/api/me -H "Authorization: Bearer $PTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
+check "renewal resets plan bucket to 6000" "6000" "$(curl -s $B/api/me -H "Authorization: Bearer $PTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
 CX=$(curl -s -X POST $B/api/admin/users/$PID/cancel-subscription -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{}')
 check "cancel sets status canceled" "canceled" "$(echo $CX | python3 -c 'import sys,json;print(json.load(sys.stdin)["subscription"]["status"])')"
 
@@ -407,23 +410,23 @@ check "current-month revenue = 19600" "19600" "$(echo $REV | python3 -c 'import 
 echo "--- credit packs: catalogue, purchase flow, admin approval (exactly once) ---"
 PK=$(curl -s $B/api/packs); echo "$PK" | head -c 300; echo
 check "packs list has 3 packs" "3" "$(echo $PK | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["packs"]))')"
-check "pack 50 credits = Rs 899" "50/899" "$(echo $PK | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["packs"] if x["credits"]==50][0];print(str(p["credits"])+"/"+str(p["price_pkr"]))')"
-check "pack 100 credits = Rs 1499" "100/1499" "$(echo $PK | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["packs"] if x["credits"]==100][0];print(str(p["credits"])+"/"+str(p["price_pkr"]))')"
-check "pack 250 credits = Rs 3499" "250/3499" "$(echo $PK | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["packs"] if x["credits"]==250][0];print(str(p["credits"])+"/"+str(p["price_pkr"]))')"
+check "pack 500 credits = Rs 899" "500/899" "$(echo $PK | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["packs"] if x["credits"]==500][0];print(str(p["credits"])+"/"+str(p["price_pkr"]))')"
+check "pack 1000 credits = Rs 1499" "1000/1499" "$(echo $PK | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["packs"] if x["credits"]==1000][0];print(str(p["credits"])+"/"+str(p["price_pkr"]))')"
+check "pack 2500 credits = Rs 3499" "2500/3499" "$(echo $PK | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["packs"] if x["credits"]==2500][0];print(str(p["credits"])+"/"+str(p["price_pkr"]))')"
 check "config exposes payment_methods object" "dict" "$(curl -s $B/api/config | python3 -c 'import sys,json;print(type(json.load(sys.stdin)["payment_methods"]).__name__)')"
 check "NayaPay QR image is served (/nayapay-qr.jpg)" "200" "$(curl -s -o /dev/null -w '%{http_code}' $B/nayapay-qr.jpg)"
-PACK100=$(echo $PK | python3 -c 'import sys,json;d=json.load(sys.stdin);print([x for x in d["packs"] if x["credits"]==100][0]["id"])')
-PACK50=$(echo $PK | python3 -c 'import sys,json;d=json.load(sys.stdin);print([x for x in d["packs"] if x["credits"]==50][0]["id"])')
-PACK250=$(echo $PK | python3 -c 'import sys,json;d=json.load(sys.stdin);print([x for x in d["packs"] if x["credits"]==250][0]["id"])')
+PACK100=$(echo $PK | python3 -c 'import sys,json;d=json.load(sys.stdin);print([x for x in d["packs"] if x["credits"]==1000][0]["id"])')
+PACK50=$(echo $PK | python3 -c 'import sys,json;d=json.load(sys.stdin);print([x for x in d["packs"] if x["credits"]==500][0]["id"])')
+PACK250=$(echo $PK | python3 -c 'import sys,json;d=json.load(sys.stdin);print([x for x in d["packs"] if x["credits"]==2500][0]["id"])')
 KR=$(curl -s -X POST $B/api/auth/register -H 'Content-Type: application/json' -d '{"email":"packuser@example.com","password":"password123"}')
 KTOKEN=$(echo $KR | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 PUR=$(curl -s -w '\n%{http_code}' -X POST $B/api/packs/$PACK100/purchase -H "Authorization: Bearer $KTOKEN" -H 'Content-Type: application/json' -d '{"method":"easypaisa","transaction_ref":"TXN-99887766"}')
 check "pack purchase created (201)" "201" "$(echo "$PUR" | tail -1)"
 PURBODY=$(echo "$PUR" | sed '$d')
 check "purchase starts pending" "pending" "$(echo $PURBODY | python3 -c 'import sys,json;print(json.load(sys.stdin)["purchase"]["status"])')"
-check "purchase snapshots 100 credits / Rs 1499" "100/1499" "$(echo $PURBODY | python3 -c 'import sys,json;p=json.load(sys.stdin)["purchase"];print(str(p["credits"])+"/"+str(p["amount_pkr"]))')"
+check "purchase snapshots 1000 credits / Rs 1499" "1000/1499" "$(echo $PURBODY | python3 -c 'import sys,json;p=json.load(sys.stdin)["purchase"];print(str(p["credits"])+"/"+str(p["amount_pkr"]))')"
 PURID=$(echo $PURBODY | python3 -c 'import sys,json;print(json.load(sys.stdin)["purchase"]["id"])')
-check "pending purchase grants nothing yet" "100" "$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "pending purchase grants nothing yet" "1000" "$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "short transaction ref rejected 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/packs/$PACK100/purchase -H "Authorization: Bearer $KTOKEN" -H 'Content-Type: application/json' -d '{"method":"easypaisa","transaction_ref":"abc"}')"
 check "unknown method rejected 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/packs/$PACK100/purchase -H "Authorization: Bearer $KTOKEN" -H 'Content-Type: application/json' -d '{"method":"paypal","transaction_ref":"TXN-123456"}')"
 check "unknown pack rejected 404" "404" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/packs/999/purchase -H "Authorization: Bearer $KTOKEN" -H 'Content-Type: application/json' -d '{"method":"bank","transaction_ref":"TXN-123456"}')"
@@ -436,26 +439,26 @@ check "admin pending list contains the purchase" "yes" "$(curl -s "$B/api/admin/
 APPR=$(curl -s -X POST $B/api/admin/pack-purchases/$PURID/approve -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{}')
 check "admin approve ok" "True" "$(echo $APPR | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
 KME=$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN")
-check "approve granted pack into free bucket (100 signup + 100 pack)" "200" "$(echo $KME | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
-check "balance after approve = 200" "200" "$(echo $KME | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "approve granted pack into free bucket (1000 signup + 1000 pack)" "2000" "$(echo $KME | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
+check "balance after approve = 2000" "2000" "$(echo $KME | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "second approve is a conflict (409)" "409" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/admin/pack-purchases/$PURID/approve -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{}')"
-check "double approve did NOT double-grant" "200" "$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "double approve did NOT double-grant" "2000" "$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 PUR2=$(curl -s -X POST $B/api/packs/$PACK50/purchase -H "Authorization: Bearer $KTOKEN" -H 'Content-Type: application/json' -d '{"method":"jazzcash","transaction_ref":"JC-55544433"}')
 PUR2ID=$(echo $PUR2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["purchase"]["id"])')
 REJ=$(curl -s -X POST $B/api/admin/pack-purchases/$PUR2ID/reject -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{"note":"No matching payment found"}')
 check "admin reject ok" "rejected" "$(echo $REJ | python3 -c 'import sys,json;print(json.load(sys.stdin)["purchase"]["status"])')"
-check "rejected purchase granted nothing" "200" "$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "rejected purchase granted nothing" "2000" "$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 echo "--- credit packs: nayapay purchase -> approve grants exactly once ---"
 PUR3=$(curl -s -X POST $B/api/packs/$PACK50/purchase -H "Authorization: Bearer $KTOKEN" -H 'Content-Type: application/json' -d '{"method":"nayapay","transaction_ref":"NP-2026-445566"}')
 check "nayapay purchase created pending" "pending" "$(echo $PUR3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["purchase"]["status"])')"
 check "nayapay purchase method recorded" "nayapay" "$(echo $PUR3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["purchase"]["method"])')"
 PUR3ID=$(echo $PUR3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["purchase"]["id"])')
-check "nayapay pending purchase grants nothing" "200" "$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "nayapay pending purchase grants nothing" "2000" "$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 APPR3=$(curl -s -X POST $B/api/admin/pack-purchases/$PUR3ID/approve -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{}')
 check "nayapay approve ok" "True" "$(echo $APPR3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
-check "nayapay approve granted 50 into free bucket (250 total)" "250" "$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
+check "nayapay approve granted 500 into free bucket (2500 total)" "2500" "$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
 check "nayapay double approve is a conflict (409)" "409" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/admin/pack-purchases/$PUR3ID/approve -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{}')"
-check "nayapay double approve did NOT double-grant" "250" "$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "nayapay double approve did NOT double-grant" "2500" "$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 PE2=$(curl -s -X PUT $B/api/admin/packs/$PACK250 -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{"price_pkr":3599}')
 check "admin pack price edit returns 3599" "3599" "$(echo $PE2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["pack"]["price_pkr"])')"
 check "public packs API shows edited price" "3599" "$(curl -s $B/api/packs | python3 -c "import sys,json;d=json.load(sys.stdin);print([x for x in d['packs'] if x['id']==$PACK250][0]['price_pkr'])")"
@@ -499,7 +502,7 @@ LHIST=$(curl -s $B2/api/history -H "Authorization: Bearer $LTOKEN")
 check "history stores the original urdu prompt" "$UR_PROMPT" "$(echo $LHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["prompt"])')"
 check "history stores prompt_language = ur" "ur" "$(echo $LHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["prompt_language"])')"
 check "history stores the translated prompt" "TRANSLATED: $UR_PROMPT" "$(echo $LHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["translated_prompt"])')"
-check "urdu job refunded to 100 after dummy-key failure" "100" "$(echo $LHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "urdu job refunded to 1000 after dummy-key failure" "1000" "$(echo $LHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 # (c) English and Chinese are NOT translated (sent as-is; stub not called).
 CNT_BEFORE=$(curl -s "http://127.0.0.1:$STUB_PORT/__count" | python3 -c 'import sys,json;print(json.load(sys.stdin)["calls"])')
 curl -s -o /dev/null -X POST $B2/api/generate -H "Authorization: Bearer $LTOKEN" -H 'Idempotency-Key: lang-en-1' -H 'Content-Type: application/json' -d '{"prompt":"a red kite over the beach","aspect_ratio":"16:9","duration":5,"language":"en"}'
@@ -544,10 +547,10 @@ env DB_PATH=/tmp/myvideoai-join-test.db PORT=18096 FAL_KEY=dummy_test_key "$JOIN
 SRV3_PID=$!
 for i in $(seq 1 40); do curl -s -o /dev/null $B3/api/health && break || sleep 0.25; done
 CFG3=$(curl -s $B3/api/config)
-check "config cost 5s = 10 credits (rescaled)" "10" "$(echo $CFG3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_by_duration"]["5"])')"
-check "config cost 10s = 20 credits (rescaled)" "20" "$(echo $CFG3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_by_duration"]["10"])')"
-check "config signup credits = 100 (rescaled)" "100" "$(echo $CFG3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["signup_credits"])')"
-check "config daily cap = 400" "400" "$(echo $CFG3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["max_daily_credits"])')"
+check "config cost 5s = 120 credits (rescaled x10)" "120" "$(echo $CFG3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_by_duration"]["5"])')"
+check "config cost 10s = 240 credits (rescaled x10)" "240" "$(echo $CFG3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_by_duration"]["10"])')"
+check "config signup credits = 1000 (rescaled x10)" "1000" "$(echo $CFG3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["signup_credits"])')"
+check "config daily cap = 4000" "4000" "$(echo $CFG3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["max_daily_credits"])')"
 check "config payment_methods includes set easypaisa" "0300-1111111" "$(echo $CFG3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["payment_methods"].get("easypaisa"))')"
 check "config payment_methods omits unset jazzcash" "absent" "$(echo $CFG3 | python3 -c 'import sys,json;print("present" if "jazzcash" in json.load(sys.stdin)["payment_methods"] else "absent")')"
 JR=$(curl -s -X POST $B3/api/auth/register -H 'Content-Type: application/json' -d '{"email":"joiner@example.com","password":"password123"}')
@@ -559,7 +562,7 @@ OID=$(curl -s $B3/api/me -H "Authorization: Bearer $OTOKEN" | python3 -c 'import
 SEED=$(node --input-type=module -e "
 import { DatabaseSync } from 'node:sqlite';
 const db = new DatabaseSync('/tmp/myvideoai-join-test.db');
-const ins = (uid, url, status) => Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(uid, 'seed clip', '16:9', 1, 'realistic', status, url, 10).lastInsertRowid);
+const ins = (uid, url, status) => Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(uid, 'seed clip', '16:9', 1, 'realistic', status, url, 100).lastInsertRowid);
 console.log([ins($JID, 'http://127.0.0.1:$CLIP_PORT/clipA.mp4', 'completed'),
              ins($JID, 'http://127.0.0.1:$CLIP_PORT/clipB.mp4', 'completed'),
              ins($JID, null, 'failed'),
@@ -579,7 +582,7 @@ JURL=$(echo $JBODY | python3 -c 'import sys,json;print(json.load(sys.stdin)["gen
 check "joined video_url under /files/joined/" "yes" "$(echo $JBODY | python3 -c 'import sys,json;u=json.load(sys.stdin)["generation"]["video_url"];print("yes" if u.startswith("/files/joined/") else "no")')"
 JHIST=$(curl -s $B3/api/history -H "Authorization: Bearer $JTOKEN")
 check "joined row is newest in history" "Joined video (2 clips)" "$(echo $JHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["prompt"])')"
-check "join charged nothing (balance still 100)" "100" "$(echo $JHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "join charged nothing (balance still 1000)" "1000" "$(echo $JHIST | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "joined file is served (200)" "200" "$(curl -s -o /tmp/joined-dl.mp4 -w '%{http_code}' $B3$JURL)"
 check "joined output duration ~2s" "ok" "$("$FFBIN" -i /tmp/joined-dl.mp4 2>&1 | python3 -c 'import sys,re; m=re.search(r"Duration: (\d+):(\d+):([\d.]+)", sys.stdin.read()); d=int(m.group(1))*3600+int(m.group(2))*60+float(m.group(3)) if m else -1; print("ok" if 1.4 <= d <= 2.6 else "bad")')"
 check "joined output normalized to first clip 320x240" "320x240" "$("$FFBIN" -i /tmp/joined-dl.mp4 2>&1 | python3 -c 'import sys,re; m=re.search(r"[,\s](\d{2,5})x(\d{2,5})(?=[,\s\[])", sys.stdin.read()); print(m.group(1)+"x"+m.group(2) if m else "none")')"
@@ -606,9 +609,9 @@ check "billing instance: gateway_configured true (mock mode)" "True" "$(echo $CF
 PL4=$(curl -s $B4/api/plans)
 check "normal plan exposes play product ids" "ajk_normal_monthly/ajk_normal_yearly" "$(echo $PL4 | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["plans"] if x["id"]=="normal"][0];print(p["play_product_id"]["monthly"]+"/"+p["play_product_id"]["yearly"])')"
 PK4=$(curl -s $B4/api/packs)
-check "pack 100 exposes play product id credits_100" "credits_100" "$(echo $PK4 | python3 -c 'import sys,json;d=json.load(sys.stdin);print([x for x in d["packs"] if x["credits"]==100][0]["play_product_id"])')"
-PACK100_4=$(echo $PK4 | python3 -c 'import sys,json;d=json.load(sys.stdin);print([x for x in d["packs"] if x["credits"]==100][0]["id"])')
-PACK50_4=$(echo $PK4 | python3 -c 'import sys,json;d=json.load(sys.stdin);print([x for x in d["packs"] if x["credits"]==50][0]["id"])')
+check "pack 1000 exposes play product id credits_1000" "credits_1000" "$(echo $PK4 | python3 -c 'import sys,json;d=json.load(sys.stdin);print([x for x in d["packs"] if x["credits"]==1000][0]["play_product_id"])')"
+PACK100_4=$(echo $PK4 | python3 -c 'import sys,json;d=json.load(sys.stdin);print([x for x in d["packs"] if x["credits"]==1000][0]["id"])')
+PACK50_4=$(echo $PK4 | python3 -c 'import sys,json;d=json.load(sys.stdin);print([x for x in d["packs"] if x["credits"]==500][0]["id"])')
 BR4=$(curl -s -X POST $B4/api/auth/register -H 'Content-Type: application/json' -d '{"email":"billuser@example.com","password":"password123"}')
 BTOKEN=$(echo $BR4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 AR4=$(curl -s -X POST $B4/api/auth/register -H 'Content-Type: application/json' -d '{"email":"billadmin@example.com","password":"password123"}')
@@ -617,40 +620,40 @@ OR4=$(curl -s -X POST $B4/api/auth/register -H 'Content-Type: application/json' 
 OTOKEN4=$(echo $OR4 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 
 echo "--- play billing: (b) valid pack token grants exactly once ---"
-V1=$(curl -s -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"credits_100","purchase_token":"valid-pack-100"}')
+V1=$(curl -s -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"credits_1000","purchase_token":"valid-pack-1000"}')
 check "play pack verify ok" "True" "$(echo $V1 | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
 check "play pack verify status succeeded" "succeeded" "$(echo $V1 | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])')"
-check "play pack grant: free bucket 100 signup + 100 pack = 200" "200" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
-V2=$(curl -s -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"credits_100","purchase_token":"valid-pack-100"}')
+check "play pack grant: free bucket 1000 signup + 1000 pack = 2000" "2000" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
+V2=$(curl -s -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"credits_1000","purchase_token":"valid-pack-1000"}')
 check "play pack replay flagged duplicate" "True" "$(echo $V2 | python3 -c 'import sys,json;print(json.load(sys.stdin).get("duplicate"))')"
-check "play pack replay granted nothing more (total still 200)" "200" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "play pack replay granted nothing more (total still 2000)" "2000" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 echo "--- play billing: (f) a token is bound to its first user ---"
-check "other user replaying the token -> 409" "409" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $OTOKEN4" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"credits_100","purchase_token":"valid-pack-100"}')"
-check "other user balance unchanged (100)" "100" "$(curl -s $B4/api/me -H "Authorization: Bearer $OTOKEN4" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "other user replaying the token -> 409" "409" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $OTOKEN4" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"credits_1000","purchase_token":"valid-pack-1000"}')"
+check "other user balance unchanged (1000)" "1000" "$(curl -s $B4/api/me -H "Authorization: Bearer $OTOKEN4" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 echo "--- play billing: (d) unknown product / unverifiable / unpaid grant nothing ---"
-check "unknown play product -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"nope_product","purchase_token":"valid-pack-100"}')"
-check "token google does not know -> 502" "502" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"credits_100","purchase_token":"bogus-token"}')"
-check "purchase not in paid state -> 402" "402" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"credits_50","purchase_token":"pending-pack-50"}')"
-check "failed verifications granted nothing (total still 200)" "200" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "unknown play product -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"nope_product","purchase_token":"valid-pack-1000"}')"
+check "token google does not know -> 502" "502" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"credits_1000","purchase_token":"bogus-token"}')"
+check "purchase not in paid state -> 402" "402" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"credits_500","purchase_token":"pending-pack-500"}')"
+check "failed verifications granted nothing (total still 2000)" "2000" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 echo "--- play billing: (c) valid subscription token activates the plan ---"
 V3=$(curl -s -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d '{"kind":"subscription","product_id":"ajk_normal_monthly","purchase_token":"valid-sub-monthly"}')
 check "play sub verify ok" "True" "$(echo $V3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
 BME=$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN"); echo "$BME"
 check "play sub: current plan is normal" "normal" "$(echo $BME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan"]["id"])')"
-check "play sub: plan bucket granted 400" "400" "$(echo $BME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
+check "play sub: plan bucket granted 4000" "4000" "$(echo $BME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
 check "play sub: subscription status active" "active" "$(echo $BME | python3 -c 'import sys,json;print(json.load(sys.stdin)["subscription"]["status"])')"
-check "play sub: total = 200 free + 400 plan = 600" "600" "$(echo $BME | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "play sub: total = 2000 free + 4000 plan = 6000" "6000" "$(echo $BME | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 echo "--- play billing: (e) voided purchase sync claws credits back ---"
-V4=$(curl -s -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"credits_100","purchase_token":"voided-token"}')
-check "voided-token purchase grants first (free 300)" "300" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
+V4=$(curl -s -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d '{"kind":"pack","product_id":"credits_1000","purchase_token":"voided-token"}')
+check "voided-token purchase grants first (free 3000)" "3000" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
 SYNC=$(curl -s -X POST $B4/api/admin/billing/sync-voided -H "Authorization: Bearer $ATOKEN4" -H 'Content-Type: application/json' -d '{}')
 check "sync-voided ok" "True" "$(echo $SYNC | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
-check "sync-voided found and clawed the payment" "100" "$(echo $SYNC | python3 -c 'import sys,json;r=[x for x in json.load(sys.stdin)["results"] if x.get("token")=="voided-token"][0];print(r["clawed"])')"
-check "clawback: free bucket back to 200" "200" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
+check "sync-voided found and clawed the payment" "1000" "$(echo $SYNC | python3 -c 'import sys,json;r=[x for x in json.load(sys.stdin)["results"] if x.get("token")=="voided-token"][0];print(r["clawed"])')"
+check "clawback: free bucket back to 2000" "2000" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
 check "clawback fully recovered: credit_deficit 0" "0" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credit_deficit"])')"
 check "voided payment marked refunded" "refunded" "$(curl -s $B4/api/payments -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print([p for p in json.load(sys.stdin)["payments"] if p["provider_txn_id"]=="voided-token"][0]["status"])')"
 
@@ -661,27 +664,27 @@ CO1B=$(echo "$CO1" | sed '$d')
 BASKET1=$(echo $CO1B | python3 -c 'import sys,json;print(json.load(sys.stdin)["basket_id"])')
 check "gateway checkout URL is the PayFast PostTransaction endpoint" "yes" "$(echo $CO1B | python3 -c 'import sys,json;u=json.load(sys.stdin)["checkout_url"];print("yes" if u.endswith("/Ecommerce/api/Transaction/PostTransaction") else "no")')"
 check "gateway checkout params carry the merchant signature" "yes" "$(echo $CO1B | python3 -c 'import sys,json;s=json.load(sys.stdin)["params"].get("SIGNATURE","");print("yes" if len(s)==32 else "no")')"
-check "gateway checkout granted nothing (total still 600)" "600" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "gateway checkout granted nothing (total still 6000)" "6000" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 echo "--- gateway: (b) correctly-signed success webhook grants exactly once ---"
 WB1=$(node "$(dirname "$0")/test-gateway-stub.js" testmerchant "AJK AI" 1499 "$BASKET1" 00 TXN-GW-1)
 WH1=$(curl -s -X POST $B4/api/billing/gateway/webhook -H 'Content-Type: application/x-www-form-urlencoded' -d "$WB1")
-check "gateway success webhook grants 100" "100" "$(echo $WH1 | python3 -c 'import sys,json;print(json.load(sys.stdin)["granted"])')"
-check "gateway grant landed in free bucket (300)" "300" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
+check "gateway success webhook grants 1000" "1000" "$(echo $WH1 | python3 -c 'import sys,json;print(json.load(sys.stdin)["granted"])')"
+check "gateway grant landed in free bucket (3000)" "3000" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
 WH1B=$(curl -s -X POST $B4/api/billing/gateway/webhook -H 'Content-Type: application/x-www-form-urlencoded' -d "$WB1")
 check "gateway webhook replay flagged duplicate" "True" "$(echo $WH1B | python3 -c 'import sys,json;print(json.load(sys.stdin).get("duplicate"))')"
-check "gateway replay granted nothing more (free still 300)" "300" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
+check "gateway replay granted nothing more (free still 3000)" "3000" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
 
 echo "--- gateway: (c) bad signature rejected, (d) failure status grants nothing ---"
 CO2=$(curl -s -X POST $B4/api/billing/gateway/checkout -H "Authorization: Bearer $BTOKEN" -H 'Content-Type: application/json' -d "{\"pack_id\":$PACK50_4}")
 BASKET2=$(echo $CO2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["basket_id"])')
 WBAD=$(node "$(dirname "$0")/test-gateway-stub.js" testmerchant "WRONG NAME" 899 "$BASKET2" 00 TXN-GW-BAD)
 check "bad-signature webhook -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B4/api/billing/gateway/webhook -H 'Content-Type: application/x-www-form-urlencoded' -d "$WBAD")"
-check "bad signature granted nothing (free still 300)" "300" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
+check "bad signature granted nothing (free still 3000)" "3000" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
 WFAIL=$(node "$(dirname "$0")/test-gateway-stub.js" testmerchant "AJK AI" 899 "$BASKET2" failed TXN-GW-2)
 WHF=$(curl -s -X POST $B4/api/billing/gateway/webhook -H 'Content-Type: application/x-www-form-urlencoded' -d "$WFAIL")
 check "failure webhook grants 0" "0" "$(echo $WHF | python3 -c 'import sys,json;print(json.load(sys.stdin)["granted"])')"
-check "failure webhook granted nothing (free still 300)" "300" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
+check "failure webhook granted nothing (free still 3000)" "3000" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
 check "failed gateway payment marked failed" "failed" "$(curl -s $B4/api/payments -H "Authorization: Bearer $BTOKEN" | python3 -c "import sys,json;print([p for p in json.load(sys.stdin)['payments'] if p['provider_txn_id']=='$BASKET2'][0]['status'])")"
 
 echo "--- gateway: (e) verified reversal claws credits back ---"
@@ -689,11 +692,11 @@ CO3=$(curl -s -X POST $B4/api/billing/gateway/checkout -H "Authorization: Bearer
 BASKET3=$(echo $CO3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["basket_id"])')
 WSUC=$(node "$(dirname "$0")/test-gateway-stub.js" testmerchant "AJK AI" 899 "$BASKET3" 00 TXN-GW-3)
 curl -s -X POST $B4/api/billing/gateway/webhook -H 'Content-Type: application/x-www-form-urlencoded' -d "$WSUC" > /dev/null
-check "gateway pack-50 grant landed (free 350)" "350" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
+check "gateway pack-500 grant landed (free 3500)" "3500" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
 WREV=$(node "$(dirname "$0")/test-gateway-stub.js" testmerchant "AJK AI" 899 "$BASKET3" refunded TXN-GW-3)
 WHR=$(curl -s -X POST $B4/api/billing/gateway/webhook -H 'Content-Type: application/x-www-form-urlencoded' -d "$WREV")
-check "reversal webhook claws back 50" "50" "$(echo $WHR | python3 -c 'import sys,json;print(json.load(sys.stdin)["clawed_back"])')"
-check "reversal: free bucket back to 300" "300" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
+check "reversal webhook claws back 500" "500" "$(echo $WHR | python3 -c 'import sys,json;print(json.load(sys.stdin)["clawed_back"])')"
+check "reversal: free bucket back to 3000" "3000" "$(curl -s $B4/api/me -H "Authorization: Bearer $BTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
 check "reversed gateway payment marked refunded" "refunded" "$(curl -s $B4/api/payments -H "Authorization: Bearer $BTOKEN" | python3 -c "import sys,json;print([p for p in json.load(sys.stdin)['payments'] if p['provider_txn_id']=='$BASKET3'][0]['status'])")"
 
 echo "--- play billing: weekly subscription via the weekly Play product ---"
@@ -707,7 +710,7 @@ V5=$(curl -s -X POST $B4/api/billing/play/verify -H "Authorization: Bearer $OTOK
 check "play weekly verify ok" "True" "$(echo $V5 | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
 OME=$(curl -s $B4/api/me -H "Authorization: Bearer $OTOKEN4")
 check "play weekly: current plan is weekly" "weekly" "$(echo $OME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan"]["id"])')"
-check "play weekly: plan bucket granted 80" "80" "$(echo $OME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
+check "play weekly: plan bucket granted 800" "800" "$(echo $OME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
 check "play weekly: subscription period is weekly" "weekly" "$(echo $OME | python3 -c 'import sys,json;print(json.load(sys.stdin)["subscription"]["period"])')"
 kill $SRV4_PID 2>/dev/null
 
@@ -846,7 +849,7 @@ const p = db.prepare(\"SELECT price_monthly, price_yearly, credits_monthly FROM 
 const mig = db.prepare('SELECT version FROM schema_migrations WHERE version = 8').get();
 console.log(mig ? [p.price_monthly, p.price_yearly, p.credits_monthly].join('/') : 'missing');
 ")"
-check "Pro keeps its v9 values after v8 re-apply (9500/500)" "9500/500" "$(node --input-type=module -e "
+check "Pro keeps its v9 values after v8 re-apply (9500/5000)" "9500/5000" "$(node --input-type=module -e "
 import { DatabaseSync } from 'node:sqlite';
 const db = new DatabaseSync('/tmp/myvideoai-modes-test.db');
 const p = db.prepare(\"SELECT price_monthly, credits_monthly FROM plans WHERE id = 'pro'\").get();
@@ -909,13 +912,13 @@ console.log(db.prepare(\"SELECT price_monthly FROM plans WHERE id = 'normal'\").
 kill $SRV5_PID $WM_PID 2>/dev/null
 rm -rf "$(dirname "$0")/data/uploads/$MID" "$(dirname "$0")/data/uploads/$OID5" 2>/dev/null
 
-echo "--- pricing v9: weekly plan, per-quality rate card, daily cap 400 (own instance) ---"
+echo "--- pricing v9: weekly plan, per-quality rate card, daily cap 4000 (own instance) ---"
 # Self-contained SIXTH instance (own throwaway DB). Kept off the main
 # server because its per-IP generation budget is nearly exhausted by the
 # earlier sections. Covers: /api/config exposing the full rate card,
-# /api/plans weekly + feature flags, weekly activation (80 credits,
+# /api/plans weekly + feature flags, weekly activation (800 credits,
 # 7-day period, Rs 1,800 payment), period-fit rejections, the 2K/4K rows
-# of the rate card in real generation charges, and the daily cap at 400.
+# of the rate card in real generation charges, and the daily cap at 4000.
 B6=http://127.0.0.1:18092
 rm -f /tmp/myvideoai-v9-test.db
 V9_JWT_NAME="JWT_SECRE""T"
@@ -923,31 +926,32 @@ env DB_PATH=/tmp/myvideoai-v9-test.db PORT=18092 FAL_KEY=dummy_test_key "$V9_JWT
 SRV6_PID=$!
 for i in $(seq 1 40); do curl -s -o /dev/null $B6/api/health && break || sleep 0.25; done
 CFG6=$(curl -s $B6/api/config)
-check "config daily cap defaults to 400" "400" "$(echo $CFG6 | python3 -c 'import sys,json;print(json.load(sys.stdin)["max_daily_credits"])')"
-check "config rate card 768P: 5s=10, 10s=20" "10/20" "$(echo $CFG6 | python3 -c 'import sys,json;q=json.load(sys.stdin)["cost_by_quality"]["768P"];print(str(q["5"])+"/"+str(q["10"]))')"
-check "config rate card 2K: 5s=15, 10s=30" "15/30" "$(echo $CFG6 | python3 -c 'import sys,json;q=json.load(sys.stdin)["cost_by_quality"]["2K"];print(str(q["5"])+"/"+str(q["10"]))')"
-check "config rate card 4K: 5s=40, 10s=80" "40/80" "$(echo $CFG6 | python3 -c 'import sys,json;q=json.load(sys.stdin)["cost_by_quality"]["4K"];print(str(q["5"])+"/"+str(q["10"]))')"
+check "config daily cap defaults to 4000" "4000" "$(echo $CFG6 | python3 -c 'import sys,json;print(json.load(sys.stdin)["max_daily_credits"])')"
+check "config rate card 768P: 5s=120, 10s=240" "120/240" "$(echo $CFG6 | python3 -c 'import sys,json;q=json.load(sys.stdin)["cost_by_quality"]["768P"];print(str(q["5"])+"/"+str(q["10"]))')"
+check "config rate card 2K: 5s=180, 10s=360" "180/360" "$(echo $CFG6 | python3 -c 'import sys,json;q=json.load(sys.stdin)["cost_by_quality"]["2K"];print(str(q["5"])+"/"+str(q["10"]))')"
+check "config rate card 4K: 5s=450, 10s=900" "450/900" "$(echo $CFG6 | python3 -c 'import sys,json;q=json.load(sys.stdin)["cost_by_quality"]["4K"];print(str(q["5"])+"/"+str(q["10"]))')"
 PL6=$(curl -s $B6/api/plans)
-check "plans: 4 plans listed" "4" "$(echo $PL6 | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["plans"]))')"
-check "plans: weekly 1800/wk + 80 credits, monthly fields null" "1800/80/None/None" "$(echo $PL6 | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["plans"] if x["id"]=="weekly"][0];print("/".join([str(p["price_weekly"]),str(p["credits_weekly"]),str(p["price_monthly"]),str(p["credits_monthly"])]))')"
+check "plans: 5 plans listed" "5" "$(echo $PL6 | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["plans"]))')"
+check "plans: weekly 1800/wk + 800 credits, monthly fields null" "1800/800/None/None" "$(echo $PL6 | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["plans"] if x["id"]=="weekly"][0];print("/".join([str(p["price_weekly"]),str(p["credits_weekly"]),str(p["price_monthly"]),str(p["credits_monthly"])]))')"
 check "plans: weekly play product is ajk_weekly" "ajk_weekly" "$(echo $PL6 | python3 -c 'import sys,json;d=json.load(sys.stdin);print([x for x in d["plans"] if x["id"]=="weekly"][0]["play_product_id"]["weekly"])')"
 check "plans: weekly features (no Veo/lip-sync, max 768P)" "False/False/768P" "$(echo $PL6 | python3 -c 'import sys,json;d=json.load(sys.stdin);f=[x for x in d["plans"] if x["id"]=="weekly"][0]["features"];print(str(f["can_veo"])+"/"+str(f["can_lipsync"])+"/"+f["max_quality"])')"
 check "plans: normal has no weekly price (null)" "None" "$(echo $PL6 | python3 -c 'import sys,json;d=json.load(sys.stdin);print([x for x in d["plans"] if x["id"]=="normal"][0]["price_weekly"])')"
 check "plans: pro features (Veo + lip-sync, max 2K)" "True/True/2K" "$(echo $PL6 | python3 -c 'import sys,json;d=json.load(sys.stdin);f=[x for x in d["plans"] if x["id"]=="pro"][0]["features"];print(str(f["can_veo"])+"/"+str(f["can_lipsync"])+"/"+f["max_quality"])')"
-check "plans: extrapro 14000/mo + 600 credits, max 4K" "14000/600/4K" "$(echo $PL6 | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["plans"] if x["id"]=="extrapro"][0];print(str(p["price_monthly"])+"/"+str(p["credits_monthly"])+"/"+p["features"]["max_quality"])')"
+check "plans: extrapro 14000/mo + 6000 credits, max 4K" "14000/6000/4K" "$(echo $PL6 | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["plans"] if x["id"]=="extrapro"][0];print(str(p["price_monthly"])+"/"+str(p["credits_monthly"])+"/"+p["features"]["max_quality"])')"
+check "plans: extrapremier 19999/mo + 10000 credits, max 4K, all flags" "19999/10000/4K/True/True/True" "$(echo $PL6 | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["plans"] if x["id"]=="extrapremier"][0];f=p["features"];print(str(p["price_monthly"])+"/"+str(p["credits_monthly"])+"/"+f["max_quality"]+"/"+str(f["can_veo"])+"/"+str(f["can_lipsync"])+"/"+str(f["can_seedance"]))')"
 AR6=$(curl -s -X POST $B6/api/auth/register -H 'Content-Type: application/json' -d '{"email":"v9admin@example.com","password":"password123"}')
 AT6=$(echo $AR6 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 WR6=$(curl -s -X POST $B6/api/auth/register -H 'Content-Type: application/json' -d '{"email":"v9user@example.com","password":"password123"}')
 UT6=$(echo $WR6 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 UID6=$(curl -s $B6/api/me -H "Authorization: Bearer $UT6" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 
-echo "--- pricing v9: weekly activation (80 credits, 7-day period) ---"
+echo "--- pricing v9: weekly activation (800 credits, 7-day period) ---"
 WMP=$(curl -s -X POST $B6/api/admin/users/$UID6/manual-payment -H "Authorization: Bearer $AT6" -H 'Content-Type: application/json' -d '{"plan_id":"weekly","period":"weekly"}')
 check "weekly manual payment ok" "True" "$(echo $WMP | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
 check "weekly payment amount Rs 1800" "1800" "$(curl -s $B6/api/payments -H "Authorization: Bearer $UT6" | python3 -c 'import sys,json;print(json.load(sys.stdin)["payments"][0]["amount"])')"
 WME=$(curl -s $B6/api/me -H "Authorization: Bearer $UT6")
-check "weekly: plan bucket granted 80" "80" "$(echo $WME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
-check "weekly: total = 100 free + 80 plan = 180" "180" "$(echo $WME | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "weekly: plan bucket granted 800" "800" "$(echo $WME | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan_credits"])')"
+check "weekly: total = 1000 free + 800 plan = 1800" "1800" "$(echo $WME | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "weekly: subscription period is weekly" "weekly" "$(echo $WME | python3 -c 'import sys,json;print(json.load(sys.stdin)["subscription"]["period"])')"
 check "weekly: period spans exactly 7 days" "7" "$(echo $WME | python3 -c 'import sys,json,datetime as dt;s=json.load(sys.stdin)["subscription"];a=dt.datetime.fromisoformat(s["current_period_start"]);b=dt.datetime.fromisoformat(s["current_period_end"]);print((b-a).days)')"
 
@@ -955,7 +959,7 @@ echo "--- pricing v9: period/plan fit is enforced ---"
 check "weekly plan bought monthly -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B6/api/admin/users/$UID6/manual-payment -H "Authorization: Bearer $AT6" -H 'Content-Type: application/json' -d '{"plan_id":"weekly","period":"monthly"}')"
 check "weekly plan bought yearly -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B6/api/admin/users/$UID6/manual-payment -H "Authorization: Bearer $AT6" -H 'Content-Type: application/json' -d '{"plan_id":"weekly","period":"yearly"}')"
 check "monthly plan bought weekly -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B6/api/admin/users/$UID6/manual-payment -H "Authorization: Bearer $AT6" -H 'Content-Type: application/json' -d '{"plan_id":"normal","period":"weekly"}')"
-check "rejected period purchases changed nothing (total still 180)" "180" "$(curl -s $B6/api/me -H "Authorization: Bearer $UT6" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "rejected period purchases changed nothing (total still 1800)" "1800" "$(curl -s $B6/api/me -H "Authorization: Bearer $UT6" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 echo "--- pricing v9: rate card charges by routed quality (2K / 4K) ---"
 PR6=$(curl -s -X POST $B6/api/auth/register -H 'Content-Type: application/json' -d '{"email":"v9pro@example.com","password":"password123"}')
@@ -965,9 +969,9 @@ curl -s -o /dev/null -X POST $B6/api/admin/users/$PID6/activate -H "Authorizatio
 curl -s -o /dev/null -X POST $B6/api/generate -H "Authorization: Bearer $PT6" -H 'Idempotency-Key: v9-pro-5s' -H 'Content-Type: application/json' -d '{"prompt":"a city skyline at golden hour","aspect_ratio":"16:9","duration":5}'
 PH6=$(curl -s $B6/api/history -H "Authorization: Bearer $PT6")
 check "pro 5s job routed at 2K" "2K" "$(echo $PH6 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["resolution"])')"
-check "pro 5s job cost 15 credits (2K rate)" "15" "$(echo $PH6 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
+check "pro 5s job cost 180 credits (2K rate)" "180" "$(echo $PH6 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
 curl -s -o /dev/null -X POST $B6/api/generate -H "Authorization: Bearer $PT6" -H 'Idempotency-Key: v9-pro-10s' -H 'Content-Type: application/json' -d '{"prompt":"a city skyline at golden hour, longer take","aspect_ratio":"16:9","duration":10}'
-check "pro 10s job cost 30 credits (2K rate)" "30" "$(curl -s $B6/api/history -H "Authorization: Bearer $PT6" | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
+check "pro 10s job cost 360 credits (2K rate)" "360" "$(curl -s $B6/api/history -H "Authorization: Bearer $PT6" | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
 XR6=$(curl -s -X POST $B6/api/auth/register -H 'Content-Type: application/json' -d '{"email":"v9xpro@example.com","password":"password123"}')
 XT6=$(echo $XR6 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 XID6=$(curl -s $B6/api/me -H "Authorization: Bearer $XT6" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
@@ -975,22 +979,22 @@ curl -s -o /dev/null -X POST $B6/api/admin/users/$XID6/activate -H "Authorizatio
 curl -s -o /dev/null -X POST $B6/api/generate -H "Authorization: Bearer $XT6" -H 'Idempotency-Key: v9-x-5s' -H 'Content-Type: application/json' -d '{"prompt":"an eagle soaring over snow peaks","aspect_ratio":"16:9","duration":5}'
 XH6=$(curl -s $B6/api/history -H "Authorization: Bearer $XT6")
 check "extrapro 5s job routed at 4K" "4K" "$(echo $XH6 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["resolution"])')"
-check "extrapro 5s job cost 40 credits (4K rate)" "40" "$(echo $XH6 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
+check "extrapro 5s job cost 450 credits (4K rate)" "450" "$(echo $XH6 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
 curl -s -o /dev/null -X POST $B6/api/generate -H "Authorization: Bearer $XT6" -H 'Idempotency-Key: v9-x-10s' -H 'Content-Type: application/json' -d '{"prompt":"an eagle soaring over snow peaks, longer take","aspect_ratio":"16:9","duration":10}'
-check "extrapro 10s job cost 80 credits (4K rate)" "80" "$(curl -s $B6/api/history -H "Authorization: Bearer $XT6" | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
+check "extrapro 10s job cost 900 credits (4K rate)" "900" "$(curl -s $B6/api/history -H "Authorization: Bearer $XT6" | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["cost_credits"])')"
 
-echo "--- pricing v9: daily cap enforced at 400 ---"
+echo "--- pricing v9: daily cap enforced at 4000 ---"
 DR6=$(curl -s -X POST $B6/api/auth/register -H 'Content-Type: application/json' -d '{"email":"v9daily@example.com","password":"password123"}')
 DT6=$(echo $DR6 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 DID6=$(curl -s $B6/api/me -H "Authorization: Bearer $DT6" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 node --input-type=module -e "
 import { DatabaseSync } from 'node:sqlite';
 const db = new DatabaseSync('/tmp/myvideoai-v9-test.db');
-db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?)').run($DID6, 'daily-cap seed', '16:9', 10, 'realistic', 'completed', 395);
-console.log('seeded 395 credits of completed spend for today');
+db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?)').run($DID6, 'daily-cap seed', '16:9', 10, 'realistic', 'completed', 3950);
+console.log('seeded 3950 credits of completed spend for today');
 "
 DCAP=$(curl -s -w '\n%{http_code}' -X POST $B6/api/generate -H "Authorization: Bearer $DT6" -H 'Content-Type: application/json' -d '{"prompt":"one more small clip please","aspect_ratio":"16:9","duration":5}')
-check "395 spent + 10 more exceeds the 400 daily cap -> 429" "429" "$(echo "$DCAP" | tail -1)"
+check "3950 spent + 120 more exceeds the 4000 daily cap -> 429" "429" "$(echo "$DCAP" | tail -1)"
 check "daily-cap error names the limit" "Daily spending limit reached. Try again tomorrow." "$(echo "$DCAP" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
 kill $SRV6_PID 2>/dev/null
 
@@ -1026,14 +1030,14 @@ UID8=$(curl -s $B8/api/me -H "Authorization: Bearer $UT8" | python3 -c 'import s
 PV8=$(curl -s -w '\n%{http_code}' -X POST $B8/api/voice/preview -H "Authorization: Bearer $UT8" -H 'Content-Type: application/json' -d '{"script":"mera naam ahmed hai","spoken_language":"ur","script_mode":"roman"}')
 check "unconfigured: preview -> 503" "503" "$(echo "$PV8" | tail -1)"
 check "unconfigured: preview error is voice_not_configured" "voice_not_configured" "$(echo "$PV8" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["error"])')"
-check "unconfigured: preview charged nothing" "100" "$(curl -s $B8/api/me -H "Authorization: Bearer $UT8" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "unconfigured: preview charged nothing" "1000" "$(curl -s $B8/api/me -H "Authorization: Bearer $UT8" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 SEED8=$(node --input-type=module -e "
 import { DatabaseSync } from 'node:sqlite';
 const db = new DatabaseSync('/tmp/myvideoai-voice-none-test.db');
-console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($UID8, 'seed clip', '16:9', 5, 'realistic', 'completed', 'http://127.0.0.1:18090/media/clip.mp4', 10).lastInsertRowid));
+console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($UID8, 'seed clip', '16:9', 5, 'realistic', 'completed', 'http://127.0.0.1:18090/media/clip.mp4', 100).lastInsertRowid));
 ")
 check "unconfigured: voiceover -> 503" "503" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B8/api/voice/voiceover -H "Authorization: Bearer $UT8" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEED8,\"script\":\"mera naam ahmed hai\",\"spoken_language\":\"ur\",\"script_mode\":\"roman\"}")"
-check "unconfigured: voiceover charged nothing" "100" "$(curl -s $B8/api/me -H "Authorization: Bearer $UT8" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "unconfigured: voiceover charged nothing" "1000" "$(curl -s $B8/api/me -H "Authorization: Bearer $UT8" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 kill $SRV8_PID 2>/dev/null
 
 echo "--- voice system: preview, transliteration, lip-sync, voiceover (fal stub) ---"
@@ -1065,7 +1069,7 @@ check "preview: roman urdu script -> 200" "200" "$(echo "$PV" | tail -1)"
 PVB=$(echo "$PV" | sed '$d')
 check "preview: audio_url under /files/voice/" "yes" "$(echo $PVB | python3 -c 'import sys,json;u=json.load(sys.stdin)["audio_url"];print("yes" if u.startswith("/files/voice/") else "no")')"
 check "preview: roman urdu transliterated (dictionary words)" "میرا نام احمد ہے" "$(echo $PVB | python3 -c 'import sys,json;print(json.load(sys.stdin)["synthesized_text"])')"
-check "preview: charges nothing (credits_left 100)" "100" "$(echo $PVB | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
+check "preview: charges nothing (credits_left 1000)" "1000" "$(echo $PVB | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
 PVAUDIO=$(echo $PVB | python3 -c 'import sys,json;print(json.load(sys.stdin)["audio_url"])')
 check "preview: audio file is served (200)" "200" "$(curl -s -o /dev/null -w '%{http_code}' $B7$PVAUDIO)"
 VC=$(curl -s $B7/api/_test/voice-calls)
@@ -1078,7 +1082,7 @@ PVK=$(curl -s -X POST $B7/api/voice/preview -H "Authorization: Bearer $PT7" -H '
 check "preview: hindi syllabic fallback (kitaab)" "किताब" "$(echo $PVK | python3 -c 'import sys,json;print(json.load(sys.stdin)["synthesized_text"])')"
 PVN=$(curl -s -X POST $B7/api/voice/preview -H "Authorization: Bearer $PT7" -H 'Content-Type: application/json' -d '{"script":"یہ ایک خبر ہے","spoken_language":"ur","script_mode":"native"}')
 check "preview: native script passes through unchanged" "یہ ایک خبر ہے" "$(echo $PVN | python3 -c 'import sys,json;print(json.load(sys.stdin)["synthesized_text"])')"
-check "preview: still no charge after 5 previews" "100" "$(curl -s $B7/api/me -H "Authorization: Bearer $PT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "preview: still no charge after 5 previews" "1000" "$(curl -s $B7/api/me -H "Authorization: Bearer $PT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 # -- preview daily cap --
 CR7=$(curl -s -X POST $B7/api/auth/register -H 'Content-Type: application/json' -d '{"email":"capuser@example.com","password":"password123"}')
@@ -1087,13 +1091,13 @@ for i in 1 2 3 4 5; do
   curl -s -o /dev/null -X POST $B7/api/voice/preview -H "Authorization: Bearer $CT7" -H 'Content-Type: application/json' -d '{"script":"salam dost","spoken_language":"ur","script_mode":"roman"}'
 done
 check "preview: 6th preview of the day -> 429" "429" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B7/api/voice/preview -H "Authorization: Bearer $CT7" -H 'Content-Type: application/json' -d '{"script":"salam dost","spoken_language":"ur","script_mode":"roman"}')"
-check "preview cap: credits untouched" "100" "$(curl -s $B7/api/me -H "Authorization: Bearer $CT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "preview cap: credits untouched" "1000" "$(curl -s $B7/api/me -H "Authorization: Bearer $CT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 # -- preview provider failure --
 FR7=$(curl -s -X POST $B7/api/auth/register -H 'Content-Type: application/json' -d '{"email":"failuser@example.com","password":"password123"}')
 FT7=$(echo $FR7 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 check "preview: provider failure -> 502" "502" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B7/api/voice/preview -H "Authorization: Bearer $FT7" -H 'Content-Type: application/json' -d '{"script":"FAILME please","spoken_language":"en","script_mode":"native"}')"
-check "preview failure: credits untouched" "100" "$(curl -s $B7/api/me -H "Authorization: Bearer $FT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "preview failure: credits untouched" "1000" "$(curl -s $B7/api/me -H "Authorization: Bearer $FT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 # -- lip-sync gating: Normal plan -> 403 --
 LR7=$(curl -s -X POST $B7/api/auth/register -H 'Content-Type: application/json' -d '{"email":"lipnormal@example.com","password":"password123"}')
@@ -1101,14 +1105,14 @@ LT7=$(echo $LR7 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"
 LSN=$(curl -s -w '\n%{http_code}' -X POST $B7/api/voice/lipsync -H "Authorization: Bearer $LT7" -H 'Content-Type: application/json' -d '{"image_path":"data/uploads/1/x.png","script":"mera naam ahmed hai","spoken_language":"ur","script_mode":"roman"}')
 check "lipsync: no Pro plan -> 403" "403" "$(echo "$LSN" | tail -1)"
 check "lipsync: 403 error names the Pro plan" "yes" "$(echo "$LSN" | sed '$d' | python3 -c 'import sys,json;print("yes" if "Pro" in json.load(sys.stdin)["error"] else "no")')"
-check "lipsync 403: credits untouched" "100" "$(curl -s $B7/api/me -H "Authorization: Bearer $LT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "lipsync 403: credits untouched" "1000" "$(curl -s $B7/api/me -H "Authorization: Bearer $LT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 # -- lip-sync success + failure (Pro user) --
 RR7=$(curl -s -X POST $B7/api/auth/register -H 'Content-Type: application/json' -d '{"email":"lippro@example.com","password":"password123"}')
 RT7=$(echo $RR7 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 RID7=$(curl -s $B7/api/me -H "Authorization: Bearer $RT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 curl -s -o /dev/null -X POST $B7/api/admin/users/$RID7/activate -H "Authorization: Bearer $AT7" -H 'Content-Type: application/json' -d '{"plan_id":"pro","period":"monthly"}'
-check "pro user balance after activation (100 free + 500 plan)" "600" "$(curl -s $B7/api/me -H "Authorization: Bearer $RT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "pro user balance after activation (1000 free + 5000 plan)" "6000" "$(curl -s $B7/api/me -H "Authorization: Bearer $RT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 PNG_B64_V=$(python3 -c "import base64; print(base64.b64encode(bytes.fromhex('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c636000000000020001e221bc330000000049454e44ae426082')).decode())")
 UPV=$(curl -s -X POST $B7/api/uploads/image -H "Authorization: Bearer $RT7" -H 'Content-Type: application/json' -d "{\"image_base64\":\"$PNG_B64_V\",\"content_type\":\"image/png\"}")
 VIMG=$(echo $UPV | python3 -c 'import sys,json;print(json.load(sys.stdin)["image_path"])')
@@ -1118,24 +1122,24 @@ LSB=$(echo "$LS" | sed '$d')
 check "lipsync (image): generation kind is lipsync" "lipsync" "$(echo $LSB | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["kind"])')"
 check "lipsync (image): included — cost 0 credits" "0" "$(echo $LSB | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["cost_credits"])')"
 check "lipsync (image): status completed" "completed" "$(echo $LSB | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["status"])')"
-check "lipsync (image): credits_left 600 (included — nothing charged)" "600" "$(echo $LSB | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
+check "lipsync (image): credits_left 6000 (included — nothing charged)" "6000" "$(echo $LSB | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
 VC2=$(curl -s $B7/api/_test/voice-calls)
 check "lipsync (image): fal body has data-URI image_url + /files/voice/ audio_url" "ok" "$(echo $VC2 | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x["kind"]=="queue"][-1];b=c["body"];print("ok" if c["model"]=="minimax/h3-max/lip-sync/image-to-video" and b["image_url"].startswith("data:image/png") and "/files/voice/" in b["audio_url"] else "bad")')"
 check "lipsync (image): newest history entry is the lipsync job" "lipsync" "$(curl -s $B7/api/history -H "Authorization: Bearer $RT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["kind"])')"
 LSF=$(curl -s -w '\n%{http_code}' -X POST $B7/api/voice/lipsync -H "Authorization: Bearer $RT7" -H 'Content-Type: application/json' -d "{\"image_path\":\"$VIMG\",\"script\":\"FAILME bolna hai\",\"spoken_language\":\"ur\",\"script_mode\":\"native\"}")
 check "lipsync: TTS failure -> 502" "502" "$(echo "$LSF" | tail -1)"
-check "lipsync failure: credits untouched (still 600 — nothing was charged)" "600" "$(curl -s $B7/api/me -H "Authorization: Bearer $RT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "lipsync failure: credits untouched (still 6000 — nothing was charged)" "6000" "$(curl -s $B7/api/me -H "Authorization: Bearer $RT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "lipsync failure: job row marked failed" "failed" "$(curl -s $B7/api/history -H "Authorization: Bearer $RT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["status"])')"
 SEED7=$(node --input-type=module -e "
 import { DatabaseSync } from 'node:sqlite';
 const db = new DatabaseSync('/tmp/myvideoai-voice-test.db');
-console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($RID7, 'seed talking source', '16:9', 5, 'realistic', 'completed', 'http://127.0.0.1:$FAL_STUB_PORT/media/clip.mp4', 10).lastInsertRowid));
+console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($RID7, 'seed talking source', '16:9', 5, 'realistic', 'completed', 'http://127.0.0.1:$FAL_STUB_PORT/media/clip.mp4', 100).lastInsertRowid));
 ")
 LSV=$(curl -s -w '\n%{http_code}' -X POST $B7/api/voice/lipsync -H "Authorization: Bearer $RT7" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEED7,\"script\":\"mera naam ahmed hai\",\"spoken_language\":\"ur\",\"script_mode\":\"roman\"}")
 check "lipsync (video): -> 201" "201" "$(echo "$LSV" | tail -1)"
 LSVB=$(echo "$LSV" | sed '$d')
 check "lipsync (video): routed to the latentsync model" "fal-ai/latentsync" "$(echo $LSVB | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["model"])')"
-check "lipsync (video): credits_left 600 (included)" "600" "$(echo $LSVB | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
+check "lipsync (video): credits_left 6000 (included)" "6000" "$(echo $LSVB | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
 
 # -- voiceover: failure refund, then success + mux, then chunking --
 VR7=$(curl -s -X POST $B7/api/auth/register -H 'Content-Type: application/json' -d '{"email":"voiceover@example.com","password":"password123"}')
@@ -1144,15 +1148,15 @@ VID7=$(curl -s $B7/api/me -H "Authorization: Bearer $VT7" | python3 -c 'import s
 SEEDV=$(node --input-type=module -e "
 import { DatabaseSync } from 'node:sqlite';
 const db = new DatabaseSync('/tmp/myvideoai-voice-test.db');
-console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($VID7, 'seed voiceover source', '16:9', 2, 'realistic', 'completed', 'http://127.0.0.1:$FAL_STUB_PORT/media/clip.mp4', 10).lastInsertRowid));
+console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($VID7, 'seed voiceover source', '16:9', 2, 'realistic', 'completed', 'http://127.0.0.1:$FAL_STUB_PORT/media/clip.mp4', 100).lastInsertRowid));
 ")
 check "voiceover: TTS failure -> 502" "502" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B7/api/voice/voiceover -H "Authorization: Bearer $VT7" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDV,\"script\":\"FAILME bolna hai\",\"spoken_language\":\"ur\",\"script_mode\":\"native\"}")"
-check "voiceover failure: full refund (back to 100)" "100" "$(curl -s $B7/api/me -H "Authorization: Bearer $VT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "voiceover failure: full refund (back to 1000)" "1000" "$(curl -s $B7/api/me -H "Authorization: Bearer $VT7" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 VO=$(curl -s -w '\n%{http_code}' -X POST $B7/api/voice/voiceover -H "Authorization: Bearer $VT7" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDV,\"script\":\"mera naam ahmed hai\",\"spoken_language\":\"ur\",\"script_mode\":\"roman\"}")
 check "voiceover: -> 201" "201" "$(echo "$VO" | tail -1)"
 VOB=$(echo "$VO" | sed '$d')
 check "voiceover: generation kind is voiceover" "voiceover" "$(echo $VOB | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["kind"])')"
-check "voiceover: included — cost 0, credits_left 100" "0/100" "$(echo $VOB | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "voiceover: included — cost 0, credits_left 1000" "0/1000" "$(echo $VOB | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
 check "voiceover: output under /files/generated/" "yes" "$(echo $VOB | python3 -c 'import sys,json;u=json.load(sys.stdin)["generation"]["video_url"];print("yes" if u.startswith("/files/generated/") else "no")')"
 check "voiceover: voice_audio_path under /files/voice/" "yes" "$(echo $VOB | python3 -c 'import sys,json;u=json.load(sys.stdin)["generation"]["voice_audio_path"] or "";print("yes" if u.startswith("/files/voice/") else "no")')"
 VOURL=$(echo $VOB | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["video_url"])')
@@ -1192,11 +1196,11 @@ check "sound disabled: error is sound_not_configured" "sound_not_configured" "$(
 SEED10=$(node --input-type=module -e "
 import { DatabaseSync } from 'node:sqlite';
 const db = new DatabaseSync('/tmp/myvideoai-sound-none-test.db');
-console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($UID10, 'seed sound source', '16:9', 5, 'realistic', 'completed', 'http://127.0.0.1:18088/media/clip.mp4', 10).lastInsertRowid));
+console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($UID10, 'seed sound source', '16:9', 5, 'realistic', 'completed', 'http://127.0.0.1:18088/media/clip.mp4', 100).lastInsertRowid));
 ")
 check "sound disabled: apply -> 503" "503" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B10/api/sound/apply -H "Authorization: Bearer $UT10" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEED10,\"mode\":\"sync\"}")"
 check "sound disabled: generate with sound -> 503" "503" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B10/api/generate -H "Authorization: Bearer $UT10" -H 'Content-Type: application/json' -d '{"prompt":"a calm lake at dawn","duration":5,"sound":{"mode":"sync"}}')"
-check "sound disabled: nothing charged (balance 100)" "100" "$(curl -s $B10/api/me -H "Authorization: Bearer $UT10" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "sound disabled: nothing charged (balance 1000)" "1000" "$(curl -s $B10/api/me -H "Authorization: Bearer $UT10" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "sound disabled: only the seeded row exists (503s created none)" "1" "$(curl -s $B10/api/history -H "Authorization: Bearer $UT10" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["generations"]))')"
 kill $SRV10_PID 2>/dev/null
 
@@ -1228,38 +1232,38 @@ FFBIN9=$(node --input-type=module -e "import f from 'ffmpeg-static'; console.log
 RA9=$(curl -s -X POST $B9/api/auth/register -H 'Content-Type: application/json' -d '{"email":"syncgen@example.com","password":"password123"}')
 TA9=$(echo $RA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 GA9=$(curl -s -X POST $B9/api/generate -H "Authorization: Bearer $TA9" -H 'Content-Type: application/json' -d '{"prompt":"a red car speeding down a wet road","aspect_ratio":"16:9","duration":5,"sound":{"mode":"sync","prompt":"rain and thunder over the city"}}')
-check "gen+sync: total == base video price 10 (sync included)" "10" "$(echo $GA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_credits"])')"
+check "gen+sync: total == base video price 120 (sync included)" "120" "$(echo $GA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_credits"])')"
 check "gen+sync: sound cost reported as 0 (included)" "0" "$(echo $GA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["sound_cost_credits"])')"
-check "gen+sync: balance 90 after submit (charged exactly once)" "90" "$(echo $GA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
+check "gen+sync: balance 880 after submit (charged exactly once)" "880" "$(echo $GA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
 JOBA9=$(echo $GA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 POLLA9=$(curl -s $B9/api/generations/$JOBA9 -H "Authorization: Bearer $TA9")
 check "gen+sync: job completed" "completed" "$(echo $POLLA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])')"
 check "gen+sync: sound_status applied" "applied" "$(echo $POLLA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["sound_status"])')"
 check "gen+sync: sound_mode recorded" "sync" "$(echo $POLLA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["sound_mode"])')"
 check "gen+sync: video_url is the sounded (mmaudio) version" "http://127.0.0.1:$SOUND_STUB_PORT/media/clip.mp4" "$(echo $POLLA9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["video_url"])')"
-check "gen+sync: still 90 after completion (no second charge)" "90" "$(curl -s $B9/api/me -H "Authorization: Bearer $TA9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "gen+sync: still 880 after completion (no second charge)" "880" "$(curl -s $B9/api/me -H "Authorization: Bearer $TA9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 VC9=$(curl -s $B9/api/_test/voice-calls)
 check "gen+sync: mmaudio body has video_url + prompt + duration" "ok" "$(echo $VC9 | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x.get("model")=="fal-ai/mmaudio-v2"][-1];b=c["body"];print("ok" if b.get("video_url","").endswith("/media/clip.mp4") and b.get("prompt")=="rain and thunder over the city" and b.get("duration")==5 else "bad")')"
-check "gen+sync: unknown sound mode -> 400, no charge" "400/90" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B9/api/generate -H "Authorization: Bearer $TA9" -H 'Content-Type: application/json' -d '{"prompt":"a calm lake","duration":5,"sound":{"mode":"bogus"}}')/$(curl -s $B9/api/me -H "Authorization: Bearer $TA9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "gen+sync: unknown sound mode -> 400, no charge" "400/880" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B9/api/generate -H "Authorization: Bearer $TA9" -H 'Content-Type: application/json' -d '{"prompt":"a calm lake","duration":5,"sound":{"mode":"bogus"}}')/$(curl -s $B9/api/me -H "Authorization: Bearer $TA9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 # -- generate with sync sound, engine fails: video delivered, add-on refunded --
 RB9=$(curl -s -X POST $B9/api/auth/register -H 'Content-Type: application/json' -d '{"email":"soundfail@example.com","password":"password123"}')
 TB9=$(echo $RB9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 GB9=$(curl -s -X POST $B9/api/generate -H "Authorization: Bearer $TB9" -H 'Content-Type: application/json' -d '{"prompt":"a quiet beach at sunset","aspect_ratio":"16:9","duration":5,"sound":{"mode":"sync","prompt":"FAILME waves crashing"}}')
-check "gen+sync fail: balance 90 after submit" "90" "$(echo $GB9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
+check "gen+sync fail: balance 880 after submit" "880" "$(echo $GB9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
 JOBB9=$(echo $GB9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 POLLB9=$(curl -s $B9/api/generations/$JOBB9 -H "Authorization: Bearer $TB9")
 check "gen+sync fail: video still completed" "completed" "$(echo $POLLB9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])')"
 check "gen+sync fail: sound_status failed_refunded" "failed_refunded" "$(echo $POLLB9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["sound_status"])')"
-check "gen+sync fail: balance still 90 (sound included — nothing extra to refund)" "90" "$(curl -s $B9/api/me -H "Authorization: Bearer $TB9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
-check "gen+sync fail: row cost stays the video-only 10" "10" "$(echo $POLLB9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_credits"])')"
+check "gen+sync fail: balance still 880 (sound included — nothing extra to refund)" "880" "$(curl -s $B9/api/me -H "Authorization: Bearer $TB9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "gen+sync fail: row cost stays the video-only 120" "120" "$(echo $POLLB9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_credits"])')"
 
 # -- generate with sound effects: mixed under the original audio --
 RC9=$(curl -s -X POST $B9/api/auth/register -H 'Content-Type: application/json' -d '{"email":"sfxgen@example.com","password":"password123"}')
 TC9=$(echo $RC9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 GC9=$(curl -s -X POST $B9/api/generate -H "Authorization: Bearer $TC9" -H 'Content-Type: application/json' -d '{"prompt":"a dog playing in a park","aspect_ratio":"16:9","duration":5,"sound":{"mode":"sfx","prompt":"dog barking and birds","volume":40}}')
-check "gen+sfx: total == base 10 (sfx included)" "10" "$(echo $GC9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_credits"])')"
-check "gen+sfx: balance 90 after submit" "90" "$(echo $GC9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
+check "gen+sfx: total == base 120 (sfx included)" "120" "$(echo $GC9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_credits"])')"
+check "gen+sfx: balance 880 after submit" "880" "$(echo $GC9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
 JOBC9=$(echo $GC9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 POLLC9=$(curl -s $B9/api/generations/$JOBC9 -H "Authorization: Bearer $TC9")
 check "gen+sfx: completed with sound applied" "completed/applied" "$(echo $POLLC9 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["sound_status"])')"
@@ -1282,7 +1286,7 @@ POLLH9=$(curl -s $B9/api/generations/$JOBH9 -H "Authorization: Bearer $TH9")
 check "urdu sound: job completed with sound applied" "completed/applied" "$(echo $POLLH9 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["sound_status"])')"
 VC9H=$(curl -s $B9/api/_test/voice-calls)
 check "urdu sound: mmaudio received the ENGLISH translation" "ok" "$(echo $VC9H | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x.get("model")=="fal-ai/mmaudio-v2"][-1];print("ok" if c["body"].get("prompt","").startswith("TRANSLATED:") else "bad")')"
-check "urdu sound: charged once (balance 90 — sound included)" "90" "$(curl -s $B9/api/me -H "Authorization: Bearer $TH9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "urdu sound: charged once (balance 880 — sound included)" "880" "$(curl -s $B9/api/me -H "Authorization: Bearer $TH9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 # -- apply sound to an existing video: sync, premium gate, music, failure --
 RD9=$(curl -s -X POST $B9/api/auth/register -H 'Content-Type: application/json' -d '{"email":"apply@example.com","password":"password123"}')
@@ -1291,31 +1295,31 @@ DID9=$(curl -s $B9/api/me -H "Authorization: Bearer $TD9" | python3 -c 'import s
 SEEDD9=$(node --input-type=module -e "
 import { DatabaseSync } from 'node:sqlite';
 const db = new DatabaseSync('/tmp/myvideoai-sound-test.db');
-console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($DID9, 'seed apply source', '16:9', 5, 'realistic', 'completed', 'http://127.0.0.1:$SOUND_STUB_PORT/media/clip.mp4', 10).lastInsertRowid));
+console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($DID9, 'seed apply source', '16:9', 5, 'realistic', 'completed', 'http://127.0.0.1:$SOUND_STUB_PORT/media/clip.mp4', 100).lastInsertRowid));
 ")
 AP19=$(curl -s -w '\n%{http_code}' -X POST $B9/api/sound/apply -H "Authorization: Bearer $TD9" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDD9,\"mode\":\"sync\",\"prompt\":\"city traffic and rain\"}")
 check "apply sync: -> 201" "201" "$(echo "$AP19" | tail -1)"
 AP1B=$(echo "$AP19" | sed '$d')
 check "apply sync: new history entry kind is sound" "sound" "$(echo $AP1B | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["kind"])')"
 check "apply sync: linked to the source generation" "$SEEDD9" "$(echo $AP1B | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["source_generation_id"])')"
-check "apply sync: included — cost 0, credits_left 100" "0/100" "$(echo $AP1B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "apply sync: included — cost 0, credits_left 1000" "0/1000" "$(echo $AP1B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
 check "apply sync: sound_status applied on the new entry" "applied" "$(echo $AP1B | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["sound_status"])')"
 check "apply: another user's video -> 404" "404" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B9/api/sound/apply -H "Authorization: Bearer $TA9" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDD9,\"mode\":\"sync\"}")"
 AP29=$(curl -s -w '\n%{http_code}' -X POST $B9/api/sound/apply -H "Authorization: Bearer $TD9" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDD9,\"mode\":\"premium_sync\"}")
 check "apply premium (no plan): -> 403" "403" "$(echo "$AP29" | tail -1)"
 check "apply premium 403: error names the Pro plan" "yes" "$(echo "$AP29" | sed '$d' | python3 -c 'import sys,json;print("yes" if "Pro" in json.load(sys.stdin)["error"] else "no")')"
-check "apply premium 403: credits untouched (100)" "100" "$(curl -s $B9/api/me -H "Authorization: Bearer $TD9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "apply premium 403: credits untouched (1000)" "1000" "$(curl -s $B9/api/me -H "Authorization: Bearer $TD9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 AP39=$(curl -s -w '\n%{http_code}' -X POST $B9/api/sound/apply -H "Authorization: Bearer $TD9" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDD9,\"mode\":\"music\",\"prompt\":\"soft piano bed\",\"volume\":100}")
 check "apply music: -> 201" "201" "$(echo "$AP39" | tail -1)"
 AP3B=$(echo "$AP39" | sed '$d')
-check "apply music: included — cost 0, credits_left 100" "0/100" "$(echo $AP3B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "apply music: included — cost 0, credits_left 1000" "0/1000" "$(echo $AP3B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
 MUSURL=$(echo $AP3B | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["video_url"])')
 curl -s -o /tmp/music-mixed.mp4 $B9$MUSURL
 check "apply music: mixed output HAS an audio stream" "yes" "$("$FFBIN9" -i /tmp/music-mixed.mp4 2>&1 | python3 -c 'import sys;print("yes" if "Audio:" in sys.stdin.read() else "no")')"
 SC9B=$(curl -s $B9/api/_test/sound-calls)
 check "apply music: engine body asks for instrumental, duration 10" "ok" "$(echo $SC9B | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x.get("engine")=="music"][-1];b=c["body"];print("ok" if "instrumental, no vocals" in b.get("prompt","") and b.get("duration")==10 else "bad")')"
 check "apply sfx (engine fails): -> 502" "502" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B9/api/sound/apply -H "Authorization: Bearer $TD9" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDD9,\"mode\":\"sfx\",\"prompt\":\"FAILME dog\"}")"
-check "apply sfx failure: balance untouched (still 100)" "100" "$(curl -s $B9/api/me -H "Authorization: Bearer $TD9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "apply sfx failure: balance untouched (still 1000)" "1000" "$(curl -s $B9/api/me -H "Authorization: Bearer $TD9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "apply sfx failure: job row marked failed" "failed" "$(curl -s $B9/api/history -H "Authorization: Bearer $TD9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["status"])')"
 
 # -- volume: sync at 50% measurably lowers the soundtrack level --
@@ -1325,7 +1329,7 @@ EID9=$(curl -s $B9/api/me -H "Authorization: Bearer $TE9" | python3 -c 'import s
 SEEDE9=$(node --input-type=module -e "
 import { DatabaseSync } from 'node:sqlite';
 const db = new DatabaseSync('/tmp/myvideoai-sound-test.db');
-console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($EID9, 'seed volume source', '16:9', 5, 'realistic', 'completed', 'http://127.0.0.1:$SOUND_STUB_PORT/media/clip.mp4', 10).lastInsertRowid));
+console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($EID9, 'seed volume source', '16:9', 5, 'realistic', 'completed', 'http://127.0.0.1:$SOUND_STUB_PORT/media/clip.mp4', 100).lastInsertRowid));
 ")
 curl -s -o /tmp/vol-source.mp4 http://127.0.0.1:$SOUND_STUB_PORT/media/clip.mp4
 # mean_volume is the robust measure here: AAC re-encoding reshapes the
@@ -1343,16 +1347,16 @@ RF9=$(curl -s -X POST $B9/api/auth/register -H 'Content-Type: application/json' 
 TF9=$(echo $RF9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 FID9=$(curl -s $B9/api/me -H "Authorization: Bearer $TF9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 curl -s -o /dev/null -X POST $B9/api/admin/users/$FID9/activate -H "Authorization: Bearer $AT9" -H 'Content-Type: application/json' -d '{"plan_id":"pro","period":"monthly"}'
-check "sound pro balance after activation (100 free + 500 plan)" "600" "$(curl -s $B9/api/me -H "Authorization: Bearer $TF9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "sound pro balance after activation (1000 free + 5000 plan)" "6000" "$(curl -s $B9/api/me -H "Authorization: Bearer $TF9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 SEEDF9=$(node --input-type=module -e "
 import { DatabaseSync } from 'node:sqlite';
 const db = new DatabaseSync('/tmp/myvideoai-sound-test.db');
-console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($FID9, 'seed premium source', '16:9', 5, 'realistic', 'completed', 'http://127.0.0.1:$SOUND_STUB_PORT/media/clip.mp4', 10).lastInsertRowid));
+console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($FID9, 'seed premium source', '16:9', 5, 'realistic', 'completed', 'http://127.0.0.1:$SOUND_STUB_PORT/media/clip.mp4', 100).lastInsertRowid));
 ")
 APP9=$(curl -s -w '\n%{http_code}' -X POST $B9/api/sound/apply -H "Authorization: Bearer $TF9" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDF9,\"mode\":\"premium_sync\",\"prompt\":\"distant sirens\"}")
 check "apply premium (Pro): -> 201" "201" "$(echo "$APP9" | tail -1)"
 APPB=$(echo "$APP9" | sed '$d')
-check "apply premium (Pro): included — cost 0, credits_left 600" "0/600" "$(echo $APPB | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "apply premium (Pro): included — cost 0, credits_left 6000" "0/6000" "$(echo $APPB | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
 PREMURL=$(echo $APPB | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["video_url"])')
 curl -s -o /tmp/premium-out.mp4 $B9$PREMURL
 check "apply premium: muxed output HAS an audio stream" "yes" "$("$FFBIN9" -i /tmp/premium-out.mp4 2>&1 | python3 -c 'import sys;print("yes" if "Audio:" in sys.stdin.read() else "no")')"
@@ -1365,7 +1369,7 @@ TG9=$(echo $RG9 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"
 SGA9=$(curl -s -w '\n%{http_code}' -X POST $B9/api/sound/generate -H "Authorization: Bearer $TG9" -H 'Content-Type: application/json' -d '{"kind":"sfx","prompt":"dog barking in the rain","duration_seconds":10}')
 check "audio-only sfx: -> 201" "201" "$(echo "$SGA9" | tail -1)"
 SGAB=$(echo "$SGA9" | sed '$d')
-check "audio-only sfx: kind sound, included — cost 0, credits_left 100" "sound/0/100" "$(echo $SGAB | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["generation"]["kind"]+"/"+str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "audio-only sfx: kind sound, included — cost 0, credits_left 1000" "sound/0/1000" "$(echo $SGAB | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["generation"]["kind"]+"/"+str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
 check "audio-only sfx: file under /files/sounds/ (.mp3)" "yes" "$(echo $SGAB | python3 -c 'import sys,json;u=json.load(sys.stdin)["audio_url"];print("yes" if u.startswith("/files/sounds/") and u.endswith(".mp3") else "no")')"
 SFXAURL=$(echo $SGAB | python3 -c 'import sys,json;print(json.load(sys.stdin)["audio_url"])')
 check "audio-only sfx: file is served (200)" "200" "$(curl -s -o /dev/null -w '%{http_code}' $B9$SFXAURL)"
@@ -1374,14 +1378,14 @@ check "audio-only sfx: engine body has text + duration_seconds 10" "ok" "$(echo 
 SMA9=$(curl -s -w '\n%{http_code}' -X POST $B9/api/sound/generate -H "Authorization: Bearer $TG9" -H 'Content-Type: application/json' -d '{"kind":"music","prompt":"calm piano for a rainy evening","duration_seconds":30}')
 check "audio-only music: -> 201" "201" "$(echo "$SMA9" | tail -1)"
 SMAB=$(echo "$SMA9" | sed '$d')
-check "audio-only music: credits_left 100 (included)" "100" "$(echo $SMAB | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
+check "audio-only music: credits_left 1000 (included)" "1000" "$(echo $SMAB | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
 check "audio-only music: file under /files/sounds/ (.wav)" "yes" "$(echo $SMAB | python3 -c 'import sys,json;u=json.load(sys.stdin)["audio_url"];print("yes" if u.startswith("/files/sounds/") and u.endswith(".wav") else "no")')"
 MUSAURL=$(echo $SMAB | python3 -c 'import sys,json;print(json.load(sys.stdin)["audio_url"])')
 check "audio-only music: file is served (200)" "200" "$(curl -s -o /dev/null -w '%{http_code}' $B9$MUSAURL)"
 SC9D=$(curl -s $B9/api/_test/sound-calls)
 check "audio-only music: engine body asks for instrumental, duration 30" "ok" "$(echo $SC9D | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x.get("engine")=="music"][-1];b=c["body"];print("ok" if "instrumental, no vocals" in b.get("prompt","") and b.get("duration")==30 else "bad")')"
 check "audio-only: engine failure -> 502" "502" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B9/api/sound/generate -H "Authorization: Bearer $TG9" -H 'Content-Type: application/json' -d '{"kind":"sfx","prompt":"FAILME thunder"}')"
-check "audio-only failure: balance untouched (still 100)" "100" "$(curl -s $B9/api/me -H "Authorization: Bearer $TG9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "audio-only failure: balance untouched (still 1000)" "1000" "$(curl -s $B9/api/me -H "Authorization: Bearer $TG9" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "audio-only: unknown kind -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B9/api/sound/generate -H "Authorization: Bearer $TG9" -H 'Content-Type: application/json' -d '{"kind":"bogus","prompt":"rain sounds"}')"
 check "audio-only: sfx duration over 22 -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B9/api/sound/generate -H "Authorization: Bearer $TG9" -H 'Content-Type: application/json' -d '{"kind":"sfx","prompt":"rain sounds","duration_seconds":30}')"
 
@@ -1436,9 +1440,9 @@ for i in $(seq 1 40); do curl -s -o /dev/null $B11/api/health && break || sleep 
 AR11=$(curl -s -X POST $B11/api/auth/register -H 'Content-Type: application/json' -d '{"email":"finadmin@example.com","password":"password123"}')
 AT11=$(echo $AR11 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 CFG11=$(curl -s $B11/api/config)
-check "config finishers: reframe 0 / captions 5" "0/5" "$(echo $CFG11 | python3 -c 'import sys,json;p=json.load(sys.stdin)["finishers"]["prices"];print(str(p["reframe"])+"/"+str(p["captions"]))')"
+check "config finishers: reframe 0 / captions 50" "0/50" "$(echo $CFG11 | python3 -c 'import sys,json;p=json.load(sys.stdin)["finishers"]["prices"];print(str(p["reframe"])+"/"+str(p["captions"]))')"
 check "config finishers: upscale model is topaz endpoint" "fal-ai/topaz/upscale/video" "$(echo $CFG11 | python3 -c 'import sys,json;print(json.load(sys.stdin)["finishers"]["prices"]["upscale"]["model"])')"
-check "config draft: 480P at 7/14 credits" "480P/7/14" "$(echo $CFG11 | python3 -c 'import sys,json;d=json.load(sys.stdin)["draft"];print(d["quality"]+"/"+str(d["cost_by_duration"]["5"])+"/"+str(d["cost_by_duration"]["10"]))')"
+check "config draft: 480P at 70/140 credits" "480P/70/140" "$(echo $CFG11 | python3 -c 'import sys,json;d=json.load(sys.stdin)["draft"];print(d["quality"]+"/"+str(d["cost_by_duration"]["5"])+"/"+str(d["cost_by_duration"]["10"]))')"
 RA11=$(curl -s -X POST $B11/api/auth/register -H 'Content-Type: application/json' -d '{"email":"fin-a@example.com","password":"password123"}')
 TA11=$(echo $RA11 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 AID11=$(curl -s $B11/api/me -H "Authorization: Bearer $TA11" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
@@ -1448,7 +1452,7 @@ seed_fin() { # userId prompt url resolution
 node --input-type=module -e "
 import { DatabaseSync } from 'node:sqlite';
 const db = new DatabaseSync('/tmp/myvideoai-finish-test.db');
-console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits, resolution) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run($1, '$2', '16:9', 5, 'realistic', 'completed', '$3', 10, '$4').lastInsertRowid));
+console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits, resolution) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run($1, '$2', '16:9', 5, 'realistic', 'completed', '$3', 100, '$4').lastInsertRowid));
 "
 }
 SEED169=$(seed_fin $AID11 "seed harbour clip" "http://127.0.0.1:$FIN_STUB_PORT/media/clip169.mp4" "768P")
@@ -1459,7 +1463,7 @@ RF11=$(curl -s -w '\n%{http_code}' -X POST $B11/api/finish/reframe -H "Authoriza
 check "reframe: -> 201" "201" "$(echo "$RF11" | tail -1)"
 RF11B=$(echo "$RF11" | sed '$d')
 check "reframe: kind reframe, linked to source, cost 0" "reframe/$SEED169/0" "$(echo $RF11B | python3 -c 'import sys,json;g=json.load(sys.stdin)["generation"];print(g["kind"]+"/"+str(g["source_generation_id"])+"/"+str(g["cost_credits"]))')"
-check "reframe: FREE — balance still 100" "100" "$(curl -s $B11/api/me -H "Authorization: Bearer $TA11" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "reframe: FREE — balance still 1000" "1000" "$(curl -s $B11/api/me -H "Authorization: Bearer $TA11" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 RFURL=$(echo $RF11B | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["video_url"])')
 curl -s -o /tmp/reframed.mp4 $B11$RFURL
 check "reframe: output is exactly 1080x1920 (9:16)" "1080x1920" "$("$FFBIN11" -i /tmp/reframed.mp4 2>&1 | python3 -c 'import sys,re; m=re.search(r"(\d{2,5})x(\d{2,5})", sys.stdin.read()); print(m.group(1)+"x"+m.group(2) if m else "none")')"
@@ -1470,7 +1474,7 @@ check "finish: unknown action -> 400" "400" "$(curl -s -o /dev/null -w '%{http_c
 CP11=$(curl -s -w '\n%{http_code}' -X POST $B11/api/finish/captions -H "Authorization: Bearer $TA11" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEED169}")
 check "captions: -> 201" "201" "$(echo "$CP11" | tail -1)"
 CP11B=$(echo "$CP11" | sed '$d')
-check "captions: kind captions, cost 5, credits_left 95" "captions/5/95" "$(echo $CP11B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["generation"]["kind"]+"/"+str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "captions: kind captions, cost 50, credits_left 950" "captions/50/950" "$(echo $CP11B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["generation"]["kind"]+"/"+str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
 CPURL=$(echo $CP11B | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["video_url"])')
 curl -s -o /tmp/captioned.mp4 $B11$CPURL
 check "captions: output keeps video + audio streams" "yes/yes" "$("$FFBIN11" -i /tmp/captioned.mp4 2>&1 | python3 -c 'import sys;s=sys.stdin.read();print(("yes" if "Video:" in s else "no")+"/"+("yes" if "Audio:" in s else "no"))')"
@@ -1478,13 +1482,13 @@ VC11=$(curl -s $B11/api/_test/voice-calls)
 check "captions: whisper body has audio_url + task transcribe + segment chunks" "ok" "$(echo $VC11 | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x.get("model")=="fal-ai/whisper"][-1];b=c["body"];print("ok" if b.get("audio_url","").endswith("/media/clip169.mp4") and b.get("task")=="transcribe" and b.get("chunk_level")=="segment" else "bad")')"
 CPS11=$(curl -s -w '\n%{http_code}' -X POST $B11/api/finish/captions -H "Authorization: Bearer $TA11" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDSIL}")
 check "captions on silent video: -> 400 (no audio stream)" "400" "$(echo "$CPS11" | tail -1)"
-check "captions on silent video: nothing charged (still 95)" "95" "$(curl -s $B11/api/me -H "Authorization: Bearer $TA11" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "captions on silent video: nothing charged (still 950)" "950" "$(curl -s $B11/api/me -H "Authorization: Bearer $TA11" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 # -- draft: 480P at 7 credits, marked draft, add-ons rejected --
 DR11=$(curl -s -X POST $B11/api/generate -H "Authorization: Bearer $TA11" -H 'Content-Type: application/json' -d '{"prompt":"a lighthouse draft preview","aspect_ratio":"16:9","duration":5,"quality":"draft"}')
-check "draft: cost 7 credits" "7" "$(echo $DR11 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_credits"])')"
+check "draft: cost 70 credits" "70" "$(echo $DR11 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_credits"])')"
 check "draft: stage draft + resolution 480P in response" "draft/480P" "$(echo $DR11 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["stage"]+"/"+g["resolution"])')"
-check "draft: balance 88 (95 - 7)" "88" "$(echo $DR11 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
+check "draft: balance 880 (950 - 70)" "880" "$(echo $DR11 | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
 DRAFTID=$(echo $DR11 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 FB11=$(curl -s $B11/api/_test/fal-body)
 check "draft: fal body resolution is 480P (H3 tier)" "480P" "$(echo $FB11 | python3 -c 'import sys,json;print(json.load(sys.stdin)["body"]["resolution"])')"
@@ -1495,7 +1499,7 @@ done
 check "draft: generation completes via the stub" "completed" "$ST"
 check "draft: history row is marked stage draft" "draft" "$(curl -s $B11/api/history -H "Authorization: Bearer $TA11" | python3 -c "import sys,json;print([g['stage'] for g in json.load(sys.stdin)['generations'] if g['id']==$DRAFTID][0])")"
 check "draft + sound add-on: -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B11/api/generate -H "Authorization: Bearer $TA11" -H 'Content-Type: application/json' -d '{"prompt":"a lighthouse draft with sound","duration":5,"quality":"draft","sound":{"mode":"sync"}}')"
-check "draft + sound rejected: balance still 88" "88" "$(curl -s $B11/api/me -H "Authorization: Bearer $TA11" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "draft + sound rejected: balance still 880" "880" "$(curl -s $B11/api/me -H "Authorization: Bearer $TA11" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "sound apply on a draft: -> 400 (drafts take no add-ons)" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B11/api/sound/apply -H "Authorization: Bearer $TA11" -H 'Content-Type: application/json' -d "{\"generation_id\":$DRAFTID,\"mode\":\"sync\"}")"
 check "voiceover on a draft: -> 400 (drafts take no add-ons)" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B11/api/voice/voiceover -H "Authorization: Bearer $TA11" -H 'Content-Type: application/json' -d "{\"generation_id\":$DRAFTID,\"script\":\"hello draft world\"}")"
 
@@ -1503,8 +1507,8 @@ check "voiceover on a draft: -> 400 (drafts take no add-ons)" "400" "$(curl -s -
 UP11=$(curl -s -w '\n%{http_code}' -X POST $B11/api/generations/$DRAFTID/upgrade -H "Authorization: Bearer $TA11" -H 'Content-Type: application/json' -d '{"quality":"768P"}')
 check "upgrade: -> 200" "200" "$(echo "$UP11" | tail -1)"
 UP11B=$(echo "$UP11" | sed '$d')
-check "upgrade: standard rate 10 charged, linked to the draft" "10/$DRAFTID" "$(echo $UP11B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["source_generation_id"]))')"
-check "upgrade: balance 78 (88 - 10)" "78" "$(echo $UP11B | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
+check "upgrade: standard rate 120 charged, linked to the draft" "120/$DRAFTID" "$(echo $UP11B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["source_generation_id"]))')"
+check "upgrade: balance 760 (880 - 120)" "760" "$(echo $UP11B | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits_left"])')"
 UPID11=$(echo $UP11B | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 for i in $(seq 1 30); do
   STU=$(curl -s $B11/api/generations/$UPID11 -H "Authorization: Bearer $TA11" | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["stage"]+"/"+g["resolution"]+"/"+g["prompt"])')
@@ -1518,7 +1522,7 @@ check "upgrade: another user's draft -> 404" "404" "$(curl -s -o /dev/null -w '%
 EX11=$(curl -s -w '\n%{http_code}' -X POST $B11/api/finish/extend -H "Authorization: Bearer $TA11" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEED169,\"extra_seconds\":5}")
 check "extend: -> 201" "201" "$(echo "$EX11" | tail -1)"
 EX11B=$(echo "$EX11" | sed '$d')
-check "extend: kind extend, standard 768P/5s rate 10, balance 68" "extend/10/68" "$(echo $EX11B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["generation"]["kind"]+"/"+str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "extend: kind extend, standard 768P/5s rate 120, balance 640" "extend/120/640" "$(echo $EX11B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["generation"]["kind"]+"/"+str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
 EXURL=$(echo $EX11B | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["video_url"])')
 check "extend: joined video stored under /files/joined/" "yes" "$(python3 -c "print('yes' if '$EXURL'.startswith('/files/joined/') else 'no')")"
 curl -s -o /tmp/extended.mp4 $B11$EXURL
@@ -1527,14 +1531,14 @@ VC11B=$(curl -s $B11/api/_test/voice-calls)
 check "extend: i2v body has data-URI image + 768P + 5s" "ok" "$(echo $VC11B | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x.get("model")=="minimax/h3/image-to-video"][-1];b=c["body"];print("ok" if str(b.get("image_url","")).startswith("data:image/jpeg;base64,") and b.get("resolution")=="768P" and b.get("duration")==5 else "bad")')"
 SEEDFAIL=$(seed_fin $AID11 "FAILME waterfall scene" "http://127.0.0.1:$FIN_STUB_PORT/media/clip169.mp4" "768P")
 check "extend failure: -> 502" "502" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B11/api/finish/extend -H "Authorization: Bearer $TA11" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDFAIL,\"extra_seconds\":5}")"
-check "extend failure: refunded exactly once (still 68)" "68" "$(curl -s $B11/api/me -H "Authorization: Bearer $TA11" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "extend failure: refunded exactly once (still 640)" "640" "$(curl -s $B11/api/me -H "Authorization: Bearer $TA11" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "extend failure: the job row is marked failed (no partial entry)" "failed" "$(curl -s $B11/api/history -H "Authorization: Bearer $TA11" | python3 -c 'import sys,json;print(json.load(sys.stdin)["generations"][0]["status"])')"
 SEED4K=$(seed_fin $AID11 "seed 4k clip" "http://127.0.0.1:$FIN_STUB_PORT/media/clip169.mp4" "4K")
 check "extend 4K source on free plan: -> 403 (plan cap)" "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B11/api/finish/extend -H "Authorization: Bearer $TA11" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEED4K,\"extra_seconds\":5}")"
 
 # -- upscale: plan gate, topaz body, price formula (min + computed) --
 check "upscale 768P on free plan: -> 403 (result 2K above plan max)" "403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B11/api/finish/upscale -H "Authorization: Bearer $TA11" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEED169}")"
-check "upscale gate: nothing charged (still 68)" "68" "$(curl -s $B11/api/me -H "Authorization: Bearer $TA11" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "upscale gate: nothing charged (still 640)" "640" "$(curl -s $B11/api/me -H "Authorization: Bearer $TA11" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 RP11=$(curl -s -X POST $B11/api/auth/register -H 'Content-Type: application/json' -d '{"email":"fin-pro@example.com","password":"password123"}')
 TP11=$(echo $RP11 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 PID11=$(curl -s $B11/api/me -H "Authorization: Bearer $TP11" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
@@ -1543,12 +1547,12 @@ SEEDPRO=$(seed_fin $PID11 "seed pro harbour clip" "http://127.0.0.1:$FIN_STUB_PO
 US11=$(curl -s -w '\n%{http_code}' -X POST $B11/api/finish/upscale -H "Authorization: Bearer $TP11" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDPRO}")
 check "upscale (Pro): -> 201" "201" "$(echo "$US11" | tail -1)"
 US11B=$(echo "$US11" | sed '$d')
-check "upscale: kind upscale, recorded tier 2K, minimum price 10" "upscale/2K/10" "$(echo $US11B | python3 -c 'import sys,json;g=json.load(sys.stdin)["generation"];print(g["kind"]+"/"+g["resolution"]+"/"+str(g["cost_credits"]))')"
+check "upscale: kind upscale, recorded tier 2K, minimum price 100" "upscale/2K/100" "$(echo $US11B | python3 -c 'import sys,json;g=json.load(sys.stdin)["generation"];print(g["kind"]+"/"+g["resolution"]+"/"+str(g["cost_credits"]))')"
 VC11C=$(curl -s $B11/api/_test/voice-calls)
 check "upscale: topaz body has video_url + model Proteus + factor 2" "ok" "$(echo $VC11C | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x.get("model")=="fal-ai/topaz/upscale/video"][-1];b=c["body"];print("ok" if b.get("video_url","").endswith("/media/clip169.mp4") and b.get("model")=="Proteus" and b.get("upscale_factor")==2 else "bad")')"
 SEEDLONG=$(seed_fin $PID11 "seed long harbour clip" "http://127.0.0.1:$FIN_HTTP_PORT/long.mp4" "768P")
 USL11=$(curl -s -X POST $B11/api/finish/upscale -H "Authorization: Bearer $TP11" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDLONG}")
-check "upscale price formula: 30s to 720p = ceil(0.01*30*277/15)*2 = 12 credits" "12" "$(echo $USL11 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["cost_credits"])')"
+check "upscale price formula: 30s to 720p = ceil(0.01*30*277/1.5)*2 = 112 credits" "112" "$(echo $USL11 | python3 -c 'import sys,json;print(json.load(sys.stdin)["generation"]["cost_credits"])')"
 
 # -- migration v12: delete its record + drop its column, restart re-applies --
 kill $SRV11_PID 2>/dev/null; sleep 0.5
@@ -1659,7 +1663,7 @@ CGB=$(echo "$CG" | sed '$d')
 GEN1_ID=$(echo $CGB | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 check "generate with character: routed to reference-to-video" "minimax/h3/reference-to-video" "$(echo $CGB | python3 -c 'import sys,json;print(json.load(sys.stdin)["model"])')"
 check "generate with character: response carries id + name" "$SARA_ID/Captain Sara" "$(echo $CGB | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["character_id"])+"/"+g["character_name"])')"
-check "generate with character: STANDARD rate (768P 5s = 10), balance 90" "10/90" "$(echo $CGB | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "generate with character: STANDARD rate (768P 5s = 120), balance 880" "120/880" "$(echo $CGB | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
 FB12=$(curl -s $B12/api/_test/fal-body)
 check "ref fal body: reference_image_urls[0] is the character image data URI" "data:image/png;base64,$PNG_B64_C" "$(echo $FB12 | python3 -c 'import sys,json;print(json.load(sys.stdin)["body"]["reference_image_urls"][0])')"
 check "ref fal body: prompt cites Image 1, no image_url field" "ok" "$(echo $FB12 | python3 -c 'import sys,json;b=json.load(sys.stdin)["body"];print("ok" if b["prompt"].startswith("Image 1 is the main character.") and "image_url" not in b else "bad")')"
@@ -1692,7 +1696,7 @@ CHAR_LIP=$(echo $CHL | python3 -c 'import sys,json;print(json.load(sys.stdin)["c
 LS12=$(curl -s -w '\n%{http_code}' -X POST $B12/api/voice/lipsync -H "Authorization: Bearer $TP12" -H 'Content-Type: application/json' -d "{\"character_id\":$CHAR_LIP,\"script\":\"mera naam ahmed hai\",\"script_mode\":\"roman\"}")
 check "lipsync with character -> 201" "201" "$(echo "$LS12" | tail -1)"
 LS12B=$(echo "$LS12" | sed '$d')
-check "lipsync with character: included — cost 0, credits_left 600" "0/600" "$(echo $LS12B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "lipsync with character: included — cost 0, credits_left 6000" "0/6000" "$(echo $LS12B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
 check "lipsync with character: row records character + its image" "$CHAR_LIP/$IMGP" "$(echo $LS12B | python3 -c 'import sys,json;g=json.load(sys.stdin)["generation"];print(str(g["character_id"])+"/"+str(g["source_image_path"]))')"
 VC12=$(curl -s $B12/api/_test/voice-calls)
 check "lipsync with character: TTS used the BOUND voice (Charon, Urdu)" "Charon/Urdu (Pakistan)" "$(echo $VC12 | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x["kind"]=="tts"][-1];print(c["body"]["voice"]+"/"+c["body"]["language_code"])')"
@@ -1701,10 +1705,10 @@ LS13=$(curl -s -w '\n%{http_code}' -X POST $B12/api/voice/lipsync -H "Authorizat
 check "lipsync override -> 201" "201" "$(echo "$LS13" | tail -1)"
 VC13=$(curl -s $B12/api/_test/voice-calls)
 check "lipsync override: explicit voice wins over the binding (Rachel)" "elevenlabs/Rachel" "$(echo $VC13 | python3 -c 'import sys,json;c=[x for x in json.load(sys.stdin)["calls"] if x["kind"]=="tts"][-1];print(c["provider"]+"/"+c["body"]["voice"])')"
-check "lipsync override: credits_left 600 (included)" "600" "$(curl -s $B12/api/me -H "Authorization: Bearer $TP12" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "lipsync override: credits_left 6000 (included)" "6000" "$(curl -s $B12/api/me -H "Authorization: Bearer $TP12" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "lipsync with ANOTHER user's character -> 404" "404" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B12/api/voice/lipsync -H "Authorization: Bearer $TP12" -H 'Content-Type: application/json' -d "{\"character_id\":$SARA_ID,\"script\":\"salam dost\",\"script_mode\":\"roman\"}")"
 check "lipsync with a nonexistent character -> 404" "404" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B12/api/voice/lipsync -H "Authorization: Bearer $TP12" -H 'Content-Type: application/json' -d '{"character_id":99999,"script":"salam dost","script_mode":"roman"}')"
-check "lipsync 404s charged nothing (still 600)" "600" "$(curl -s $B12/api/me -H "Authorization: Bearer $TP12" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "lipsync 404s charged nothing (still 6000)" "6000" "$(curl -s $B12/api/me -H "Authorization: Bearer $TP12" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 
 # -- delete: cross-user 404, and past generations survive --
 HERO_ID=$(curl -s $B12/api/characters -H "Authorization: Bearer $TA12" | python3 -c 'import sys,json;print([c for c in json.load(sys.stdin)["characters"] if c["name"]=="Hero"][0]["id"])')
@@ -1783,9 +1787,9 @@ check "auto: config enabled true + version 1" "True/1" "$(echo $CFGD | python3 -
 check "auto: plan endpoint without a token -> 401" "401" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/generate/plan -H 'Content-Type: application/json' -d '{"prompt":"a cat in a garden"}')"
 PLANM=$(curl -s -X POST $B/api/generate/plan -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"prompt":"a cat chasing a butterfly in a sunny garden","mode":"realistic","style":"realistic","duration":5}')
 check "auto main plan: cat -> animal class" "animal" "$(echo $PLANM | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan"]["detected"]["content_class"])')"
-check "auto main plan: no voice, no confirmation, total 10" "None/False/10" "$(echo $PLANM | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(str(p["apply"]["voice"])+"/"+str(p["needs_confirmation"])+"/"+str(p["total_cost"]))')"
+check "auto main plan: no voice, no confirmation, total 120" "None/False/120" "$(echo $PLANM | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(str(p["apply"]["voice"])+"/"+str(p["needs_confirmation"])+"/"+str(p["total_cost"]))')"
 check "auto main plan: engine is the H3 text route" "h3_text_to_video" "$(echo $PLANM | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan"]["engine"]["route"])')"
-check "auto main plan: charged nothing (balance still 100)" "100" "$(curl -s $B/api/me -H "Authorization: Bearer $TOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "auto main plan: charged nothing (balance still 1000)" "1000" "$(curl -s $B/api/me -H "Authorization: Bearer $TOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "auto main plan: created no generation row (history still 1)" "1" "$(curl -s $B/api/history -H "Authorization: Bearer $TOKEN" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["generations"]))')"
 HOMEPAGED=$(curl -s $B/)
 check "frontend: AI Auto toggle present" "yes" "$(echo "$HOMEPAGED" | grep -q 'id="aiAutoToggle"' && echo yes || echo no)"
@@ -1828,7 +1832,7 @@ check "auto plan: urdu dialogue -> voiceover included (0), no cost confirmation"
 check "auto plan: urdu voice note is honest about the route" "yes" "$(echo $AP2 | python3 -c 'import sys,json;print("yes" if any("Urdu dialogue" in n for n in json.load(sys.stdin)["plan"]["notes"]) else "no")')"
 AP3=$(curl -s -X POST $B16/api/generate/plan -H "Authorization: Bearer $FT16" -H 'Content-Type: application/json' -d '{"prompt":"heavy rain and a car braking in city traffic","mode":"realistic","style":"realistic","duration":5}')
 check "auto plan: rain+car -> sfx events include rain and car" "True/True" "$(echo $AP3 | python3 -c 'import sys,json;e=json.load(sys.stdin)["plan"]["detected"]["sfx_events"];print(str("rain" in e)+"/"+str("car" in e))')"
-check "auto plan: sfx -> sync sound included (0), total == base 10" "sync/0/10" "$(echo $AP3 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["apply"]["sound"]["mode"]+"/"+str(p["apply"]["sound"]["cost"])+"/"+str(p["total_cost"]))')"
+check "auto plan: sfx -> sync sound included (0), total == base 120" "sync/0/120" "$(echo $AP3 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["apply"]["sound"]["mode"]+"/"+str(p["apply"]["sound"]["cost"])+"/"+str(p["total_cost"]))')"
 AP4=$(curl -s -X POST $B16/api/generate/plan -H "Authorization: Bearer $FT16" -H 'Content-Type: application/json' -d '{"prompt":"a cartoon fox tells a kids story in a sunny forest","mode":"realistic","style":"realistic","duration":5}')
 check "auto plan: cartoon prompt + realistic mode -> mode conflict" "mode/realistic/cartoon" "$(echo $AP4 | python3 -c 'import sys,json;c=json.load(sys.stdin)["plan"]["conflicts"][0];print(c["field"]+"/"+c["selected"]+"/"+c["detected"])')"
 AP5=$(curl -s -X POST $B16/api/generate/plan -H "Authorization: Bearer $FT16" -H 'Content-Type: application/json' -d '{"prompt":"a vertical shorts clip of ocean waves at sunset","mode":"realistic","style":"realistic","duration":5,"aspect_ratio":"16:9"}')
@@ -1847,7 +1851,7 @@ AP8=$(curl -s -X POST $B16/api/generate/plan -H "Authorization: Bearer $PT16" -H
 # engine FIRST (flat 50, no voice add-on stacked) — the Phase D lipsync
 # expectation was updated for exactly this case; character/image jobs
 # still take the lipsync route (see the Phase E section at the end).
-check "auto plan (Pro): urdu dialogue on a fresh human scene -> omni speaking engine, flat 50, no voice add-on" "omni_speaking/None/50/50" "$(echo $AP8 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["engine"]["route"]+"/"+str(p["apply"]["voice"])+"/"+str(p["base_cost"])+"/"+str(p["total_cost"]))')"
+check "auto plan (Pro): urdu dialogue on a fresh human scene -> omni speaking engine, flat 250, no voice add-on" "omni_speaking/None/250/250" "$(echo $AP8 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["engine"]["route"]+"/"+str(p["apply"]["voice"])+"/"+str(p["base_cost"])+"/"+str(p["total_cost"]))')"
 CR16=$(curl -s -X POST $B16/api/auth/register -H 'Content-Type: application/json' -d '{"email":"autochar@example.com","password":"password123"}')
 CT16=$(echo $CR16 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 PNG_B64_A=$(python3 -c "import base64; print(base64.b64encode(bytes.fromhex('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c636000000000020001e221bc330000000049454e44ae426082')).decode())")
@@ -1862,8 +1866,8 @@ XT16=$(echo $XR16 | python3 -c 'import sys,json;print(json.load(sys.stdin)["toke
 XID16=$(curl -s $B16/api/me -H "Authorization: Bearer $XT16" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 curl -s -o /dev/null -X POST $B16/api/admin/users/$XID16/activate -H "Authorization: Bearer $AT16" -H 'Content-Type: application/json' -d '{"plan_id":"extrapro","period":"monthly"}'
 AP10=$(curl -s -X POST $B16/api/generate/plan -H "Authorization: Bearer $XT16" -H 'Content-Type: application/json' -d '{"prompt":"a calm mountain lake at dawn","mode":"realistic","style":"realistic","duration":5}')
-check "auto plan (Extra Pro): native 4K entitlement -> Kling O3 4K engine, base 40" "kling_o3_4k/40" "$(echo $AP10 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["engine"]["route"]+"/"+str(p["base_cost"]))')"
-check "auto plans: free user charged nothing across all plans" "100" "$(curl -s $B16/api/me -H "Authorization: Bearer $FT16" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "auto plan (Extra Pro): native 4K entitlement -> Kling O3 4K engine, base 450" "kling_o3_4k/450" "$(echo $AP10 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["engine"]["route"]+"/"+str(p["base_cost"]))')"
+check "auto plans: free user charged nothing across all plans" "1000" "$(curl -s $B16/api/me -H "Authorization: Bearer $FT16" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "auto plans: no generation rows created by planning" "0" "$(curl -s $B16/api/history -H "Authorization: Bearer $FT16" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["generations"]))')"
 kill $SRV16_PID $AUTO1STUB_PID $AUTO1TSTUB_PID 2>/dev/null
 
@@ -1902,21 +1906,21 @@ poll17() { # jobId token -> echoes the final generation JSON
 # NOTE: exactly 10 plan/generate calls on this instance (shared limiter).
 GP1=$(curl -s -X POST $B17/api/generate/plan -H "Authorization: Bearer $FT17" -H 'Content-Type: application/json' -d '{"prompt":"heavy rain and a car braking in city traffic","mode":"realistic","style":"realistic","duration":5}')
 GEN1=$(curl -s -X POST $B17/api/generate -H "Authorization: Bearer $FT17" -H 'Content-Type: application/json' -d "$(echo $GP1 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(json.dumps({"prompt":"heavy rain and a car braking in city traffic","mode":"realistic","style":"realistic","duration":5,"auto_plan":p,"auto_confirmed":True}))')")
-check "auto gen+sync: charged the plan total 10 exactly (sound included)" "10/90" "$(echo $GEN1 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "auto gen+sync: charged the plan total 120 exactly (sound included)" "120/880" "$(echo $GEN1 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
 JOB1=$(echo $GEN1 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 POLL1=$(poll17 $JOB1 $FT17)
 check "auto gen+sync: completed with sound applied" "completed/applied" "$(echo $POLL1 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["sound_status"])')"
-check "auto gen+sync: row carries the auto plan (total 10)" "10" "$(echo $POLL1 | python3 -c 'import sys,json;print(json.load(sys.stdin)["auto_plan"]["total_cost"])')"
+check "auto gen+sync: row carries the auto plan (total 120)" "120" "$(echo $POLL1 | python3 -c 'import sys,json;print(json.load(sys.stdin)["auto_plan"]["total_cost"])')"
 GP2=$(curl -s -X POST $B17/api/generate/plan -H "Authorization: Bearer $FT17" -H 'Content-Type: application/json' -d "{\"prompt\":\"$URDU_DLG\",\"prompt_language\":\"ur\",\"mode\":\"realistic\",\"style\":\"realistic\",\"duration\":5}")
 GEN2=$(curl -s -X POST $B17/api/generate -H "Authorization: Bearer $FT17" -H 'Content-Type: application/json' -d "$(echo $GP2 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(json.dumps({"prompt":"ایک آدمی کہتا ہے: \"میرا نام احمد ہے\"","prompt_language":"ur","mode":"realistic","style":"realistic","duration":5,"auto_plan":p,"auto_confirmed":True}))')")
-check "auto gen+voiceover: charged the plan total 10 exactly (voice included)" "10/80" "$(echo $GEN2 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "auto gen+voiceover: charged the plan total 120 exactly (voice included)" "120/760" "$(echo $GEN2 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
 JOB2=$(echo $GEN2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 POLL2=$(poll17 $JOB2 $FT17)
-check "auto gen+voiceover: completed, voice step applied, cost stays 10" "completed/applied/10" "$(echo $POLL2 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["auto_voice_status"]+"/"+str(g["cost_credits"]))')"
+check "auto gen+voiceover: completed, voice step applied, cost stays 120" "completed/applied/120" "$(echo $POLL2 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["auto_voice_status"]+"/"+str(g["cost_credits"]))')"
 GP3=$(curl -s -X POST $B17/api/generate/plan -H "Authorization: Bearer $FT17" -H 'Content-Type: application/json' -d '{"prompt":"heavy rain and a car braking in city traffic","mode":"realistic","style":"realistic","duration":5}')
 TAMP3=$(echo $GP3 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];p["base_cost"]=0;p["total_cost"]=1;p["apply"]["sound"]["cost"]=0;p["engine"]={"route":"kling_o3_4k","model":"fal-ai/kling-video/o3/4k/text-to-video","reason":"forged"};print(json.dumps({"prompt":"heavy rain and a car braking in city traffic","mode":"realistic","style":"realistic","duration":5,"auto_plan":p,"auto_confirmed":True}))')
 GEN3=$(curl -s -X POST $B17/api/generate -H "Authorization: Bearer $FT17" -H 'Content-Type: application/json' -d "$TAMP3")
-check "auto tampered plan: server charges the recomputed rate-card total 10" "10/70" "$(echo $GEN3 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "auto tampered plan: server charges the recomputed rate-card total 120" "120/640" "$(echo $GEN3 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
 check "auto tampered plan: forged Kling claim ignored — server routing (H3) recorded" "minimax/h3/text-to-video/h3_text_to_video" "$(echo $GEN3 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["model"]+"/"+g["auto_plan"]["engine"]["route"])')"
 CR17=$(curl -s -X POST $B17/api/auth/register -H 'Content-Type: application/json' -d '{"email":"autogenchar@example.com","password":"password123"}')
 CT17=$(echo $CR17 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
@@ -1933,7 +1937,7 @@ XID17=$(curl -s $B17/api/me -H "Authorization: Bearer $XT17" | python3 -c 'impor
 curl -s -o /dev/null -X POST $B17/api/admin/users/$XID17/activate -H "Authorization: Bearer $AT17" -H 'Content-Type: application/json' -d '{"plan_id":"extrapro","period":"monthly"}'
 GP5=$(curl -s -X POST $B17/api/generate/plan -H "Authorization: Bearer $XT17" -H 'Content-Type: application/json' -d '{"prompt":"a calm mountain lake at dawn","mode":"realistic","style":"realistic","duration":5}')
 GEN5=$(curl -s -X POST $B17/api/generate -H "Authorization: Bearer $XT17" -H 'Content-Type: application/json' -d "$(echo $GP5 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(json.dumps({"prompt":"a calm mountain lake at dawn","mode":"realistic","style":"realistic","duration":5,"auto_plan":p,"auto_confirmed":True}))')")
-check "auto gen (Extra Pro): applied generation uses the Kling O3 4K route at 40" "fal-ai/kling-video/o3/4k/text-to-video/kling_o3_4k/40" "$(echo $GEN5 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["model"]+"/"+g["auto_plan"]["engine"]["route"]+"/"+str(g["cost_credits"]))')"
+check "auto gen (Extra Pro): applied generation uses the Kling O3 4K route at 450" "fal-ai/kling-video/o3/4k/text-to-video/kling_o3_4k/450" "$(echo $GEN5 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["model"]+"/"+g["auto_plan"]["engine"]["route"]+"/"+str(g["cost_credits"]))')"
 kill $SRV17_PID $AUTO2STUB_PID $AUTO2TSTUB_PID 2>/dev/null
 
 echo "--- AI Auto Director: failure refunds exactly once (stub instance) ---"
@@ -1971,19 +1975,19 @@ IMGA18=$(echo $UPA18 | python3 -c 'import sys,json;print(json.load(sys.stdin)["i
 FP1=$(curl -s -X POST $B18/api/generate/plan -H "Authorization: Bearer $FT18" -H 'Content-Type: application/json' -d "{\"prompt\":\"FAILME heavy rain over a street\",\"mode\":\"realistic\",\"style\":\"realistic\",\"duration\":5,\"image_path\":\"$IMGA18\"}")
 FGEN1=$(curl -s -w '\n%{http_code}' -X POST $B18/api/generate -H "Authorization: Bearer $FT18" -H 'Content-Type: application/json' -d "$(echo $FP1 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(json.dumps({"prompt":"FAILME heavy rain over a street","mode":"realistic","style":"realistic","duration":5,"image_path":"'$IMGA18'","auto_plan":p,"auto_confirmed":True}))')")
 check "auto fail: provider submission failure -> 502" "502" "$(echo "$FGEN1" | tail -1)"
-check "auto fail: EVERYTHING refunded exactly once (balance back to 100)" "100" "$(curl -s $B18/api/me -H "Authorization: Bearer $FT18" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
-check "auto fail: failed row carries the auto plan (total was 10)" "failed/10" "$(curl -s $B18/api/history -H "Authorization: Bearer $FT18" | python3 -c 'import sys,json;g=json.load(sys.stdin)["generations"][0];print(g["status"]+"/"+str(g["auto_plan"]["total_cost"]))')"
+check "auto fail: EVERYTHING refunded exactly once (balance back to 1000)" "1000" "$(curl -s $B18/api/me -H "Authorization: Bearer $FT18" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "auto fail: failed row carries the auto plan (total was 120)" "failed/120" "$(curl -s $B18/api/history -H "Authorization: Bearer $FT18" | python3 -c 'import sys,json;g=json.load(sys.stdin)["generations"][0];print(g["status"]+"/"+str(g["auto_plan"]["total_cost"]))')"
 FP2=$(curl -s -X POST $B18/api/generate/plan -H "Authorization: Bearer $FT18" -H 'Content-Type: application/json' -d '{"prompt":"a man says: \"FAILME hello friend\"","mode":"realistic","style":"realistic","duration":5}')
 FGEN2=$(curl -s -X POST $B18/api/generate -H "Authorization: Bearer $FT18" -H 'Content-Type: application/json' -d "$(echo $FP2 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(json.dumps({"prompt":"a man says: \"FAILME hello friend\"","mode":"realistic","style":"realistic","duration":5,"auto_plan":p,"auto_confirmed":True}))')")
 JOBF2=$(echo $FGEN2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 POLLF2=$(poll18 $JOBF2)
 check "auto voice fail: video still delivered, voice marked failed_refunded" "completed/failed_refunded" "$(echo $POLLF2 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["auto_voice_status"])')"
-check "auto voice fail: voice was included (0 to refund) — row cost 10, balance 90" "10/90" "$(echo $POLLF2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_credits"])')/$(curl -s $B18/api/me -H "Authorization: Bearer $FT18" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "auto voice fail: voice was included (0 to refund) — row cost 120, balance 880" "120/880" "$(echo $POLLF2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["cost_credits"])')/$(curl -s $B18/api/me -H "Authorization: Bearer $FT18" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 FP3=$(curl -s -X POST $B18/api/generate/plan -H "Authorization: Bearer $FT18" -H 'Content-Type: application/json' -d '{"prompt":"FAILME rain over a street","mode":"realistic","style":"realistic","duration":5}')
 FGEN3=$(curl -s -X POST $B18/api/generate -H "Authorization: Bearer $FT18" -H 'Content-Type: application/json' -d "$(echo $FP3 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(json.dumps({"prompt":"FAILME rain over a street","mode":"realistic","style":"realistic","duration":5,"auto_plan":p,"auto_confirmed":True}))')")
 JOBF3=$(echo $FGEN3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 POLLF3=$(poll18 $JOBF3)
-check "auto sound fail: video delivered, sound failed_refunded, balance 80" "completed/failed_refunded/80" "$(echo $POLLF3 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["sound_status"])')/$(curl -s $B18/api/me -H "Authorization: Bearer $FT18" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "auto sound fail: video delivered, sound failed_refunded, balance 760" "completed/failed_refunded/760" "$(echo $POLLF3 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["sound_status"])')/$(curl -s $B18/api/me -H "Authorization: Bearer $FT18" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 CHA18=$(curl -s -X POST $B18/api/characters -H "Authorization: Bearer $FT18" -H 'Content-Type: application/json' -d "{\"name\":\"Captain Sara\",\"image_path\":\"$IMGA18\"}")
 CID18=$(echo $CHA18 | python3 -c 'import sys,json;print(json.load(sys.stdin)["character"]["id"])')
 BR18=$(curl -s -X POST $B18/api/auth/register -H 'Content-Type: application/json' -d '{"email":"autofail-b@example.com","password":"password123"}')
@@ -2052,23 +2056,23 @@ poll19() { # jobId token -> echoes the final generation JSON
   done
   echo "$st"
 }
-check "config: speaking_engine block (gemini-omni, flat 50, 16:9+9:16)" "gemini-omni/google/gemini-omni-flash/v1.1/text-to-video/50/16:9,9:16" "$(curl -s $B19/api/config | python3 -c 'import sys,json;s=json.load(sys.stdin)["speaking_engine"];print(s["provider"]+"/"+s["model"]+"/"+str(s["price_credits"])+"/"+",".join(s["aspects"]))')"
+check "config: speaking_engine block (gemini-omni, flat 250, 16:9+9:16)" "gemini-omni/google/gemini-omni-flash/v1.1/text-to-video/250/16:9,9:16" "$(curl -s $B19/api/config | python3 -c 'import sys,json;s=json.load(sys.stdin)["speaking_engine"];print(s["provider"]+"/"+s["model"]+"/"+str(s["price_credits"])+"/"+",".join(s["aspects"]))')"
 # NOTE: exactly 8 plan/generate calls on this instance (shared limiter).
 SPG1=$(curl -s -X POST $B19/api/generate -H "Authorization: Bearer $PT19" -H 'Content-Type: application/json' -d '{"prompt":"a man smiles at the camera and says: \"Welcome to my shop, everything is fresh today\"","engine":"speaking","aspect_ratio":"16:9","duration":10,"mode":"realistic","style":"realistic"}')
-check "speaking gen: flat 50 charged, omni model, 720P, engine speaking" "50/550/google/gemini-omni-flash/v1.1/text-to-video/720P/speaking" "$(echo $SPG1 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"])+"/"+g["model"]+"/"+g["resolution"]+"/"+g["engine"])')"
+check "speaking gen: flat 250 charged, omni model, 720P, engine speaking" "250/5750/google/gemini-omni-flash/v1.1/text-to-video/720P/speaking" "$(echo $SPG1 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"])+"/"+g["model"]+"/"+g["resolution"]+"/"+g["engine"])')"
 SPJ1=$(echo $SPG1 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 SPP1=$(poll19 $SPJ1 $PT19)
 check "speaking gen: completes on the stub with the omni model recorded" "completed/google/gemini-omni-flash/v1.1/text-to-video/720P" "$(echo $SPP1 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["model"]+"/"+g["resolution"])')"
 SPCALLS=$(curl -s http://127.0.0.1:$SPK_STUB_PORT/__calls)
 check "speaking gen: fal body is exactly the verified Omni schema (4 fields, prompt carries the dialogue)" "720p/10/16:9/4/yes" "$(echo $SPCALLS | python3 -c 'import sys,json;cs=[c for c in json.load(sys.stdin)["calls"] if c["path"]=="/google/gemini-omni-flash/v1.1/text-to-video"];b=cs[-1]["body"];print(b["resolution"]+"/"+str(b["duration"])+"/"+b["aspect_ratio"]+"/"+str(len(b))+"/"+("yes" if "Welcome to my shop" in b["prompt"] else "no"))')"
-check "speaking gen: free plan -> 403, no charge" "403/100" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B19/api/generate -H "Authorization: Bearer $FT19" -H 'Content-Type: application/json' -d '{"prompt":"a man says hello to the camera","engine":"speaking","aspect_ratio":"16:9","duration":5}')/$(curl -s $B19/api/me -H "Authorization: Bearer $FT19" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
-check "speaking gen: aspect 1:1 -> 400 before charging" "400/550" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B19/api/generate -H "Authorization: Bearer $PT19" -H 'Content-Type: application/json' -d '{"prompt":"a man says hello to the camera","engine":"speaking","aspect_ratio":"1:1","duration":5}')/$(curl -s $B19/api/me -H "Authorization: Bearer $PT19" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
-check "speaking gen: sound add-on combo -> 400 (rejected, not silently dropped), no charge" "400/550" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B19/api/generate -H "Authorization: Bearer $PT19" -H 'Content-Type: application/json' -d '{"prompt":"a man says hello to the camera","engine":"speaking","aspect_ratio":"16:9","duration":5,"sound":{"mode":"sync","prompt":"city ambience"}}')/$(curl -s $B19/api/me -H "Authorization: Bearer $PT19" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
-check "speaking gen: provider failure -> 502 with full exactly-once refund" "502/550" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B19/api/generate -H "Authorization: Bearer $PT19" -H 'Content-Type: application/json' -d '{"prompt":"FAILME a man says: \"this will fail today\"","engine":"speaking","aspect_ratio":"16:9","duration":5}')/$(curl -s $B19/api/me -H "Authorization: Bearer $PT19" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "speaking gen: free plan -> 403, no charge" "403/1000" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B19/api/generate -H "Authorization: Bearer $FT19" -H 'Content-Type: application/json' -d '{"prompt":"a man says hello to the camera","engine":"speaking","aspect_ratio":"16:9","duration":5}')/$(curl -s $B19/api/me -H "Authorization: Bearer $FT19" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "speaking gen: aspect 1:1 -> 400 before charging" "400/5750" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B19/api/generate -H "Authorization: Bearer $PT19" -H 'Content-Type: application/json' -d '{"prompt":"a man says hello to the camera","engine":"speaking","aspect_ratio":"1:1","duration":5}')/$(curl -s $B19/api/me -H "Authorization: Bearer $PT19" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "speaking gen: sound add-on combo -> 400 (rejected, not silently dropped), no charge" "400/5750" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B19/api/generate -H "Authorization: Bearer $PT19" -H 'Content-Type: application/json' -d '{"prompt":"a man says hello to the camera","engine":"speaking","aspect_ratio":"16:9","duration":5,"sound":{"mode":"sync","prompt":"city ambience"}}')/$(curl -s $B19/api/me -H "Authorization: Bearer $PT19" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "speaking gen: provider failure -> 502 with full exactly-once refund" "502/5750" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B19/api/generate -H "Authorization: Bearer $PT19" -H 'Content-Type: application/json' -d '{"prompt":"FAILME a man says: \"this will fail today\"","engine":"speaking","aspect_ratio":"16:9","duration":5}')/$(curl -s $B19/api/me -H "Authorization: Bearer $PT19" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 SPPL=$(curl -s -X POST $B19/api/generate/plan -H "Authorization: Bearer $PT19" -H 'Content-Type: application/json' -d '{"prompt":"a man stands in his shop and says: \"Welcome in, everything is fresh today\"","mode":"realistic","style":"realistic","duration":5}')
-check "auto plan (Pro): dialogue -> omni_speaking engine, speaking flag set, total = flat 50, no confirmation (no conflict)" "omni_speaking/True/None/50/50/False" "$(echo $SPPL | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["engine"]["route"]+"/"+str(p["apply"]["speaking_engine"])+"/"+str(p["apply"]["voice"])+"/"+str(p["base_cost"])+"/"+str(p["total_cost"])+"/"+str(p["needs_confirmation"]))')"
+check "auto plan (Pro): dialogue -> omni_speaking engine, speaking flag set, total = flat 250, no confirmation (no conflict)" "omni_speaking/True/None/250/250/False" "$(echo $SPPL | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["engine"]["route"]+"/"+str(p["apply"]["speaking_engine"])+"/"+str(p["apply"]["voice"])+"/"+str(p["base_cost"])+"/"+str(p["total_cost"])+"/"+str(p["needs_confirmation"]))')"
 SPG2=$(curl -s -X POST $B19/api/generate -H "Authorization: Bearer $PT19" -H 'Content-Type: application/json' -d "$(echo $SPPL | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(json.dumps({"prompt":"a man stands in his shop and says: \"Welcome in, everything is fresh today\"","mode":"realistic","style":"realistic","duration":5,"auto_plan":p,"auto_confirmed":True}))')")
-check "auto omni gen: confirmed plan generates through the speaking route at flat 50" "50/500/google/gemini-omni-flash/v1.1/text-to-video/omni_speaking" "$(echo $SPG2 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"])+"/"+g["model"]+"/"+g["auto_plan"]["engine"]["route"])')"
+check "auto omni gen: confirmed plan generates through the speaking route at flat 250" "250/5500/google/gemini-omni-flash/v1.1/text-to-video/omni_speaking" "$(echo $SPG2 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"])+"/"+g["model"]+"/"+g["auto_plan"]["engine"]["route"])')"
 SPJ2=$(echo $SPG2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 SPP2=$(poll19 $SPJ2 $PT19)
 check "auto omni gen: completes on the stub" "completed" "$(echo $SPP2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])')"
@@ -2123,11 +2127,11 @@ check "phase G frontend: 'Included · قیمت میں شامل' label logic ship
 GP_NO_MUSIC=$(curl -s -X POST $B20/api/generate/plan -H "Authorization: Bearer $GT20" -H 'Content-Type: application/json' -d '{"prompt":"a cat in a garden, no music","mode":"realistic","style":"realistic","duration":5}')
 check "negation: 'no music' -> no sound proposal, music negation detected" "None/True" "$(echo $GP_NO_MUSIC | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(str(p["apply"]["sound"])+"/"+str(p["detected"]["negations"]["music"]))')"
 GP_SILENT=$(curl -s -X POST $B20/api/generate/plan -H "Authorization: Bearer $GT20" -H 'Content-Type: application/json' -d '{"prompt":"silent video of rain in a garden","mode":"realistic","style":"realistic","duration":5}')
-check "negation: 'silent video' -> mute:true, no sound, no confirmation, total == base" "True/None/False/10" "$(echo $GP_SILENT | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(str(p["apply"]["mute"])+"/"+str(p["apply"]["sound"])+"/"+str(p["needs_confirmation"])+"/"+str(p["total_cost"]))')"
+check "negation: 'silent video' -> mute:true, no sound, no confirmation, total == base" "True/None/False/120" "$(echo $GP_SILENT | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(str(p["apply"]["mute"])+"/"+str(p["apply"]["sound"])+"/"+str(p["needs_confirmation"])+"/"+str(p["total_cost"]))')"
 curl -s -o /tmp/mute-source.mp4 http://127.0.0.1:$G_STUB_PORT/media/clip.mp4
 check "mute fixture: the stub's source clip HAS an audio stream" "yes" "$("$FFBIN20" -i /tmp/mute-source.mp4 2>&1 | python3 -c 'import sys;print("yes" if "Audio:" in sys.stdin.read() else "no")')"
 GEN_SILENT=$(curl -s -X POST $B20/api/generate -H "Authorization: Bearer $GT20" -H 'Content-Type: application/json' -d "$(echo $GP_SILENT | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(json.dumps({"prompt":"silent video of rain in a garden","mode":"realistic","style":"realistic","duration":5,"auto_plan":p,"auto_confirmed":True}))')")
-check "mute gen: charged the base 10 only" "10/90" "$(echo $GEN_SILENT | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "mute gen: charged the base 120 only" "120/880" "$(echo $GEN_SILENT | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
 JOB_SILENT=$(echo $GEN_SILENT | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 POLL_SILENT=$(poll20 $JOB_SILENT $GT20)
 check "mute gen: completed with mute_status applied" "completed/applied" "$(echo $POLL_SILENT | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["mute_status"])')"
@@ -2138,7 +2142,7 @@ GP_NODLG=$(curl -s -X POST $B20/api/generate/plan -H "Authorization: Bearer $GT2
 check "negation: 'without dialogue' -> no voice route, dialogue negation detected" "None/True" "$(echo $GP_NODLG | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(str(p["apply"]["voice"])+"/"+str(p["detected"]["negations"]["dialogue"]))')"
 GP_MANUAL_VOICE=$(curl -s -X POST $B20/api/generate/plan -H "Authorization: Bearer $GT20" -H 'Content-Type: application/json' -d "{\"prompt\":\"$URDU_DLG\",\"prompt_language\":\"ur\",\"mode\":\"realistic\",\"style\":\"realistic\",\"duration\":5,\"voice\":{\"kind\":\"voiceover\"}}")
 GEN_MANUAL_VOICE=$(curl -s -X POST $B20/api/generate -H "Authorization: Bearer $GT20" -H 'Content-Type: application/json' -d "$(echo $GP_MANUAL_VOICE | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(json.dumps({"prompt":"ایک آدمی کہتا ہے: \"میرا نام احمد ہے\"","prompt_language":"ur","mode":"realistic","style":"realistic","duration":5,"voice":{"kind":"voiceover"},"auto_plan":p,"auto_confirmed":True}))')")
-check "manual voiceover selection: total == base 10 (voice included)" "10/80" "$(echo $GEN_MANUAL_VOICE | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "manual voiceover selection: total == base 120 (voice included)" "120/760" "$(echo $GEN_MANUAL_VOICE | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
 JOB_MV=$(echo $GEN_MANUAL_VOICE | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 POLL_MV=$(poll20 $JOB_MV $GT20)
 check "manual voiceover selection: voice step applied" "completed/applied" "$(echo $POLL_MV | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["auto_voice_status"])')"
@@ -2147,11 +2151,11 @@ IMG20=$(echo $UPA20 | python3 -c 'import sys,json;print(json.load(sys.stdin)["im
 CHA20=$(curl -s -X POST $B20/api/characters -H "Authorization: Bearer $PT20" -H 'Content-Type: application/json' -d "{\"name\":\"Captain Sara\",\"image_path\":\"$IMG20\"}")
 CID20=$(echo $CHA20 | python3 -c 'import sys,json;print(json.load(sys.stdin)["character"]["id"])')
 GP_CHAR_LIP=$(curl -s -X POST $B20/api/generate/plan -H "Authorization: Bearer $PT20" -H 'Content-Type: application/json' -d "{\"prompt\":\"the captain says: \\\"Follow me now, we sail at dawn\\\"\",\"mode\":\"realistic\",\"style\":\"realistic\",\"duration\":5,\"character_id\":$CID20}")
-check "lip-sync selection (Pro, character): included — voice cost 0, total == base" "lipsync/0/15/15" "$(echo $GP_CHAR_LIP | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["apply"]["voice"]["kind"]+"/"+str(p["apply"]["voice"]["cost"])+"/"+str(p["base_cost"])+"/"+str(p["total_cost"]))')"
+check "lip-sync selection (Pro, character): included — voice cost 0, total == base" "lipsync/0/180/180" "$(echo $GP_CHAR_LIP | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["apply"]["voice"]["kind"]+"/"+str(p["apply"]["voice"]["cost"])+"/"+str(p["base_cost"])+"/"+str(p["total_cost"]))')"
 GP_OMNI_MUTE=$(curl -s -X POST $B20/api/generate/plan -H "Authorization: Bearer $PT20" -H 'Content-Type: application/json' -d '{"prompt":"a man says: \"welcome to my shop\" in a silent video","mode":"realistic","style":"realistic","duration":5}')
 check "omni + mute plan: audio conflict, speaking suppressed, mute set, confirmation required" "audio/False/True/True" "$(echo $GP_OMNI_MUTE | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["conflicts"][0]["field"]+"/"+str(p["apply"]["speaking_engine"])+"/"+str(p["apply"]["mute"])+"/"+str(p["needs_confirmation"]))')"
 SPK_SILENT=$(curl -s -w '\n%{http_code}' -X POST $B20/api/generate -H "Authorization: Bearer $PT20" -H 'Content-Type: application/json' -d '{"prompt":"a silent video of a man saying hello to the camera","engine":"speaking","aspect_ratio":"16:9","duration":5,"mode":"realistic","style":"realistic"}')
-check "speaking + silent prompt: -> 400, no charge" "400/600" "$(echo "$SPK_SILENT" | tail -1)/$(curl -s $B20/api/me -H "Authorization: Bearer $PT20" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "speaking + silent prompt: -> 400, no charge" "400/6000" "$(echo "$SPK_SILENT" | tail -1)/$(curl -s $B20/api/me -H "Authorization: Bearer $PT20" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "speaking + silent prompt: error says a speaking video cannot be silent" "yes" "$(echo "$SPK_SILENT" | sed '$d' | python3 -c 'import sys,json;print("yes" if "cannot be silent" in json.load(sys.stdin)["error"] else "no")')"
 # -- migration v15: delete its record + drop its column, restart re-applies --
 kill $SRV20_PID 2>/dev/null; sleep 0.5
@@ -2215,20 +2219,20 @@ PR21=$(curl -s -X POST $B21/api/auth/register -H 'Content-Type: application/json
 PT21=$(echo $PR21 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 PID21=$(curl -s $B21/api/me -H "Authorization: Bearer $PT21" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 curl -s -o /dev/null -X POST $B21/api/admin/users/$PID21/activate -H "Authorization: Bearer $AT21" -H 'Content-Type: application/json' -d '{"plan_id":"pro","period":"monthly"}'
-check "g2 pro user balance after activation (100 free + 500 plan)" "600" "$(curl -s $B21/api/me -H "Authorization: Bearer $PT21" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "g2 pro user balance after activation (1000 free + 5000 plan)" "6000" "$(curl -s $B21/api/me -H "Authorization: Bearer $PT21" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 UPG2=$(curl -s -X POST $B21/api/uploads/image -H "Authorization: Bearer $PT21" -H 'Content-Type: application/json' -d "{\"image_base64\":\"$PNG_B64_A\",\"content_type\":\"image/png\"}")
 IMG21=$(echo $UPG2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["image_path"])')
 SCRIPT301=$(python3 -c "print('a'*301)")
 LS301=$(curl -s -w '\n%{http_code}' -X POST $B21/api/voice/lipsync -H "Authorization: Bearer $PT21" -H 'Content-Type: application/json' -d "{\"image_path\":\"$IMG21\",\"script\":\"$SCRIPT301\",\"spoken_language\":\"en\",\"script_mode\":\"native\"}")
 check "g2 lipsync: 301-char script -> 400" "400" "$(echo "$LS301" | tail -1)"
 check "g2 lipsync: 400 error states the 300-character limit" "yes" "$(echo "$LS301" | sed '$d' | python3 -c 'import sys,json;print("yes" if "300" in json.load(sys.stdin)["error"] else "no")')"
-check "g2 lipsync: 301-char attempt charged nothing" "600" "$(curl -s $B21/api/me -H "Authorization: Bearer $PT21" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "g2 lipsync: 301-char attempt charged nothing" "6000" "$(curl -s $B21/api/me -H "Authorization: Bearer $PT21" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "g2 lipsync: 301-char attempt created no generation row" "0" "$(curl -s $B21/api/history -H "Authorization: Bearer $PT21" | python3 -c 'import sys,json;print(len([g for g in json.load(sys.stdin)["generations"] if g["kind"]=="lipsync"]))')"
 SCRIPT300=$(python3 -c "print('a'*300)")
 LS300=$(curl -s -w '\n%{http_code}' -X POST $B21/api/voice/lipsync -H "Authorization: Bearer $PT21" -H 'Content-Type: application/json' -d "{\"image_path\":\"$IMG21\",\"script\":\"$SCRIPT300\",\"spoken_language\":\"en\",\"script_mode\":\"native\"}")
 check "g2 lipsync: exactly 300 chars -> 201" "201" "$(echo "$LS300" | tail -1)"
 LS300B=$(echo "$LS300" | sed '$d')
-check "g2 lipsync: 300-char job included — cost 0, credits_left 600" "0/600" "$(echo $LS300B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "g2 lipsync: 300-char job included — cost 0, credits_left 6000" "0/6000" "$(echo $LS300B | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
 # jobs 2..10 (9 more) — the daily fair-use cap is 10 standalone jobs.
 G2OK=0
 for i in $(seq 2 10); do
@@ -2239,7 +2243,7 @@ check "g2 lipsync: jobs 2-10 all succeed (201 x9)" "9" "$G2OK"
 LS11=$(curl -s -w '\n%{http_code}' -X POST $B21/api/voice/lipsync -H "Authorization: Bearer $PT21" -H 'Content-Type: application/json' -d "{\"image_path\":\"$IMG21\",\"script\":\"salam dost\",\"spoken_language\":\"ur\",\"script_mode\":\"roman\"}")
 check "g2 lipsync: 11th standalone job of the day -> 429" "429" "$(echo "$LS11" | tail -1)"
 check "g2 lipsync: 429 names the daily fair-use limit" "yes" "$(echo "$LS11" | sed '$d' | python3 -c 'import sys,json;print("yes" if "fair-use" in json.load(sys.stdin)["error"] else "no")')"
-check "g2 lipsync: fair-use cap charged nothing (still 600)" "600" "$(curl -s $B21/api/me -H "Authorization: Bearer $PT21" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "g2 lipsync: fair-use cap charged nothing (still 6000)" "6000" "$(curl -s $B21/api/me -H "Authorization: Bearer $PT21" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 kill $SRV21_PID $G2STUB_PID 2>/dev/null
 
 echo "--- Phase I: in-app tester feedback (dedicated instance, no stubs) ---"
@@ -2366,7 +2370,7 @@ poll23() { # jobId token -> echoes the final generation JSON
   done
   echo "$st"
 }
-check "config: seedance_engine block (seedance-2.5, 60/120, aspects, 720p)" "seedance-2.5/bytedance/seedance-2.5/text-to-video/60/120/16:9,9:16,1:1/720p" "$(curl -s $B23/api/config | python3 -c 'import sys,json;s=json.load(sys.stdin)["seedance_engine"];print(s["provider"]+"/"+s["model"]+"/"+str(s["price_credits"]["5"])+"/"+str(s["price_credits"]["10"])+"/"+",".join(s["aspects"])+"/"+s["resolution"])')"
+check "config: seedance_engine block (seedance-2.5, 600/1200, aspects, 720p)" "seedance-2.5/bytedance/seedance-2.5/text-to-video/600/1200/16:9,9:16,1:1/720p" "$(curl -s $B23/api/config | python3 -c 'import sys,json;s=json.load(sys.stdin)["seedance_engine"];print(s["provider"]+"/"+s["model"]+"/"+str(s["price_credits"]["5"])+"/"+str(s["price_credits"]["10"])+"/"+",".join(s["aspects"])+"/"+s["resolution"])')"
 check "plans: can_seedance flag on Extra Pro only" "True/False/False" "$(curl -s $B23/api/plans | python3 -c 'import sys,json;d=json.load(sys.stdin);f={p["id"]:p["features"]["can_seedance"] for p in d["plans"]};print(str(f["extrapro"])+"/"+str(f["pro"])+"/"+str(f["normal"]))')"
 check "migration v17: can_seedance column applied, extrapro flagged" "ok" "$(node --input-type=module -e "
 import { DatabaseSync } from 'node:sqlite';
@@ -2383,30 +2387,30 @@ check "phase J frontend: no 4K wording anywhere near the Seedance option" "no" "
 check "phase J frontend: generate body wires the seedance engine + gate ships" "yes" "$(echo "$HOMEPAGE23" | grep -q 'engine: "seedance"' && echo "$HOMEPAGE23" | grep -q 'fillSeedanceGate' && echo yes || echo no)"
 # NOTE: exactly 10 generate calls on this instance (shared limiter).
 SDG1=$(curl -s -X POST $B23/api/generate -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d '{"prompt":"a cinematic drone shot over a misty mountain valley at dawn","engine":"seedance","aspect_ratio":"16:9","duration":5,"mode":"realistic","style":"cinematic"}')
-check "seedance gen (XP, 5s): premium 60 charged, model + 720P + engine recorded" "60/640/bytedance/seedance-2.5/text-to-video/720P/seedance" "$(echo $SDG1 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"])+"/"+g["model"]+"/"+g["resolution"]+"/"+g["engine"])')"
+check "seedance gen (XP, 5s): premium 600 charged, model + 720P + engine recorded" "600/6400/bytedance/seedance-2.5/text-to-video/720P/seedance" "$(echo $SDG1 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"])+"/"+g["model"]+"/"+g["resolution"]+"/"+g["engine"])')"
 SDJ1=$(echo $SDG1 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 SDP1=$(poll23 $SDJ1 $XT23)
 check "seedance gen (XP, 5s): completes on the stub with the seedance model recorded" "completed/bytedance/seedance-2.5/text-to-video/720P" "$(echo $SDP1 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+g["model"]+"/"+g["resolution"])')"
 FB23=$(curl -s $B23/api/_test/fal-body)
 check "seedance gen: recorded fal body is exactly the verified schema (5 fields, string duration, 720p, audio on)" "720p/5/str/True/aspect_ratio,duration,generate_audio,prompt,resolution" "$(echo $FB23 | python3 -c 'import sys,json;b=json.load(sys.stdin)["body"];print(b["resolution"]+"/"+b["duration"]+"/"+("str" if isinstance(b["duration"],str) else "int")+"/"+str(b["generate_audio"])+"/"+",".join(sorted(b.keys())))')"
 SDG2=$(curl -s -X POST $B23/api/generate -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d '{"prompt":"a neon-lit street market at night, rain reflections on wet pavement","engine":"seedance_premium","aspect_ratio":"9:16","duration":10,"mode":"realistic","style":"cinematic"}')
-check "seedance gen (XP, 10s, alias): premium 120 charged" "120/520" "$(echo $SDG2 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "seedance gen (XP, 10s, alias): premium 1200 charged" "1200/5200" "$(echo $SDG2 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
 SDCALLS=$(curl -s http://127.0.0.1:$SD_STUB_PORT/__calls)
 check "seedance gen: stub received the 10s call with a string duration" "10/str" "$(echo $SDCALLS | python3 -c 'import sys,json;cs=[c for c in json.load(sys.stdin)["calls"] if c["path"]=="/bytedance/seedance-2.5/text-to-video"];b=cs[-1]["body"];print(b["duration"]+"/"+("str" if isinstance(b["duration"],str) else "int"))')"
-check "seedance gen: Pro plan -> 403, no charge" "403/600" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B23/api/generate -H "Authorization: Bearer $PT23" -H 'Content-Type: application/json' -d '{"prompt":"a cinematic valley at dawn","engine":"seedance","aspect_ratio":"16:9","duration":5}')/$(curl -s $B23/api/me -H "Authorization: Bearer $PT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
-check "seedance gen: aspect 4:3 -> 400 before charging" "400/520" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B23/api/generate -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d '{"prompt":"a cinematic valley at dawn","engine":"seedance","aspect_ratio":"4:3","duration":5}')/$(curl -s $B23/api/me -H "Authorization: Bearer $XT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
-check "seedance gen: draft combo -> 400 before charging" "400/520" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B23/api/generate -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d '{"prompt":"a cinematic valley at dawn","engine":"seedance","aspect_ratio":"16:9","duration":5,"quality":"draft"}')/$(curl -s $B23/api/me -H "Authorization: Bearer $XT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "seedance gen: Pro plan -> 403, no charge" "403/6000" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B23/api/generate -H "Authorization: Bearer $PT23" -H 'Content-Type: application/json' -d '{"prompt":"a cinematic valley at dawn","engine":"seedance","aspect_ratio":"16:9","duration":5}')/$(curl -s $B23/api/me -H "Authorization: Bearer $PT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "seedance gen: aspect 4:3 -> 400 before charging" "400/5200" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B23/api/generate -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d '{"prompt":"a cinematic valley at dawn","engine":"seedance","aspect_ratio":"4:3","duration":5}')/$(curl -s $B23/api/me -H "Authorization: Bearer $XT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "seedance gen: draft combo -> 400 before charging" "400/5200" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B23/api/generate -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d '{"prompt":"a cinematic valley at dawn","engine":"seedance","aspect_ratio":"16:9","duration":5,"quality":"draft"}')/$(curl -s $B23/api/me -H "Authorization: Bearer $XT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 UP23=$(curl -s -X POST $B23/api/uploads/image -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d "{\"image_base64\":\"$PNG_B64_A\",\"content_type\":\"image/png\"}")
 IMG23=$(echo $UP23 | python3 -c 'import sys,json;print(json.load(sys.stdin)["image_path"])')
 CH23=$(curl -s -X POST $B23/api/characters -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d "{\"name\":\"Captain Sara\",\"image_path\":\"$IMG23\"}")
 CID23=$(echo $CH23 | python3 -c 'import sys,json;print(json.load(sys.stdin)["character"]["id"])')
-check "seedance gen: character combo -> 400 before charging" "400/520" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B23/api/generate -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d "{\"prompt\":\"the captain walks the deck at dawn\",\"engine\":\"seedance\",\"aspect_ratio\":\"16:9\",\"duration\":5,\"character_id\":$CID23}")/$(curl -s $B23/api/me -H "Authorization: Bearer $XT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
-check "seedance gen: source image combo -> 400 before charging" "400/520" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B23/api/generate -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d "{\"prompt\":\"the harbour at dawn, gentle waves\",\"engine\":\"seedance\",\"aspect_ratio\":\"16:9\",\"duration\":5,\"image_path\":\"$IMG23\"}")/$(curl -s $B23/api/me -H "Authorization: Bearer $XT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
-check "seedance gen: sound add-on combo -> 400 (rejected, not silently dropped), no charge" "400/520" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B23/api/generate -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d '{"prompt":"a cinematic valley at dawn","engine":"seedance","aspect_ratio":"16:9","duration":5,"sound":{"mode":"sync","prompt":"city ambience"}}')/$(curl -s $B23/api/me -H "Authorization: Bearer $XT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
-check "seedance gen: voice add-on combo -> 400 before charging" "400/520" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B23/api/generate -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d '{"prompt":"a cinematic valley at dawn","engine":"seedance","aspect_ratio":"16:9","duration":5,"voice":{"kind":"voiceover"}}')/$(curl -s $B23/api/me -H "Authorization: Bearer $XT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
-check "seedance gen: provider failure -> 502 with full exactly-once refund" "502/520" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B23/api/generate -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d '{"prompt":"FAILME a cinematic valley at dawn","engine":"seedance","aspect_ratio":"16:9","duration":5}')/$(curl -s $B23/api/me -H "Authorization: Bearer $XT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "seedance gen: character combo -> 400 before charging" "400/5200" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B23/api/generate -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d "{\"prompt\":\"the captain walks the deck at dawn\",\"engine\":\"seedance\",\"aspect_ratio\":\"16:9\",\"duration\":5,\"character_id\":$CID23}")/$(curl -s $B23/api/me -H "Authorization: Bearer $XT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "seedance gen: source image combo -> 400 before charging" "400/5200" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B23/api/generate -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d "{\"prompt\":\"the harbour at dawn, gentle waves\",\"engine\":\"seedance\",\"aspect_ratio\":\"16:9\",\"duration\":5,\"image_path\":\"$IMG23\"}")/$(curl -s $B23/api/me -H "Authorization: Bearer $XT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "seedance gen: sound add-on combo -> 400 (rejected, not silently dropped), no charge" "400/5200" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B23/api/generate -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d '{"prompt":"a cinematic valley at dawn","engine":"seedance","aspect_ratio":"16:9","duration":5,"sound":{"mode":"sync","prompt":"city ambience"}}')/$(curl -s $B23/api/me -H "Authorization: Bearer $XT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "seedance gen: voice add-on combo -> 400 before charging" "400/5200" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B23/api/generate -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d '{"prompt":"a cinematic valley at dawn","engine":"seedance","aspect_ratio":"16:9","duration":5,"voice":{"kind":"voiceover"}}')/$(curl -s $B23/api/me -H "Authorization: Bearer $XT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "seedance gen: provider failure -> 502 with full exactly-once refund" "502/5200" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B23/api/generate -H "Authorization: Bearer $XT23" -H 'Content-Type: application/json' -d '{"prompt":"FAILME a cinematic valley at dawn","engine":"seedance","aspect_ratio":"16:9","duration":5}')/$(curl -s $B23/api/me -H "Authorization: Bearer $XT23" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 SDHIST=$(curl -s $B23/api/history -H "Authorization: Bearer $XT23")
-check "seedance gen: failed job recorded once as failed at the premium price" "failed/60" "$(echo $SDHIST | python3 -c 'import sys,json;g=json.load(sys.stdin)["generations"][0];print(g["status"]+"/"+str(g["cost_credits"]))')"
+check "seedance gen: failed job recorded once as failed at the premium price" "failed/600" "$(echo $SDHIST | python3 -c 'import sys,json;g=json.load(sys.stdin)["generations"][0];print(g["status"]+"/"+str(g["cost_credits"]))')"
 kill $SRV23_PID $SDSTUB_PID 2>/dev/null
 
 echo "--- Phase J: forged auto-plan seedance claim falls back (stub instance) ---"
@@ -2437,7 +2441,7 @@ SDPL=$(curl -s -X POST $B24/api/generate/plan -H "Authorization: Bearer $XT24" -
 check "auto plan (XP): dialogue routes to omni_speaking — never to the premium seedance engine" "omni_speaking" "$(echo $SDPL | python3 -c 'import sys,json;print(json.load(sys.stdin)["plan"]["engine"]["route"])')"
 FORGED=$(python3 -c 'import json;print(json.dumps({"prompt":"a calm ocean sunset over the harbour","mode":"realistic","style":"realistic","duration":5,"auto_confirmed":True,"auto_plan":{"apply":{"mode":"realistic","aspect_ratio":"16:9","sound":None,"voice":None,"speaking_engine":False,"mute":False},"engine":{"route":"seedance_premium","model":"bytedance/seedance-2.5/text-to-video","reason":"forged"},"base_cost":0,"total_cost":0}}))')
 GENF=$(curl -s -X POST $B24/api/generate -H "Authorization: Bearer $FT24" -H 'Content-Type: application/json' -d "$FORGED")
-check "forged seedance plan: charged the recomputed rate-card total 10, not the premium price" "10/90" "$(echo $GENF | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "forged seedance plan: charged the recomputed rate-card total 120, not the premium price" "120/880" "$(echo $GENF | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
 check "forged seedance plan: claim ignored — server routing (H3) recorded" "minimax/h3/text-to-video/h3_text_to_video" "$(echo $GENF | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["model"]+"/"+g["auto_plan"]["engine"]["route"])')"
 kill $SRV24_PID $SD2STUB_PID 2>/dev/null
 
@@ -2477,7 +2481,7 @@ poll25() { # jobId token -> echoes the final generation JSON
   done
   echo "$st"
 }
-check "config: seedance_engine durations + linear price map (Phase L)" "5,10,15,20,30/60,120,180,240,360" "$(curl -s $B25/api/config | python3 -c 'import sys,json;s=json.load(sys.stdin)["seedance_engine"];print(",".join(str(d) for d in s["durations"])+"/"+",".join(str(s["price_credits"][str(d)]) for d in s["durations"]))')"
+check "config: seedance_engine durations + linear price map (Phase L)" "5,10,15,20,30/600,1200,1800,2400,3600" "$(curl -s $B25/api/config | python3 -c 'import sys,json;s=json.load(sys.stdin)["seedance_engine"];print(",".join(str(d) for d in s["durations"])+"/"+",".join(str(s["price_credits"][str(d)]) for d in s["durations"]))')"
 check "migration v18: generations camera_move/shot_size columns applied" "ok" "$(node --input-type=module -e "
 import { DatabaseSync } from 'node:sqlite';
 const db = new DatabaseSync('/tmp/myvideoai-phaseL-test.db');
@@ -2490,11 +2494,11 @@ check "phase L frontend: camera + shot chip rows ship" "yes" "$(echo "$HOMEPAGE2
 check "phase L frontend: directive-not-guarantee honesty line ships" "yes" "$(echo "$HOMEPAGE25" | grep -q 'Camera moves are prompt directions to the AI' && echo yes || echo no)"
 check "phase L frontend: genBody wires camera/shot + per-engine durations render" "yes" "$(echo "$HOMEPAGE25" | grep -q 'camera: state.camera' && echo "$HOMEPAGE25" | grep -q 'shot: state.shot' && echo "$HOMEPAGE25" | grep -q 'function currentDurations' && echo "$HOMEPAGE25" | grep -q 'seedance_engine.durations' && echo "$HOMEPAGE25" | grep -q 'function renderDurationSeg' && echo yes || echo no)"
 # NOTE: exactly 8 generate-family calls on this instance (shared limiter).
-check "camera gen: unknown camera -> 400 before charging" "400/100" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B25/api/generate -H "Authorization: Bearer $FT25" -H 'Content-Type: application/json' -d '{"prompt":"a calm river at dawn","camera":"flyover"}')/$(curl -s $B25/api/me -H "Authorization: Bearer $FT25" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
-check "camera gen: unknown shot -> 400 before charging" "400/100" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B25/api/generate -H "Authorization: Bearer $FT25" -H 'Content-Type: application/json' -d '{"prompt":"a calm river at dawn","shot":"extreme"}')/$(curl -s $B25/api/me -H "Authorization: Bearer $FT25" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
-check "durations: H3 request at 15s -> 400 (long durations never faked)" "400/100" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B25/api/generate -H "Authorization: Bearer $FT25" -H 'Content-Type: application/json' -d '{"prompt":"a calm river at dawn","duration":15}')/$(curl -s $B25/api/me -H "Authorization: Bearer $FT25" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "camera gen: unknown camera -> 400 before charging" "400/1000" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B25/api/generate -H "Authorization: Bearer $FT25" -H 'Content-Type: application/json' -d '{"prompt":"a calm river at dawn","camera":"flyover"}')/$(curl -s $B25/api/me -H "Authorization: Bearer $FT25" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "camera gen: unknown shot -> 400 before charging" "400/1000" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B25/api/generate -H "Authorization: Bearer $FT25" -H 'Content-Type: application/json' -d '{"prompt":"a calm river at dawn","shot":"extreme"}')/$(curl -s $B25/api/me -H "Authorization: Bearer $FT25" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "durations: H3 request at 15s -> 400 (long durations never faked)" "400/1000" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B25/api/generate -H "Authorization: Bearer $FT25" -H 'Content-Type: application/json' -d '{"prompt":"a calm river at dawn","duration":15}')/$(curl -s $B25/api/me -H "Authorization: Bearer $FT25" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 PLG1=$(curl -s -X POST $B25/api/generate -H "Authorization: Bearer $FT25" -H 'Content-Type: application/json' -d '{"prompt":"a fisherman casts his net over a calm river at dawn","camera":"zoom_in","shot":"wide","duration":5}')
-check "camera gen (H3, 5s): standard 10 charged, choices + directive in the response" "10/90/zoom_in/wide/, slow cinematic zoom in, wide establishing shot" "$(echo $PLG1 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"])+"/"+g["camera_move"]+"/"+g["shot_size"]+"/"+g["camera_directive"])')"
+check "camera gen (H3, 5s): standard 120 charged, choices + directive in the response" "120/880/zoom_in/wide/, slow cinematic zoom in, wide establishing shot" "$(echo $PLG1 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"])+"/"+g["camera_move"]+"/"+g["shot_size"]+"/"+g["camera_directive"])')"
 PLFB=$(curl -s $B25/api/_test/fal-body)
 check "camera gen: fal prompt carries the directives after the user text" "a fisherman casts his net over a calm river at dawn, slow cinematic zoom in, wide establishing shot — style: realistic" "$(echo $PLFB | python3 -c 'import sys,json;print(json.load(sys.stdin)["body"]["prompt"])')"
 PLJ1=$(echo $PLG1 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
@@ -2506,12 +2510,12 @@ PLNOTE=$(python3 -c 'import json;print(json.dumps({"prompt":"a lighthouse on the
 PLG2=$(curl -s -X POST $B25/api/generate -H "Authorization: Bearer $FT25" -H 'Content-Type: application/json' -d "$PLNOTE")
 check "camera gen: chip overrides contradictory prompt wording — stored plan notes it" "noted" "$(echo $PLG2 | python3 -c 'import sys,json;ns=json.load(sys.stdin).get("auto_plan",{}).get("notes",[]);print("noted" if any("Camera direction" in n and "overrides the camera wording" in n for n in ns) else "missing")')"
 SDG15=$(curl -s -X POST $B25/api/generate -H "Authorization: Bearer $XT25A" -H 'Content-Type: application/json' -d '{"prompt":"a misty mountain valley at dawn","engine":"seedance","aspect_ratio":"16:9","duration":15,"mode":"realistic","style":"cinematic"}')
-check "seedance gen (XP, 15s): linear premium 180 charged" "180/520" "$(echo $SDG15 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "seedance gen (XP, 15s): linear premium 1800 charged" "1800/5200" "$(echo $SDG15 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
 PLCALLS=$(curl -s http://127.0.0.1:$PL_STUB_PORT/__calls)
 check "seedance gen (15s): stub received the duration as a string" "15/str" "$(echo $PLCALLS | python3 -c 'import sys,json;cs=[c for c in json.load(sys.stdin)["calls"] if c["path"]=="/bytedance/seedance-2.5/text-to-video"];b=cs[-1]["body"];print(b["duration"]+"/"+("str" if isinstance(b["duration"],str) else "int"))')"
 SDG30=$(curl -s -X POST $B25/api/generate -H "Authorization: Bearer $XT25B" -H 'Content-Type: application/json' -d '{"prompt":"a misty mountain valley at dawn","engine":"seedance","aspect_ratio":"16:9","duration":30,"mode":"realistic","style":"cinematic"}')
-check "seedance gen (XP, 30s): linear premium 360 charged (inside the 400/day cap)" "360/340" "$(echo $SDG30 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
-check "seedance gen: non-offered duration 25 -> 400 before charging" "400/520" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B25/api/generate -H "Authorization: Bearer $XT25A" -H 'Content-Type: application/json' -d '{"prompt":"a misty mountain valley at dawn","engine":"seedance","aspect_ratio":"16:9","duration":25}')/$(curl -s $B25/api/me -H "Authorization: Bearer $XT25A" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "seedance gen (XP, 30s): linear premium 3600 charged (inside the 4000/day cap)" "3600/3400" "$(echo $SDG30 | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "seedance gen: non-offered duration 25 -> 400 before charging" "400/5200" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B25/api/generate -H "Authorization: Bearer $XT25A" -H 'Content-Type: application/json' -d '{"prompt":"a misty mountain valley at dawn","engine":"seedance","aspect_ratio":"16:9","duration":25}')/$(curl -s $B25/api/me -H "Authorization: Bearer $XT25A" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 kill $SRV25_PID $PLSTUB_PID 2>/dev/null
 
 echo "--- multilingual system: language registry + listed voices (Phase M, fal stub) ---"
@@ -2546,7 +2550,7 @@ check "phase M preview (ps): gemini body carries the exact enum string" "gemini|
 SEEDM=$(node --input-type=module -e "
 import { DatabaseSync } from 'node:sqlite';
 const db = new DatabaseSync('/tmp/myvideoai-phaseM-test.db');
-console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($MID26, 'seed multilingual voiceover source', '16:9', 2, 'realistic', 'completed', 'http://127.0.0.1:$ML_STUB_PORT/media/clip.mp4', 10).lastInsertRowid));
+console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($MID26, 'seed multilingual voiceover source', '16:9', 2, 'realistic', 'completed', 'http://127.0.0.1:$ML_STUB_PORT/media/clip.mp4', 100).lastInsertRowid));
 ")
 PAVO=$(curl -s -w '\n%{http_code}' -X POST $B26/api/voice/voiceover -H "Authorization: Bearer $MT26" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEEDM,\"script\":\"میرا ناں احمد اے تے میں پنجابی وچ گل کرنا چاہنا آں۔\",\"spoken_language\":\"pa\",\"script_mode\":\"native\",\"provider\":\"gemini\"}")
 check "phase M voiceover (pa): -> 201" "201" "$(echo "$PAVO" | tail -1)"
@@ -2565,7 +2569,7 @@ check "phase M preview (pa + elevenlabs premium): -> 400 before any provider cal
 check "phase M preview (pa + elevenlabs): error names the Gemini-only rule" "yes" "$(echo "$ELPA" | sed '$d' | python3 -c 'import sys,json;print("yes" if "Gemini provider only" in json.load(sys.stdin)["error"] else "no")')"
 TTS_M_AFTER=$(curl -s $B26/api/_test/voice-calls | python3 -c 'import sys,json;print(len([x for x in json.load(sys.stdin)["calls"] if x["kind"]=="tts"]))')
 check "phase M: the three 400s made NO provider call" "$TTS_M_BEFORE" "$TTS_M_AFTER"
-check "phase M: credits untouched by previews + included voiceover + 400s" "100" "$(curl -s $B26/api/me -H "Authorization: Bearer $MT26" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "phase M: credits untouched by previews + included voiceover + 400s" "1000" "$(curl -s $B26/api/me -H "Authorization: Bearer $MT26" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 HOMEPAGE26=$(curl -s $B26/)
 check "phase M frontend: language lab card + voice-card link ship" "yes" "$(echo "$HOMEPAGE26" | grep -q 'id="langLabCard"' && echo "$HOMEPAGE26" | grep -q 'id="langLabList"' && echo "$HOMEPAGE26" | grep -q 'id="langLabLink"' && echo "$HOMEPAGE26" | grep -q 'Test languages · زبان آزمائیں' && echo yes || echo no)"
 check "phase M frontend: the three honest status badges ship" "yes" "$(echo "$HOMEPAGE26" | grep -q 'Voice available · آواز دستیاب' && echo "$HOMEPAGE26" | grep -q 'Listed — testing · درج ہے، جانچ جاری' && echo "$HOMEPAGE26" | grep -q 'Voice not yet available · آواز ابھی دستیاب نہیں' && echo yes || echo no)"
@@ -2623,11 +2627,11 @@ console.log(Number(tabs) === 2 && cols === 3 && Number(mig) === 1 ? 'ok' : 'bad'
 GR27=$(curl -s -w '\n%{http_code}' -X POST $B27/api/auth/google -H 'Content-Type: application/json' -d '{"id_token":"valid-google-token"}')
 check "phase N google: first sign-in creates the account (201)" "201" "$(echo "$GR27" | tail -1)"
 GTOK=$(echo "$GR27" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
-check "phase N google: signup bonus lands at creation (100)" "100" "$(echo "$GR27" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "phase N google: signup bonus lands at creation (1000)" "1000" "$(echo "$GR27" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 GID=$(curl -s $B27/api/me -H "Authorization: Bearer $GTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 check "phase N google: account email is the Google email (no collision)" "googleuser@example.com" "$(curl -s $B27/api/me -H "Authorization: Bearer $GTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["email"])')"
 GR27B=$(curl -s -w '\n%{http_code}' -X POST $B27/api/auth/google -H 'Content-Type: application/json' -d '{"id_token":"valid-google-token"}')
-check "phase N google: repeat sign-in is a login (200), same user, bonus NOT doubled" "200/$GID/100" "$(echo "$GR27B" | tail -1)/$(curl -s $B27/api/me -H "Authorization: Bearer $(echo "$GR27B" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(str(d["id"])+"/"+str(d["credits"]))')"
+check "phase N google: repeat sign-in is a login (200), same user, bonus NOT doubled" "200/$GID/1000" "$(echo "$GR27B" | tail -1)/$(curl -s $B27/api/me -H "Authorization: Bearer $(echo "$GR27B" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(str(d["id"])+"/"+str(d["credits"]))')"
 check "phase N google: wrong audience -> 401" "401" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/auth/google -H 'Content-Type: application/json' -d '{"id_token":"wrong-aud-token"}')"
 check "phase N google: expired token -> 401" "401" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/auth/google -H 'Content-Type: application/json' -d '{"id_token":"expired-token"}')"
 check "phase N google: unverified Google email -> 401" "401" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/auth/google -H 'Content-Type: application/json' -d '{"id_token":"unverified-email-token"}')"
@@ -2642,7 +2646,7 @@ MG27=$(curl -s -w '\n%{http_code}' -X POST $B27/api/auth/google -H 'Content-Type
 MGTOK=$(echo "$MG27" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 MGID=$(curl -s $B27/api/me -H "Authorization: Bearer $MGTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 check "phase N no-merge: Google sign-in with a password account's email creates a DIFFERENT user" "different" "$([[ "$MGID" != "$PWID" && -n "$MGID" ]] && echo different || echo SAME)"
-check "phase N no-merge: the Google account is namespaced apart; the password account is untouched" "google-google-sub-merge@accounts.ajk-ai.local/100" "$(curl -s $B27/api/me -H "Authorization: Bearer $MGTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["email"])')/$(curl -s $B27/api/me -H "Authorization: Bearer $PWTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "phase N no-merge: the Google account is namespaced apart; the password account is untouched" "google-google-sub-merge@accounts.ajk-ai.local/1000" "$(curl -s $B27/api/me -H "Authorization: Bearer $MGTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["email"])')/$(curl -s $B27/api/me -H "Authorization: Bearer $PWTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 # -- Linking with consent (signed in + provider verification) --
 LK27=$(curl -s -w '\n%{http_code}' -X POST $B27/api/auth/link/google -H "Authorization: Bearer $PWTOK" -H 'Content-Type: application/json' -d '{"id_token":"valid-google-token-two"}')
 check "phase N link: signed-in password user links Google (201)" "201" "$(echo "$LK27" | tail -1)"
@@ -2663,8 +2667,8 @@ check "phase N verify: exactly one verification mail was sent" "1" "$(mailcount 
 VRAW=$(mailtoken verifyme@example.com verify -1)
 check "phase N verify: a wrong token -> 400" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/auth/verify-email -H 'Content-Type: application/json' -d '{"token":"0000000000000000000000000000000000000000000000000000000000000000"}')"
 VOK=$(curl -s -w '\n%{http_code}' -X POST $B27/api/auth/verify-email -H 'Content-Type: application/json' -d "{\"token\":\"$VRAW\"}")
-check "phase N verify: the emailed token verifies and the bonus lands NOW (100)" "200/100" "$(echo "$VOK" | tail -1)/$(echo "$VOK" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
-check "phase N verify: login works after verification" "100" "$(curl -s -X POST $B27/api/auth/login -H 'Content-Type: application/json' -d '{"email":"verifyme@example.com","password":"password123"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "phase N verify: the emailed token verifies and the bonus lands NOW (1000)" "200/1000" "$(echo "$VOK" | tail -1)/$(echo "$VOK" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "phase N verify: login works after verification" "1000" "$(curl -s -X POST $B27/api/auth/login -H 'Content-Type: application/json' -d '{"email":"verifyme@example.com","password":"password123"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 check "phase N verify: the token is single-use (reuse -> 400)" "400" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/auth/verify-email -H 'Content-Type: application/json' -d "{\"token\":\"$VRAW\"}")"
 # -- Resend: fresh token supersedes; per-email rate limits hold --
 curl -s -o /dev/null -X POST $B27/api/auth/register -H 'Content-Type: application/json' -d '{"email":"resendme@example.com","password":"password123"}'
@@ -2786,18 +2790,18 @@ console.log(Number(t) === 1 && cols === 8 && Number(mig) === 1 ? 'ok' : 'bad');
 FBR=$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/facebook -H 'Content-Type: application/json' -d '{"access_token":"valid-fb-token"}')
 check "phase N2 facebook: first sign-in creates the account (201)" "201" "$(echo "$FBR" | tail -1)"
 FBTOK=$(echo "$FBR" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
-check "phase N2 facebook: signup bonus lands at creation (100)" "100" "$(echo "$FBR" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "phase N2 facebook: signup bonus lands at creation (1000)" "1000" "$(echo "$FBR" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 FBID=$(curl -s $B28/api/me -H "Authorization: Bearer $FBTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 check "phase N2 facebook: account email is the Facebook email (no collision)" "fbuser@example.com" "$(curl -s $B28/api/me -H "Authorization: Bearer $FBTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["email"])')"
 FBR2=$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/facebook -H 'Content-Type: application/json' -d '{"access_token":"valid-fb-token"}')
-check "phase N2 facebook: repeat sign-in is a login (200), same user, bonus NOT doubled" "200/$FBID/100" "$(echo "$FBR2" | tail -1)/$(curl -s $B28/api/me -H "Authorization: Bearer $(echo "$FBR2" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(str(d["id"])+"/"+str(d["credits"]))')"
+check "phase N2 facebook: repeat sign-in is a login (200), same user, bonus NOT doubled" "200/$FBID/1000" "$(echo "$FBR2" | tail -1)/$(curl -s $B28/api/me -H "Authorization: Bearer $(echo "$FBR2" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(str(d["id"])+"/"+str(d["credits"]))')"
 check "phase N2 facebook: token minted for ANOTHER app -> 401" "401" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/auth/facebook -H 'Content-Type: application/json' -d '{"access_token":"wrong-app-fb-token"}')"
 check "phase N2 facebook: invalid token -> 401" "401" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/auth/facebook -H 'Content-Type: application/json' -d '{"access_token":"invalid-fb-token"}')"
 check "phase N2 facebook: unknown token -> 401" "401" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/auth/facebook -H 'Content-Type: application/json' -d '{"access_token":"garbage-token"}')"
 # -- Facebook profile WITHOUT an email (permission declined) --
 NEFB=$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/facebook -H 'Content-Type: application/json' -d '{"access_token":"noemail-fb-token"}')
 NETOK=$(echo "$NEFB" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))')
-check "phase N2 facebook: no-email profile still creates the account (201), namespaced placeholder" "201/facebook-fb-user-noemail@accounts.ajk-ai.local/100" "$(echo "$NEFB" | tail -1)/$(curl -s $B28/api/me -H "Authorization: Bearer $NETOK" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["email"]+"/"+str(d["credits"]))')"
+check "phase N2 facebook: no-email profile still creates the account (201), namespaced placeholder" "201/facebook-fb-user-noemail@accounts.ajk-ai.local/1000" "$(echo "$NEFB" | tail -1)/$(curl -s $B28/api/me -H "Authorization: Bearer $NETOK" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["email"]+"/"+str(d["credits"]))')"
 # -- NO AUTO-MERGE: a Facebook email matching a password account stays separate --
 PW28TOK=$(reg28 mergefb@example.com)
 PW28ID=$(curl -s $B28/api/me -H "Authorization: Bearer $PW28TOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
@@ -2805,7 +2809,7 @@ MGFB=$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/facebook -H 'Content-Ty
 MGFBTOK=$(echo "$MGFB" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))')
 MGFBID=$(curl -s $B28/api/me -H "Authorization: Bearer $MGFBTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 check "phase N2 no-merge: Facebook sign-in with a password account's email creates a DIFFERENT user" "different" "$([[ "$MGFBID" != "$PW28ID" && -n "$MGFBID" ]] && echo different || echo SAME)"
-check "phase N2 no-merge: the Facebook account is namespaced apart; the password account is untouched" "facebook-fb-user-merge@accounts.ajk-ai.local/100" "$(curl -s $B28/api/me -H "Authorization: Bearer $MGFBTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["email"])')/$(curl -s $B28/api/me -H "Authorization: Bearer $PW28TOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "phase N2 no-merge: the Facebook account is namespaced apart; the password account is untouched" "facebook-fb-user-merge@accounts.ajk-ai.local/1000" "$(curl -s $B28/api/me -H "Authorization: Bearer $MGFBTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["email"])')/$(curl -s $B28/api/me -H "Authorization: Bearer $PW28TOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 # -- Facebook linking with consent + conflict + unlink counting --
 LKFB=$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/link/facebook -H "Authorization: Bearer $PW28TOK" -H 'Content-Type: application/json' -d '{"access_token":"fb-token-two"}')
 check "phase N2 link: signed-in password user links Facebook (201)" "201" "$(echo "$LKFB" | tail -1)"
@@ -2855,12 +2859,12 @@ CODE2=$(smscode $PBURN)
 PV2=$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/phone/verify -H 'Content-Type: application/json' -d "{\"phone\":\"$PBURN\",\"code\":\"$CODE2\"}")
 PHTOK=$(echo "$PV2" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))')
 PHID=$(curl -s $B28/api/me -H "Authorization: Bearer $PHTOK" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
-check "phase N2 phone: a fresh code verifies -> 201, bonus lands (100), namespaced account" "201/100/phone-+923001111111@accounts.ajk-ai.local" "$(echo "$PV2" | tail -1)/$(curl -s $B28/api/me -H "Authorization: Bearer $PHTOK" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(str(d["credits"])+"/"+d["email"])')"
+check "phase N2 phone: a fresh code verifies -> 201, bonus lands (1000), namespaced account" "201/1000/phone-+923001111111@accounts.ajk-ai.local" "$(echo "$PV2" | tail -1)/$(curl -s $B28/api/me -H "Authorization: Bearer $PHTOK" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(str(d["credits"])+"/"+d["email"])')"
 ageotps $PBURN
 curl -s -o /dev/null -X POST $B28/api/auth/phone/start -H 'Content-Type: application/json' -d "{\"phone\":\"$PBURN\"}"
 CODE3=$(smscode $PBURN)
 PV3=$(curl -s -w '\n%{http_code}' -X POST $B28/api/auth/phone/verify -H 'Content-Type: application/json' -d "{\"phone\":\"$PBURN\",\"code\":\"$CODE3\"}")
-check "phase N2 phone: re-login with the same number -> 200, SAME user, bonus NOT doubled" "200/$PHID/100" "$(echo "$PV3" | tail -1)/$(curl -s $B28/api/me -H "Authorization: Bearer $(echo "$PV3" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(str(d["id"])+"/"+str(d["credits"]))')"
+check "phase N2 phone: re-login with the same number -> 200, SAME user, bonus NOT doubled" "200/$PHID/1000" "$(echo "$PV3" | tail -1)/$(curl -s $B28/api/me -H "Authorization: Bearer $(echo "$PV3" | sed '$d' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(str(d["id"])+"/"+str(d["credits"]))')"
 # -- Phone: expiry (manipulated expires_at — the TTL itself is env-driven) --
 PEXP=+923008888888
 curl -s -o /dev/null -X POST $B28/api/auth/phone/start -H 'Content-Type: application/json' -d "{\"phone\":\"$PEXP\"}"
@@ -3009,7 +3013,7 @@ QR29=$(curl -s -X POST $B29/api/auth/register -H 'Content-Type: application/json
 QT29=$(echo $QR29 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 QID29=$(curl -s $B29/api/me -H "Authorization: Bearer $QT29" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 curl -s -o /dev/null -X POST $B29/api/admin/users/$QID29/activate -H "Authorization: Bearer $AT29" -H 'Content-Type: application/json' -d '{"plan_id":"pro","period":"monthly"}'
-check "phase O2 setup: pro user A balance 600" "600" "$(curl -s $B29/api/me -H "Authorization: Bearer $PT29" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "phase O2 setup: pro user A balance 6000" "6000" "$(curl -s $B29/api/me -H "Authorization: Bearer $PT29" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 # -- upload endpoint: auth, sniffing, caps, duration guard --
 check "phase O2: unauthenticated audio upload -> 401" "401" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B29/api/uploads/audio -H 'Content-Type: application/json' -d "{\"audio_base64\":\"$MP3_B64_29\"}")"
 AUMP3=$(curl -s -w '\n%{http_code}' -X POST $B29/api/uploads/audio -H "Authorization: Bearer $PT29" -H 'Content-Type: application/json' -d "{\"audio_base64\":\"$MP3_B64_29\",\"content_type\":\"audio/mpeg\"}")
@@ -3045,7 +3049,7 @@ TTS_BEFORE=$(curl -s $B29/api/_test/voice-calls | python3 -c 'import sys,json;pr
 LSU=$(curl -s -w '\n%{http_code}' -X POST $B29/api/voice/lipsync -H "Authorization: Bearer $PT29" -H 'Content-Type: application/json' -d "{\"image_path\":\"$IMG29\",\"audio_upload_id\":$AUDID29}")
 check "phase O2: lip-sync with uploaded voice (image route) -> 201" "201" "$(echo "$LSU" | tail -1)"
 LSUB=$(echo "$LSU" | sed '$d')
-check "phase O2: uploaded-voice lip-sync included — cost 0, balance still 600" "0/600" "$(echo $LSUB | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
+check "phase O2: uploaded-voice lip-sync included — cost 0, balance still 6000" "0/6000" "$(echo $LSUB | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["generation"]["cost_credits"])+"/"+str(g["credits_left"]))')"
 check "phase O2: generation records the uploaded voice path (UI source note)" "ok" "$(echo $LSUB | python3 -c 'import sys,json;g=json.load(sys.stdin)["generation"];print("ok" if str(g.get("voice_audio_path") or "").startswith("/files/audio/") else "bad")')"
 TTS_AFTER=$(curl -s $B29/api/_test/voice-calls | python3 -c 'import sys,json;print(len([c for c in json.load(sys.stdin)["calls"] if c["kind"]=="tts"]))')
 check "phase O2: TTS call count unchanged (no synthesis for uploaded voice)" "$TTS_BEFORE" "$TTS_AFTER"
@@ -3054,7 +3058,7 @@ check "phase O2: image-route lip-sync call carries the uploaded audio URL" "ok" 
 SEED29=$(node --input-type=module -e "
 import { DatabaseSync } from 'node:sqlite';
 const db = new DatabaseSync('/tmp/myvideoai-phaseo2-test.db');
-console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($PID29, 'seed o2 talking source', '16:9', 5, 'realistic', 'completed', 'http://127.0.0.1:$O2_STUB_PORT/media/clip.mp4', 10).lastInsertRowid));
+console.log(Number(db.prepare('INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, status, video_url, cost_credits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run($PID29, 'seed o2 talking source', '16:9', 5, 'realistic', 'completed', 'http://127.0.0.1:$O2_STUB_PORT/media/clip.mp4', 100).lastInsertRowid));
 ")
 LSV29=$(curl -s -w '\n%{http_code}' -X POST $B29/api/voice/lipsync -H "Authorization: Bearer $PT29" -H 'Content-Type: application/json' -d "{\"generation_id\":$SEED29,\"audio_upload_id\":$AUDID29}")
 check "phase O2: lip-sync with uploaded voice (video route) -> 201" "201" "$(echo "$LSV29" | tail -1)"
@@ -3074,9 +3078,9 @@ kill $SRV29_PID $O2STUB_PID 2>/dev/null
 CFGMODELS=$(curl -s $B/api/config)
 check "phase O2: config models array present with >= 4 entries" "yes" "$(echo "$CFGMODELS" | python3 -c 'import sys,json;m=json.load(sys.stdin).get("models") or [];print("yes" if len(m)>=4 else "no")')"
 check "phase O2: models cover the four engine routes" "ok" "$(echo "$CFGMODELS" | python3 -c 'import sys,json;ids={m["id"] for m in json.load(sys.stdin)["models"]};print("ok" if {"h3","kling_o3_4k","gemini_omni","seedance_2_5"} <= ids else "bad")')"
-check "phase O2: H3 768P 5s = 10 credits (the live rate card)" "10" "$(echo "$CFGMODELS" | python3 -c 'import sys,json;m={x["id"]:x for x in json.load(sys.stdin)["models"]};print(m["h3"]["price"]["by_quality"]["768P"]["5"])')"
-check "phase O2: speaking flat price = 50 credits" "50" "$(echo "$CFGMODELS" | python3 -c 'import sys,json;m={x["id"]:x for x in json.load(sys.stdin)["models"]};print(m["gemini_omni"]["price"]["flat"])')"
-check "phase O2: Seedance 720p 30s = 360 credits" "360" "$(echo "$CFGMODELS" | python3 -c 'import sys,json;m={x["id"]:x for x in json.load(sys.stdin)["models"]};print(m["seedance_2_5"]["price"]["by_duration"]["30"])')"
+check "phase O2: H3 768P 5s = 120 credits (the live rate card)" "120" "$(echo "$CFGMODELS" | python3 -c 'import sys,json;m={x["id"]:x for x in json.load(sys.stdin)["models"]};print(m["h3"]["price"]["by_quality"]["768P"]["5"])')"
+check "phase O2: speaking flat price = 250 credits" "250" "$(echo "$CFGMODELS" | python3 -c 'import sys,json;m={x["id"]:x for x in json.load(sys.stdin)["models"]};print(m["gemini_omni"]["price"]["flat"])')"
+check "phase O2: Seedance 720p 30s = 3600 credits" "3600" "$(echo "$CFGMODELS" | python3 -c 'import sys,json;m={x["id"]:x for x in json.load(sys.stdin)["models"]};print(m["seedance_2_5"]["price"]["by_duration"]["30"])')"
 check "phase O2: plan gates derived (kling extrapro / omni pro / h3 all)" "extrapro/pro/all" "$(echo "$CFGMODELS" | python3 -c 'import sys,json;m={x["id"]:x for x in json.load(sys.stdin)["models"]};print(m["kling_o3_4k"]["plan_gate"]+"/"+m["gemini_omni"]["plan_gate"]+"/"+m["h3"]["plan_gate"])')"
 HOMEPAGE29=$(curl -s $B/)
 check "phase O2 frontend: lip-sync audio-source toggle + upload box ship" "yes" "$(echo "$HOMEPAGE29" | grep -q 'id="lipAudioSourceSeg"' && echo "$HOMEPAGE29" | grep -q 'data-lip-audio="upload"' && echo "$HOMEPAGE29" | grep -q 'id="lipAudioFile"' && echo "$HOMEPAGE29" | grep -q 'accept="audio/\*"' && echo yes || echo no)"
@@ -3175,13 +3179,13 @@ TKLOGIN2=$(curl -s -L -o /dev/null -w '%{url_effective}' $B30/api/auth/tiktok/st
 TKCODE2=$(qparam "$TKLOGIN2" sso)
 ETOK=$(curl -s -X POST $B30/api/auth/sso/exchange -H 'Content-Type: application/json' -d "{\"code\":\"$TKCODE2\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))')
 EME=$(curl -s $B30/api/me -H "Authorization: Bearer $ETOK")
-check "phase P tiktok login creates its own account (placeholder address, 100-credit bonus)" "tiktok-tiktok-open-1@accounts.ajk-ai.local/100" "$(echo $EME | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["email"]+"/"+str(d["credits"]))')"
+check "phase P tiktok login creates its own account (placeholder address, 1000-credit bonus)" "tiktok-tiktok-open-1@accounts.ajk-ai.local/1000" "$(echo $EME | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["email"]+"/"+str(d["credits"]))')"
 EID=$(echo $EME | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
 check "phase P tiktok account identities: tiktok only" "tiktok" "$(ids30 $ETOK)"
 TKLOGIN3=$(curl -s -L -o /dev/null -w '%{url_effective}' $B30/api/auth/tiktok/start)
 TKCODE3=$(qparam "$TKLOGIN3" sso)
 ETOK2=$(curl -s -X POST $B30/api/auth/sso/exchange -H 'Content-Type: application/json' -d "{\"code\":\"$TKCODE3\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))')
-check "phase P tiktok second login: SAME account, bonus still exactly once" "$EID/100" "$(curl -s $B30/api/me -H "Authorization: Bearer $ETOK2" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(str(d["id"])+"/"+str(d["credits"]))')"
+check "phase P tiktok second login: SAME account, bonus still exactly once" "$EID/1000" "$(curl -s $B30/api/me -H "Authorization: Bearer $ETOK2" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(str(d["id"])+"/"+str(d["credits"]))')"
 # -- expired sso code is rejected --
 TKLOGIN4=$(curl -s -L -o /dev/null -w '%{url_effective}' $B30/api/auth/tiktok/start)
 TKCODE4=$(qparam "$TKLOGIN4" sso)
@@ -3251,7 +3255,7 @@ check "phase P unlink twitter (password method remains) -> 200, identities passw
 TWLOGIN2=$(curl -s -L -o /dev/null -w '%{url_effective}' $B30/api/auth/twitter/start)
 TWCODE2=$(qparam "$TWLOGIN2" sso)
 FTOK=$(curl -s -X POST $B30/api/auth/sso/exchange -H 'Content-Type: application/json' -d "{\"code\":\"$TWCODE2\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))')
-check "phase P twitter login creates its own account (placeholder address, 100-credit bonus)" "twitter-twitter-user-1@accounts.ajk-ai.local/100" "$(curl -s $B30/api/me -H "Authorization: Bearer $FTOK" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["email"]+"/"+str(d["credits"]))')"
+check "phase P twitter login creates its own account (placeholder address, 1000-credit bonus)" "twitter-twitter-user-1@accounts.ajk-ai.local/1000" "$(curl -s $B30/api/me -H "Authorization: Bearer $FTOK" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["email"]+"/"+str(d["credits"]))')"
 # -- what the stub actually received --
 CALLSP=$(curl -s http://127.0.0.1:$P_STUB_PORT/__calls)
 check "phase P stub: tiktok authorize carried our client_key + scope + callback" "ok" "$(echo $CALLSP | python3 -c "

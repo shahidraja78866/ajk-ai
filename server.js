@@ -48,18 +48,26 @@ if (!FAL_KEY || !JWT_SECRET) {
 }
 
 // ---------- Public configuration (safe to expose via /api/config) ----------
-// Generation rate card (owner pricing v9, 2026-10-23): credits are charged
+// Generation rate card (owner pricing v9, 2026-10-23; credit scale x10
+// per the owner's 2026-10-26 rescale, migration v23): credits are charged
 // by the ROUTED quality of the job and its duration — there is no separate
 // "4K costs double" rule anymore; each quality has its own row. Charged on
-// submit, automatically refunded if the provider fails the job.
+// submit, automatically refunded if the provider fails the job. Rupee
+// prices are unchanged by the rescale; only credit amounts moved. The 4K
+// row is 450/900 — the corrected rate (the pre-rescale 40/80, i.e. 400/800
+// at the new scale, was loss-making at the cheapest pack's Rs 1.40/credit
+// floor against the Kling O3 route's flat $0.42/s). The 768P / 2K rows are
+// the owner's FINAL Kling-aligned rates (2026-10-26): matched to Kling's
+// per-second deductions converted at the Rs 1.40/credit floor and verified
+// no-loss on every row (768P 120/240, 2K 180/360).
 const COST_BY_QUALITY = {
-  '768P': { 5: 10, 10: 20 },
-  '2K':   { 5: 15, 10: 30 },
-  '4K':   { 5: 40, 10: 80 },
+  '768P': { 5: 120, 10: 240 },
+  '2K':   { 5: 180, 10: 360 },
+  '4K':   { 5: 450, 10: 900 },
 };
 function generationCost(resolution, duration) {
   const table = COST_BY_QUALITY[resolution] || COST_BY_QUALITY['768P'];
-  return table[Number(duration)] ?? COST_BY_QUALITY['768P'][Number(duration)] ?? 1;
+  return table[Number(duration)] ?? COST_BY_QUALITY['768P'][Number(duration)] ?? 120;
 }
 
 const CONFIG = {
@@ -101,8 +109,8 @@ const CONFIG = {
   // costByDuration stays as the 768P row for backward compatibility.
   costByQuality: COST_BY_QUALITY,
   costByDuration: COST_BY_QUALITY['768P'],
-  signupCredits: Number(process.env.SIGNUP_CREDITS || 100),
-  maxDailyCredits: Number(process.env.MAX_DAILY_CREDITS || 400),
+  signupCredits: Number(process.env.SIGNUP_CREDITS || 1000),
+  maxDailyCredits: Number(process.env.MAX_DAILY_CREDITS || 4000),
   // Bootstrap admin: the account with this email gets the admin flag
   // (at registration, at login, and for existing accounts at boot).
   adminEmail: (process.env.ADMIN_EMAIL || '').trim().toLowerCase(),
@@ -253,21 +261,23 @@ const CONFIG = {
   // upscale_factor } -> { video }. Documented price: $0.01/s for output up
   // to 720p, $0.02/s for output up to 1080p, $0.08/s above 1080p (60fps
   // output doubles it — we never request it). The credit price uses the
-  // owner's formula: ceil(per-second USD x seconds x 277 / 15) x 2 margin,
-  // minimum 10 credits.
+  // owner's formula: ceil(per-second USD x seconds x 277 / 1.5) x 2 margin,
+  // minimum 100 credits. (The divisor tracks the Rs-per-credit floor: at
+  // the x10 credit scale the cheapest credit is ~Rs 1.40, so /1.5 yields
+  // the same rupee price the pre-rescale /15 formula produced.)
   upscaleModel: (process.env.FAL_UPSCALE_MODEL || 'fal-ai/topaz/upscale/video').trim(),
   upscaleTopazModel: (process.env.FAL_UPSCALE_TOPAZ_MODEL || 'Proteus').trim(),
   upscalePerSecondUsd: { to720: 0.01, to1080: 0.02, above1080: 0.08 },
-  upscaleMinCredits: 10,
+  upscaleMinCredits: 100,
   upscaleFactor: 2,
   // Locked owner rates for the finishers (credits). Reframe is local
   // ffmpeg compute — free, like clip joining.
-  captionsCost: 5,
+  captionsCost: 50,
   // Draft generations: quality "draft" routes 480P on the standard H3
   // model (480P is a documented H3 tier at $0.05/s) at a flat cheap rate.
   // Drafts take no sound/voice add-ons; the full-quality version is a
   // separate standard-rate generation (POST /api/generations/:id/upgrade).
-  draftCost: { 5: 7, 10: 14 },
+  draftCost: { 5: 70, 10: 140 },
   // --- Advertising preparation (Google AdMob groundwork) ------------------
   // INERT until the owner has an AdMob account: ADS_ENABLED=1 AND a valid
   // ADMOB_PUBLISHER_ID (pub- followed by exactly 16 digits) must BOTH be
@@ -302,19 +312,18 @@ const CONFIG = {
   // There is NO safety-checker or audio-toggle field, so none is sent.
   // Output is { video: File }. Prices (fal, per second of output): 360p
   // $0.03, 720p $0.10, 1080p $0.15, 4K $0.30 — a 10s clip at our routed
-  // 720p costs $1.00 ≈ Rs 277, safely inside the flat 50-credit price
-  // (floor revenue Rs 700 at the cheapest Rs 14/credit). Dialogue
+  // 720p costs $1.00 ≈ Rs 277, safely inside the flat 250-credit price
+  // (floor revenue Rs 350 at the cheapest Rs 1.40/credit). Dialogue
   // languages are NOT stated by fal — Urdu speech on this engine is
   // UNVERIFIED and is never promised to users. This engine REPLACES the
   // Veo talking-clip route, which was never wired: Google is retiring
   // Veo 3.1 (preview IDs shut down 2026-10-22; GA IDs flagged for
   // retirement from 2026-11-17) and Omni is its designated successor on
   // fal. The plan entitlement keeps its historical flag name (can_veo);
-  // it now gates THIS engine. Flat price: exactly the existing
-  // speaking-clip rate of 50 credits (owner pricing decision), for both
-  // our durations (5s and 10s).
+  // it now gates THIS engine. Flat price: 250 credits (owner's final
+  // Kling-aligned rate, 2026-10-26), for both our durations (5s and 10s).
   modelOmni: (process.env.FAL_MODEL_OMNI || 'google/gemini-omni-flash/v1.1/text-to-video').trim(),
-  speakingCost: 50,
+  speakingCost: 250,
   speakingAspects: ['16:9', '9:16'],
   speakingResolution: '720p',
   // --- Premium engine (Phase J: Seedance 2.5) ------------------------------
@@ -338,21 +347,21 @@ const CONFIG = {
   // Seedance 2.5 at 1080p, and native 4K belongs to Seedance 2.0 and to
   // our Kling O3 route. Prices (fal, token-billed $0.0214 per 1K
   // tokens): ≈ $0.4730/s at 720p 16:9, ≈ $0.2205/s at 480p. Credit
-  // price (owner decision): 60 (5s) / 120 (10s). Sustainability at the
-  // Rs 14/credit floor and Rs 277/$: worst case 10s @720p ≈ $4.73 ≈
-  // Rs 1,310 vs floor revenue 120 × Rs 14 = Rs 1,680 (~28% margin);
+  // price (owner decision): 600 (5s) / 1200 (10s). Sustainability at the
+  // Rs 1.40/credit floor and Rs 277/$: worst case 10s @720p ≈ $4.73 ≈
+  // Rs 1,310 vs floor revenue 1200 × Rs 1.40 = Rs 1,680 (~28% margin);
   // 5s ≈ $2.37 ≈ Rs 656 vs Rs 840.
-  // Phase L extends the SAME linear rate — 12 credits per second — to
+  // Phase L extends the SAME linear rate — 120 credits per second — to
   // the longer durations the fal schema genuinely allows (4–30s; the
-  // product offers 5/10/15/20/30): 15s = 180, 20s = 240, 30s = 360.
+  // product offers 5/10/15/20/30): 15s = 1800, 20s = 2400, 30s = 3600.
   // Margin holds linearly: the 30s worst case ≈ 30 × $0.473 = $14.19
-  // ≈ Rs 3,930 vs floor revenue 360 × Rs 14 = Rs 5,040 (~28%). A 30s
-  // job (360) sits inside the 400/day cap by design — the cap is NOT
+  // ≈ Rs 3,930 vs floor revenue 3600 × Rs 1.40 = Rs 5,040 (~28%). A 30s
+  // job (3600) sits inside the 4000/day cap by design — the cap is NOT
   // raised for it. Gate: the can_seedance plan flag
   // (Extra Pro only). Dialogue languages are NOT stated by fal — Urdu
   // speech on this engine is UNVERIFIED and is never promised.
   modelSeedance: (process.env.FAL_MODEL_SEEDANCE || 'bytedance/seedance-2.5/text-to-video').trim(),
-  seedanceCost: { 5: 60, 10: 120, 15: 180, 20: 240, 30: 360 },
+  seedanceCost: { 5: 600, 10: 1200, 15: 1800, 20: 2400, 30: 3600 },
   seedanceDurations: [5, 10, 15, 20, 30],
   seedanceAspects: ['16:9', '9:16', '1:1'],
   seedanceResolution: '720p',
@@ -576,34 +585,44 @@ const FOUR_K_ASPECTS = ['16:9', '9:16', '1:1'];
 // this wave — the Veo and lip-sync generation engines are Phase B.
 const PLAN_DEFAULTS = [
   { id: 'weekly',   name: 'Weekly',    price_monthly: 0,    price_yearly: 0,
-    credits_monthly: 0, price_weekly: 1800, credits_weekly: 80,
+    credits_monthly: 0, price_weekly: 1800, credits_weekly: 800,
     quality: '768P', quality_label: '768P',      resolution: '768P', model: CONFIG.model,   sort_order: 0,
     can_veo: 0, can_lipsync: 0, can_seedance: 0,
     play_product_monthly: null, play_product_yearly: null, play_product_weekly: 'ajk_weekly' },
   { id: 'normal',   name: 'Normal',    price_monthly: 5600, price_yearly: 56000,
-    credits_monthly: 400, price_weekly: null, credits_weekly: null,
+    credits_monthly: 4000, price_weekly: null, credits_weekly: null,
     quality: '768P', quality_label: '768P',      resolution: '768P', model: CONFIG.model,   sort_order: 1,
     can_veo: 0, can_lipsync: 0, can_seedance: 0,
     play_product_monthly: 'ajk_normal_monthly',   play_product_yearly: 'ajk_normal_yearly',   play_product_weekly: null },
   { id: 'pro',      name: 'Pro',       price_monthly: 9500, price_yearly: 95000,
-    credits_monthly: 500, price_weekly: null, credits_weekly: null,
+    credits_monthly: 5000, price_weekly: null, credits_weekly: null,
     quality: '2K',   quality_label: '2K',        resolution: '2K',   model: CONFIG.model,   sort_order: 2,
     can_veo: 1, can_lipsync: 1, can_seedance: 0,
     play_product_monthly: 'ajk_pro_monthly',      play_product_yearly: 'ajk_pro_yearly',      play_product_weekly: null },
   { id: 'extrapro', name: 'Extra Pro', price_monthly: 14000, price_yearly: 140000,
-    credits_monthly: 600, price_weekly: null, credits_weekly: null,
+    credits_monthly: 6000, price_weekly: null, credits_weekly: null,
     quality: '4K',   quality_label: 'Native 4K', resolution: '4K',   model: CONFIG.model4k, sort_order: 3,
     can_veo: 1, can_lipsync: 1, can_seedance: 1,
     play_product_monthly: 'ajk_extrapro_monthly', play_product_yearly: 'ajk_extrapro_yearly', play_product_weekly: null },
+  // Fifth tier above Extra Pro (owner, 2026-10-26): same native-4K quality
+  // and model route and all premium entitlements, more credits. Worst case
+  // verified no-loss by the owner: 10,000 credits spent entirely on native
+  // 4K = Rs 12,927 fal cost vs Rs 19,999 revenue. Existing databases gain
+  // this row via migration v24 (fresh DBs seed it from here).
+  { id: 'extrapremier', name: 'Extra Premier', price_monthly: 19999, price_yearly: 199990,
+    credits_monthly: 10000, price_weekly: null, credits_weekly: null,
+    quality: '4K',   quality_label: 'Native 4K', resolution: '4K',   model: CONFIG.model4k, sort_order: 4,
+    can_veo: 1, can_lipsync: 1, can_seedance: 1,
+    play_product_monthly: 'ajk_extrapremier_monthly', play_product_yearly: 'ajk_extrapremier_yearly', play_product_weekly: null },
 ];
 
 // One-time credit packs (top-ups bought outside subscriptions). Seeded into
 // the `credit_packs` table on first boot; afterwards editable in the admin
 // panel — boot never overwrites an admin's edits.
 const PACK_DEFAULTS = [
-  { credits: 50,  price_pkr: 899,  sort_order: 1, play_product_id: 'credits_50' },
-  { credits: 100, price_pkr: 1499, sort_order: 2, play_product_id: 'credits_100' },
-  { credits: 250, price_pkr: 3499, sort_order: 3, play_product_id: 'credits_250' },
+  { credits: 500,  price_pkr: 899,  sort_order: 1, play_product_id: 'credits_500' },
+  { credits: 1000, price_pkr: 1499, sort_order: 2, play_product_id: 'credits_1000' },
+  { credits: 2500, price_pkr: 3499, sort_order: 3, play_product_id: 'credits_2500' },
 ];
 const PACK_METHODS = ['easypaisa', 'jazzcash', 'bank', 'nayapay', 'other'];
 
@@ -1058,6 +1077,50 @@ const MIGRATIONS = [
       expires_at INTEGER NOT NULL,
       used_at INTEGER
     );` },
+  // v23 — credit rescale x10 (owner decision 2026-10-26, the "Kling
+  // model": big credit numbers at the SAME rupee prices, so a plan reads
+  // 4,000 credits instead of 400). Every stored credit amount is
+  // multiplied by 10 exactly once (version-gated): user balances (the
+  // credits total and both buckets, plus credit_deficit, which is a
+  // balance owed back), the plans' grant amounts (credits_monthly /
+  // credits_weekly — NULL weekly columns stay NULL) and the credit
+  // packs' amounts; a pack's play_product_id is kept on the default
+  // 'credits_<n>' convention ONLY where it still follows that pattern
+  // (an admin's custom id is never rewritten). PENDING pack purchases
+  // carry the credit snapshot the approval grant uses verbatim, so
+  // pending snapshots rescale too; approved/rejected purchase rows and
+  // generations' recorded costs are history and stay untouched. The
+  // code-side rates (rate card, speaking/draft/seedance/captions,
+  // signup bonus, daily cap) moved x10 in the same release; the 4K rate
+  // becomes the corrected 450/900 rather than a straight x10 of the
+  // loss-making 40/80.
+  { version: 23, up: `
+    UPDATE users SET credits = credits * 10,
+      free_credits = free_credits * 10,
+      plan_credits = plan_credits * 10,
+      credit_deficit = credit_deficit * 10;
+    UPDATE plans SET credits_monthly = credits_monthly * 10,
+      credits_weekly = credits_weekly * 10;
+    UPDATE credit_packs SET play_product_id = 'credits_' || (credits * 10)
+      WHERE play_product_id = 'credits_' || credits;
+    UPDATE credit_packs SET credits = credits * 10;
+    UPDATE pack_purchases SET credits = credits * 10 WHERE status = 'pending';` },
+  // v24 — fifth plan tier "Extra Premier" (owner, 2026-10-26). INSERT OR
+  // IGNORE, version-gated like the v9/v17 one-time inserts: an existing
+  // database gains the row exactly once, and if the row already exists
+  // (admin-created or edited) it is left completely untouched. The boot
+  // seed loop afterwards re-syncs only structural fields from
+  // PLAN_DEFAULTS. Runs AFTER v23, so the inserted 10,000 credits are
+  // already at the rescaled scale — never multiplied.
+  { version: 24, up: `
+    INSERT OR IGNORE INTO plans (id, name, price_monthly, price_yearly, credits_monthly,
+                quality, quality_label, resolution, model, sort_order,
+                play_product_monthly, play_product_yearly,
+                price_weekly, credits_weekly, play_product_weekly, can_veo, can_lipsync, can_seedance)
+    VALUES ('extrapremier', 'Extra Premier', 19999, 199990, 10000,
+            '4K', 'Native 4K', '4K', 'fal-ai/kling-video/o3/4k/text-to-video', 4,
+            'ajk_extrapremier_monthly', 'ajk_extrapremier_yearly',
+            NULL, NULL, NULL, 1, 1, 1);` },
 ];
 {
   const applied = new Set(db.prepare('SELECT version FROM schema_migrations').all().map(r => r.version));
@@ -2003,10 +2066,10 @@ app.get('/api/config', (req, res) => res.json({
   // Finishers (Phase C1): one-tap post-processing on a completed video.
   // Each finisher creates a NEW History entry linked to the source video.
   // reframe is local ffmpeg work (free, like clip joining); captions is a
-  // flat +5; extend is charged at the standard generation rate for the
+  // flat +50; extend is charged at the standard generation rate for the
   // source video's quality and the added duration; upscale is priced from
   // the verified Topaz per-second rate with the owner's formula
-  // (ceil(USD/s x seconds x 277 / 15) x 2, minimum 10 credits).
+  // (ceil(USD/s x seconds x 277 / 1.5) x 2, minimum 100 credits).
   finishers: {
     configured: Boolean(FAL_KEY),
     actions: ['reframe', 'captions', 'extend', 'upscale'],
@@ -2016,7 +2079,7 @@ app.get('/api/config', (req, res) => res.json({
       extend: 'standard generation rate for the source quality and added duration',
       upscale: { model: CONFIG.upscaleModel, per_second_usd: CONFIG.upscalePerSecondUsd,
                  factor: CONFIG.upscaleFactor, min_credits: CONFIG.upscaleMinCredits,
-                 formula: 'ceil(per-second USD x seconds x 277 / 15) x 2, minimum min_credits' },
+                 formula: 'ceil(per-second USD x seconds x 277 / 1.5) x 2, minimum min_credits' },
     },
     reframe_targets: ['16:9', '9:16', '1:1', '4:5'],
     models: { captions: CONFIG.whisperModel, upscale: CONFIG.upscaleModel },
@@ -2044,7 +2107,7 @@ app.get('/api/config', (req, res) => res.json({
   // repriced server-side inside /api/generate before anything is charged.
   auto: { enabled: CONFIG.autoDirectorEnabled, version: CONFIG.autoDirectorVersion },
   // Speaking engine (Phase E): one-step talking videos on Gemini Omni —
-  // the Veo route was retired before it was ever wired. Flat 50 credits,
+  // the Veo route was retired before it was ever wired. Flat 500 credits,
   // Pro/Extra Pro only (the can_veo entitlement), 16:9 / 9:16 only,
   // routed at 720p; the engine generates its own synchronized dialogue
   // audio, so no voice/sound add-ons combine with it.
@@ -2054,7 +2117,7 @@ app.get('/api/config', (req, res) => res.json({
   // premium engine (AI Auto never routes to it), Extra Pro only (the
   // can_seedance entitlement), 16:9 / 9:16 / 1:1, routed at 720p with
   // native synchronized audio included. Priced per duration at a linear
-  // 12 credits/second (60 / 5s … 360 / 30s; Phase L added the 15/20/30s
+  // 120 credits/second (600 / 5s … 3600 / 30s; Phase L added the 15/20/30s
   // durations the fal schema genuinely allows). It is NOT a 4K engine
   // and is never presented as one.
   seedance_engine: { provider: 'seedance-2.5', model: CONFIG.modelSeedance,
@@ -2961,7 +3024,7 @@ function autoRoutedQuality(userId, { wantedResolution = null, aspectRatio = '16:
     resolution = wantedResolution;
   if (resolution === '4K' && !FOUR_K_ASPECTS.includes(aspectRatio)) resolution = '2K';
   if (isDraft) resolution = '480P';
-  const cost = isDraft ? (CONFIG.draftCost[Number(duration)] ?? 7)
+  const cost = isDraft ? (CONFIG.draftCost[Number(duration)] ?? 70)
                        : generationCost(resolution, Number(duration));
   return { plan, resolution, cost };
 }
@@ -3689,7 +3752,7 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
     soundSpec = { mode: smode, volume: svol, promptRaw: sPromptRaw, prompt: null };
   }
   // Draft workflow (Phase C1): quality "draft" = a cheap 480P preview on
-  // the standard H3 model, priced flat (7/14 credits). Drafts cannot take
+  // the standard H3 model, priced flat (70/140 credits). Drafts cannot take
   // sound add-ons — sound belongs on the upgraded full-quality version.
   const isDraft = String(req.body?.quality || '').toLowerCase() === 'draft';
   if (isDraft && soundSpec)
@@ -4004,15 +4067,16 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
   // structural gates above likewise guarantee no character/image/draft/
   // add-ons reach this point, so the override is unconditional here.
   if (isSeedance) { model = CONFIG.modelSeedance; resolution = '720P'; }
-  // Rate card (v9): the credit cost comes from the ROUTED quality's own
-  // row — 768P 10/20, 2K 15/30, native 4K 40/80 for 5s/10s. Speaking jobs
-  // are the flat speaking price instead (50 credits, either duration);
-  // Seedance premium jobs pay the per-duration premium price (Phase J,
-  // extended by Phase L: a linear 12 credits/second — 60/120/180/240/360
+  // Rate card (v9, x10 scale since 2026-10-26): the credit cost comes
+  // from the ROUTED quality's own row — 768P 100/200, 2K 150/300,
+  // native 4K 450/900 for 5s/10s. Speaking jobs are the flat speaking
+  // price instead (500 credits, either duration); Seedance premium
+  // jobs pay the per-duration premium price (Phase J, extended by
+  // Phase L: a linear 120 credits/second — 600/1200/1800/2400/3600
   // for 5/10/15/20/30s).
   const cost = isSeedance ? (CONFIG.seedanceCost[Number(duration)] ?? CONFIG.seedanceCost[5])
              : isSpeaking ? CONFIG.speakingCost
-             : isDraft ? (CONFIG.draftCost[Number(duration)] ?? 7)
+             : isDraft ? (CONFIG.draftCost[Number(duration)] ?? 70)
                        : generationCost(resolution, Number(duration));
   // The sound add-on is charged together with the video in the same
   // atomic transaction (exactly once). If the video fails, the whole
@@ -5525,7 +5589,7 @@ app.post('/api/voice/lipsync', auth, voiceLimiter, async (req, res) => {
   }
 });
 
-// ---------- Voiceover (all plans, +10 credits) ------------------------------
+// ---------- Voiceover (all plans, included — 0 credits) -------------------
 // Synthesizes the script and muxes it over a finished video, REPLACING the
 // video's original audio track (the model's native audio is not kept).
 app.post('/api/voice/voiceover', auth, voiceLimiter, async (req, res) => {
@@ -5900,8 +5964,8 @@ app.post('/api/sound/apply', auth, soundLimiter, async (req, res) => {
     refreshSubscriptionState(req.user.id);
     const sub = currentSubscription(req.user.id);
     const plan = sub ? getPlan(sub.plan_id) : null;
-    if (!plan || !['pro', 'extrapro'].includes(plan.id))
-      return res.status(403).json({ error: 'Premium sync sound needs the Pro or Extra Pro plan. Upgrade your plan to keep the dialogue and add a premium soundtrack.' });
+    if (!plan || !['pro', 'extrapro', 'extrapremier'].includes(plan.id))
+      return res.status(403).json({ error: 'Premium sync sound needs the Pro, Extra Pro or Extra Premier plan. Upgrade your plan to keep the dialogue and add a premium soundtrack.' });
   }
   let volume, resolved;
   try {
@@ -6024,7 +6088,7 @@ app.post('/api/sound/generate', auth, soundLimiter, async (req, res) => {
 //   captions — fal Whisper transcription (verified schema) -> .ass built
 //              from the timed segments -> burned in with the subtitles
 //              filter (same libass styling family as the watermark).
-//              +5 credits, refunded on failure. A video with NO audio
+//              +50 credits, refunded on failure. A video with NO audio
 //              stream is refused with 400 BEFORE any charge.
 //   extend   — last frame -> the existing H3 image-to-video route for
 //              +5s/+10s at the SOURCE clip's quality tier (standard rate
@@ -6034,8 +6098,8 @@ app.post('/api/sound/generate', auth, soundLimiter, async (req, res) => {
 //              best effort, not a guarantee. Any step failing refunds
 //              exactly once and leaves no partial entry completed.
 //   upscale  — Topaz video upscale on fal (verified endpoint + price).
-//              Credit price = ceil(per-second USD x seconds x 277 / 15)
-//              x 2 margin, minimum 10 credits. The result tier (one step
+//              Credit price = ceil(per-second USD x seconds x 277 / 1.5)
+//              x 2 margin, minimum 100 credits. The result tier (one step
 //              above the source) must be within the plan's max quality —
 //              the same gate as generation.
 const FINISH_ACTIONS = ['reframe', 'captions', 'extend', 'upscale'];
@@ -6057,7 +6121,7 @@ function upscalePriceCredits(durationSeconds, outputHeight) {
   const perSec = outputHeight <= 720 ? CONFIG.upscalePerSecondUsd.to720
     : outputHeight <= 1080 ? CONFIG.upscalePerSecondUsd.to1080
     : CONFIG.upscalePerSecondUsd.above1080;
-  const raw = Math.ceil(perSec * Math.max(1, Math.ceil(durationSeconds)) * 277 / 15) * 2;
+  const raw = Math.ceil(perSec * Math.max(1, Math.ceil(durationSeconds)) * 277 / 1.5) * 2;
   return Math.max(CONFIG.upscaleMinCredits, raw);
 }
 

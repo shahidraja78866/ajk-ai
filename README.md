@@ -222,7 +222,7 @@ feature tiers now, not prices. Concretely:
   conflict for the confirmation path to explain; a direct
   `engine: 'speaking'` generate whose prompt asks for silence is
   rejected with 400 before any charge.
-- The speaking engine stays flat **50 credits** — its synchronized
+- The speaking engine stays flat **250 credits** — its synchronized
   audio was always part of that one price, never an add-on.
 
 **Sustainability check (run BEFORE the price change, per the owner's
@@ -242,22 +242,22 @@ pages / llms.txt on 2026-10-23:
 
 Worst case per tier — the video plus EVERY audio step the workflow can
 attach (auto dialogue is capped at 300 chars ≈ $0.03 of premium TTS;
-USD/PKR 277; floor revenue values one credit at Rs 14 = $0.0505; Pro
-plan credits are worth Rs 19 each, Extra Pro Rs 23.33):
+USD/PKR 277; floor revenue values one credit at Rs 1.40 = $0.00505; Pro
+plan credits are worth Rs 1.90 each, Extra Pro Rs 2.33):
 
 | Tier | Worst-case fal cost | Revenue compared | Verdict |
 |---|---|---|---|
-| Draft 480P (7/14 cr) | $0.25 / $0.50 — drafts accept NO audio steps at all | $0.354 / $0.708 (floor) | ✅ absorbs |
-| 768P 5s/10s (10/20 cr) | $0.34 / $0.65 (video + TTS + priciest sound a free user can attach) | $0.505 / $1.011 (floor) | ✅ absorbs |
-| 2K 5s/10s (15/30 cr, Pro/Extra Pro only) | $0.89 / $1.55 (adds LatentSync $0.20 + premium sync) | $1.03 / $2.06 (Pro credit value) | ✅ absorbs |
-| Native 4K 5s/10s (40/80 cr, Extra Pro) | $2.34 / $4.45 (the Kling base is silent — `generate_audio: false` — so sound/voice steps attach after it) | $3.37 / $6.74 (Extra Pro value) | ✅ absorbs |
-| Speaking / Omni (flat 50 cr) | $0.50 / $1.00 (native synchronized audio; add-ons are rejected, none can attach) | $2.53 (floor) | ✅ absorbs |
+| Draft 480P (70/140 cr) | $0.25 / $0.50 — drafts accept NO audio steps at all | $0.354 / $0.708 (floor) | ✅ absorbs |
+| 768P 5s/10s (120/240 cr) | $0.34 / $0.65 (video + TTS + priciest sound a free user can attach) | $0.606 / $1.212 (floor) | ✅ absorbs |
+| 2K 5s/10s (180/360 cr, Pro/Extra Pro only) | $0.89 / $1.55 (adds LatentSync $0.20 + premium sync) | $1.23 / $2.47 (Pro credit value) | ✅ absorbs |
+| Native 4K 5s/10s (450/900 cr, Extra Pro) | $2.34 / $4.45 (the Kling base is silent — `generate_audio: false` — so sound/voice steps attach after it) | $3.37 / $6.74 (Extra Pro value) | ✅ absorbs |
+| Speaking / Omni (flat 250 cr) | $0.50 / $1.00 (native synchronized audio; add-ons are rejected, none can attach) | $1.26 (floor) | ✅ absorbs |
 | Post-hoc applies, per use | premium sync ≤ $0.15 (10 s), sync $0.01, SFX $0.02, music $0.003; audio-only SFX ≤ $0.044, music ≤ $0.02 | included at 0 cr — absorbed by the margins above | ✅ |
 
-Notes on the 2K row: valued at the absolute Rs 14 pack floor, the 10 s
+Notes on the 2K row: valued at the absolute Rs 1.40 pack floor, the 10 s
 stack would be ~$0.03 over — but 2K cannot be bought with pack credits
 at all (it requires a Pro / Extra Pro plan, whose credits are worth
-Rs 19+), so that combination is not purchasable. A Pro user generating
+Rs 1.90+), so that combination is not purchasable. A Pro user generating
 at 768P with the full lip-sync + premium stack stays inside too
 (≈ $0.98 vs $1.37 at Pro credit value for 10 s).
 
@@ -284,7 +284,7 @@ at 768P with the full lip-sync + premium stack stays inside too
 > (≤ 300 chars ≈ $0.03) sit far inside the margin. Voiceover behaviour
 > is unchanged; the same script cap would close that corner too.
 
-**Unchanged by this phase:** captions (**+5 credits**) and the
+**Unchanged by this phase:** captions (**+50 credits**) and the
 upscale/extend finisher prices keep their rates — they are post-video
 finishers, not generation audio. Plan prices are unchanged (frozen by
 the owner).
@@ -491,7 +491,7 @@ source is never modified. Cross-user ids return 404.
   dialogue language, else auto-detect) and the timed segments are
   rendered into an `.ass` file (Noto Naskh Arabic styling, the same
   libass renderer as the watermark) and burned in with the
-  `subtitles` filter. **+5 credits**, refunded exactly once on any
+  `subtitles` filter. **+50 credits**, refunded exactly once on any
   failure. A video with **no audio stream is refused with 400 before
   any charge** — there is nothing to transcribe.
 - **extend** (`{extra_seconds: 5|10}`) — the source's **last frame**
@@ -508,15 +508,15 @@ source is never modified. Cross-user ids return 404.
   output up to 720p, $0.02/s up to 1080p, $0.08/s above 1080p). The
   credit price is the owner's formula on the video's **measured**
   duration and output height: `ceil(per-second USD × seconds × 277 /
-  15) × 2` margin, **minimum 10 credits** (e.g. a 30-second video
-  upscaled to 720p costs `ceil(0.01×30×277/15)×2 = 12` credits; a
-  5-second 768P video costs 16). The result is **one tier above the
+  1.5) × 2` margin, **minimum 100 credits** (e.g. a 30-second video
+  upscaled to 720p costs `ceil(0.01×30×277/1.5)×2 = 112` credits; a
+  5-second 768P video costs 148). The result is **one tier above the
   source** and must be within the plan's max quality — the same gate
   as generation — and the entry is labelled with the tier it reaches.
 
 **Draft → upgrade.** `POST /api/generate` accepts `quality: "draft"`:
 a cheap **480P** preview on the standard H3 model (480P is a
-documented H3 tier), flat **7 credits (5s) / 14 credits (10s)**,
+documented H3 tier), flat **70 credits (5s) / 140 credits (10s)**,
 marked `stage: 'draft'` (migration v12) and counted against the daily
 cap like any charge. Drafts **cannot take sound or voice add-ons**
 (the API rejects them with a clear message; the app hides them for
@@ -810,26 +810,27 @@ There is **no** safety-checker or audio-toggle field, so none is sent.
 Output is `{ video: File }`. Prices (fal, per second of output): 360p
 $0.03, 720p $0.10, 1080p $0.15, 4K $0.30.
 
-**How it is sold.** Flat **50 credits** per clip (5s or 10s — the
-existing speaking-clip rate), **Pro and Extra Pro only** (the
+**How it is sold.** Flat **250 credits** per clip (5s or 10s — the
+owner's final Kling-aligned speaking rate, 2026-10-26), **Pro and
+Extra Pro only** (the
 `can_veo` entitlement; everyone else gets 403). Select it directly
 with `engine: "speaking"` (alias `"omni_speaking"`) on
 `POST /api/generate`, or let AI Auto choose it: when the analyzer
 detects dialogue on a speaking-eligible plan and the job is a fresh
 text-to-video human/news scene (no character, no starting image), the
-plan's engine route is `omni_speaking` with base cost 50 and **no**
+plan's engine route is `omni_speaking` with base cost 250 and **no**
 voiceover/lip-sync add-on stacked; confirmed plans generate through
-the speaking route at that same flat 50. Character and image jobs keep
+the speaking route at that same flat 250. Character and image jobs keep
 the Phase D reference/image + lip-sync routes. Because the engine
 speaks itself, combining it with voice or sound add-ons is **rejected
 with 400** (never silently dropped), as are drafts and any aspect
 ratio other than 16:9 / 9:16 — all before charging. Provider failures
 use the same exactly-once refund as every other route.
 `GET /api/config` exposes `speaking_engine: { provider: "gemini-omni",
-model, price_credits: 50, aspects: ["16:9", "9:16"] }`.
+model, price_credits: 500, aspects: ["16:9", "9:16"] }`.
 
-**Cost check.** 10s at 720p = 10 × $0.10 = **$1.00 ≈ Rs 277**; 50
-credits at the cheapest acquisition (Rs 14/credit) = **Rs 700**
+**Cost check.** 10s at 720p = 10 × $0.10 = **$1.00 ≈ Rs 277**; 500
+credits at the cheapest acquisition (Rs 1.40/credit) = **Rs 700**
 revenue — safely profitable at every duration the app offers.
 
 **Honest limits.** fal does **not** state which dialogue languages
@@ -976,11 +977,11 @@ route. The Studio option reads "Seedance 2.5 · Premium — Top-ranked
 quality · 720p · Extra Pro", and the test suite asserts no "4K"
 wording appears anywhere near it.
 
-**How it is sold.** **60 credits (5s) / 120 credits (10s)** — extended
+**How it is sold.** **600 credits (5s) / 1200 credits (10s)** — extended
 by Phase L to the full linear table below — **Extra Pro only** (the
-`can_seedance` entitlement, migration v17; everyone else gets 403). Sustainability at the Rs 14/credit floor and
+`can_seedance` entitlement, migration v17; everyone else gets 403). Sustainability at the Rs 1.40/credit floor and
 Rs 277/$: worst case 10s @720p ≈ $4.73 ≈ Rs 1,310 vs floor revenue
-120 × Rs 14 = Rs 1,680 (~28% margin); 5s ≈ $2.37 ≈ Rs 656 vs
+1200 × Rs 1.40 = Rs 1,680 (~28% margin); 5s ≈ $2.37 ≈ Rs 656 vs
 Rs 840. Select it directly with `engine: "seedance"` (alias
 `"seedance_premium"`) on `POST /api/generate`, or with the Seedance
 option in the Studio's Quality control (locked, with the plan note,
@@ -1041,20 +1042,20 @@ as `translated_prompt`).
 **Longer durations — only where the model genuinely allows them.**
 The Seedance 2.5 schema allows 4–30s, so its offered set grows from
 {5, 10} to **{5, 10, 15, 20, 30}** at the same linear rate of
-**12 credits/second**:
+**120 credits/second**:
 
 | Duration | 5s | 10s | 15s | 20s | 30s |
 |---|---|---|---|---|---|
-| Credits | 60 | 120 | 180 | 240 | 360 |
+| Credits | 600 | 1200 | 1800 | 2400 | 3600 |
 
 The margin holds linearly: the 30s worst case ≈ 30 × $0.473 =
-$14.19 ≈ Rs 3,930 vs floor revenue 360 × Rs 14 = Rs 5,040 (~28%).
+$14.19 ≈ Rs 3,930 vs floor revenue 3600 × Rs 1.40 = Rs 5,040 (~28%).
 The duration is still sent to fal as a **string**, and
 `seedance_engine` in `GET /api/config` now carries the `durations`
 list beside the price map; the Studio's duration control renders the
 extended set only while the Seedance engine is selected and
-re-clamps the selection when switching engines. A 30s job costs 360
-of the 400-credit daily cap — intended; the cap is unchanged. Every
+re-clamps the selection when switching engines. A 30s job costs 3600
+of the 4000-credit daily cap — intended; the cap is unchanged. Every
 other engine keeps 5/10s: the H3, Omni and Kling schemas are wired
 at those durations in this codebase, a 15s request to them is a 400,
 and longer durations are **never faked** — a 60-second video is
@@ -1191,7 +1192,7 @@ for the owner's hardest rule:
 > `409 identity_in_use`; unlinking refuses to remove the account's
 > **last** sign-in method (`400 last_auth_method`).
 
-The **signup bonus** (100 credits) is granted by
+The **signup bonus** (1,000 credits) is granted by
 `grantSignupBonus()` — exactly once per account, whichever method
 created it (the `users.signup_bonus_granted` flag flips in the same
 transaction as the grant). Social-created accounts have no password:
@@ -1540,7 +1541,7 @@ user's **own recorded voice file**.
     "resolutions": ["720p"],
     "durations": [5, 10, 15, 20, 30],
     "aspects": ["16:9", "9:16", "1:1"],
-    "price": { "by_duration": { "5": 60, "10": 120, "15": 180, "20": 240, "30": 360 } },
+    "price": { "by_duration": { "5": 600, "10": 1200, "15": 1800, "20": 2400, "30": 3600 } },
     "plan_gate": "extrapro",
     "notes": "native_audio_included_up_to_720p_route"
   }
@@ -1717,6 +1718,37 @@ characters (301 chars → 400 before any charge, no row; exactly 300 →
 per day applies (11th → 429). The Pro gate is unchanged and the
 in-generation lip-sync route is untouched.
 
+**Update (2026-10-26, credit rescale ×10 — migration v23):** on the
+owner's instruction the whole credit scale moved ×10 at unchanged
+rupee prices (plans 800/4000/5000/6000, weekly included; packs
+500/1000/2500; signup bonus 1,000; rate card 768P 100/200, 2K 150/300,
+native 4K **450/900** — the approved correction of the loss-making
+40/80; speaking 500; draft 70/140; Seedance 120/second; captions +50;
+**Final rate adjustment (owner, same day):** the per-generation rates
+were then aligned to Kling's per-video deductions in rupee terms —
+768P **120/240**, 2K **180/360**, speaking flat **250** (4K 450/900,
+draft, Seedance and captions unchanged) — no-loss verified at the
+Rs 1.40/credit floor on every row. A fifth plan, **Extra Premier**
+(Rs 19,999/mo, Rs 199,990/yr, 10,000 credits, native 4K, all premium
+flags, Play products `ajk_extrapremier_monthly` / `ajk_extrapremier_yearly`),
+was added above Extra Pro — PLAN_DEFAULTS for fresh databases and
+migration v24 (INSERT OR IGNORE) for existing ones.
+Also in the rescale: daily cap 4,000; the upscale formula's divisor moved /15 → /1.5 with
+its minimum at 100 so its rupee prices are unchanged). Migration v23
+multiplies stored user balances (both buckets + `credit_deficit`),
+plan grant amounts, pack amounts (default `credits_<n>` product ids
+follow) and PENDING pack-purchase snapshots ×10 exactly once;
+approved/rejected purchase rows and recorded generation costs are
+history and stay untouched. The suite's credit expectations were
+updated to the new scale throughout (signup/plan/pack balances,
+generation charges and refunds, the daily-cap seed at 3,950 + 120,
+speaking/draft/Seedance/captions charges, and the upscale price
+checks at the rescaled formula). Final verification of the rescale,
+the Kling-aligned rates and the Extra Premier tier: **918 passed,
+0 failed** (full suite, fresh DB, 2026-10-26); migration v24 verified
+on a v23 database copy (row inserted exactly once, balances and
+existing plan amounts untouched on a second boot).
+
 ## Safety built in
 - Key and JWT secret live only in `.env`; `/api/config` returns only public settings.
 - Credits are deducted and the job recorded in **one atomic transaction** (double-spend safe).
@@ -1728,25 +1760,37 @@ in-generation lip-sync route is untouched.
 
 Four PKR subscription plans sit on top of the existing credit system
 (owner's FINAL pricing, 2026-10-23 — migration v9; yearly = 10× monthly).
+**Credit rescale ×10 (owner decision 2026-10-26 — migration v23):** every
+credit amount below (plan grants, pack sizes, the rate card, engine
+prices, the signup bonus and the daily cap) is ten times the pre-rescale
+figure at the SAME rupee prices — the "Kling model" of big credit
+numbers. Stored balances, plan/pack amounts and pending pack-purchase
+snapshots were multiplied ×10 by migration v23; recorded generation
+costs in History are historical and were not rewritten. The one
+non-straight-×10 figure is native 4K: **450/900**, the corrected rate
+(the old 40/80 was loss-making at the pack floor).
 Prices and credits are **defaults seeded into the `plans` table** — afterwards
 they are edited in the Admin Panel and boot never overwrites an admin's edits.
 
 | Plan | Price | Credits | Quality | Generation route | Premium features |
 |---|---|---|---|---|---|
-| Weekly | Rs 1,800 / **week** | 80 / week | 768P | H3 model, resolution `768P` | — (H3 modes only) |
-| Normal | Rs 5,600 / mo (Rs 56,000 / yr) | 400 / mo | 768P | H3 model, resolution `768P` | — |
-| Pro | Rs 9,500 / mo (Rs 95,000 / yr) | 500 / mo | 2K | H3 model, resolution `2K` | Speaking video + lip-sync |
-| Extra Pro | Rs 14,000 / mo (Rs 140,000 / yr) | 600 / mo | Native 4K | Kling O3 4K native-4K endpoint (no `resolution` param; 16:9/9:16/1:1 only) | Speaking video + lip-sync, all premium |
+| Weekly | Rs 1,800 / **week** | 800 / week | 768P | H3 model, resolution `768P` | — (H3 modes only) |
+| Normal | Rs 5,600 / mo (Rs 56,000 / yr) | 4000 / mo | 768P | H3 model, resolution `768P` | — |
+| Pro | Rs 9,500 / mo (Rs 95,000 / yr) | 5000 / mo | 2K | H3 model, resolution `2K` | Speaking video + lip-sync |
+| Extra Pro | Rs 14,000 / mo (Rs 140,000 / yr) | 6000 / mo | Native 4K | Kling O3 4K native-4K endpoint (no `resolution` param; 16:9/9:16/1:1 only) | Speaking video + lip-sync, all premium |
+| Extra Premier | Rs 19,999 / mo (Rs 199,990 / yr) | 10000 / mo | Native 4K | Kling O3 4K native-4K endpoint (no `resolution` param; 16:9/9:16/1:1 only) | Speaking video + lip-sync, all premium |
 
 **Allowance rationale (brief):** each tier's credits were sized from the
 worst case — the subscriber spends every credit at the tier's most
 expensive routed quality, priced at fal's published per-second rates
-(≈ Rs 277/$). Weekly: 80 credits = 40 s at 768P ≈ $2.40 ≈ Rs 665 of model
-cost against Rs 1,800. Normal: 400 credits = 200 s at 768P ≈ $12 ≈
-Rs 3,324 against Rs 5,600. Pro: 500 credits ≈ 165 s at 2K ≈ $21.50 ≈
-Rs 5,940 against Rs 9,500. Extra Pro: 600 credits = 75 s at native 4K ≈
-$31.50 ≈ Rs 8,726 against Rs 14,000. Every tier stays profitable even if
-a subscriber maxes out the allowance at the priciest quality.
+(≈ Rs 277/$). Weekly: 800 credits ≈ 33 s at 768P ≈ $2.00 ≈ Rs 554 of model
+cost against Rs 1,800. Normal: 4000 credits ≈ 167 s at 768P ≈ $10 ≈
+Rs 2,770 against Rs 5,600. Pro: 5000 credits ≈ 139 s at 2K ≈ $18.07 ≈
+Rs 5,006 against Rs 9,500. Extra Pro: 6000 credits ≈ 67 s at native 4K ≈
+$28 ≈ Rs 7,756 against Rs 14,000. Extra Premier: 10,000 credits spent
+entirely on native 4K ≈ Rs 12,927 of model cost against Rs 19,999.
+Every tier stays profitable even if a subscriber maxes out the
+allowance at the priciest quality.
 
 **The Weekly plan** is a first-class weekly subscription: its price and
 credits live in the plan's `price_weekly` / `credits_weekly` columns, a
@@ -1782,7 +1826,7 @@ ratios the 4K endpoint can't render (only 16:9, 9:16, 1:1) fall back to H3 at
 2K at the 2K rate — never charged or recorded as 4K.
 
 **Credit accounting (two buckets):**
-- Every user has `free_credits` (the 100 sign-up credits — never expire) and
+- Every user has `free_credits` (the 1,000 sign-up credits — never expire) and
   `plan_credits` (granted by a subscription). `users.credits` is always their
   sum, so older code paths see one balance.
 - Spending takes **plan credits first**. Refunds go back plan-bucket-first,
@@ -1795,9 +1839,9 @@ ratios the 4K endpoint can't render (only 16:9, 9:16, 1:1) fall back to H3 at
 
   | Routed quality | 5s | 10s |
   |---|---|---|
-  | 768P | 10 credits | 20 credits |
-  | 2K | 15 credits | 30 credits |
-  | Native 4K | 40 credits | 80 credits |
+  | 768P | 100 credits | 200 credits |
+  | 2K | 150 credits | 300 credits |
+  | Native 4K | 450 credits | 900 credits |
 
   `/api/config` exposes the full table as `cost_by_quality` (plus
   `cost_by_duration`, the 768P row, for compatibility), and the Studio
@@ -1807,7 +1851,7 @@ ratios the 4K endpoint can't render (only 16:9, 9:16, 1:1) fall back to H3 at
   The same applies to the automatic fallback: a 4K-quality request at an
   aspect ratio the 4K endpoint can't render goes to H3 at 2K at the 2K
   rate, and the row is recorded as H3/2K. The daily cap
-  (`MAX_DAILY_CREDITS`, default **400**) counts these costs, and failed generations keep the exact-once auto-refund.
+  (`MAX_DAILY_CREDITS`, default **4000**) counts these costs, and failed generations keep the exact-once auto-refund.
 
 **Subscription lifecycle:** `active → canceled` (benefits continue to the
 period end) `→ expired` (period end passes; unused plan credits are removed
@@ -1918,7 +1962,7 @@ must match Play Console exactly):
 | Normal monthly / yearly | `ajk_normal_monthly` / `ajk_normal_yearly` |
 | Pro monthly / yearly | `ajk_pro_monthly` / `ajk_pro_yearly` |
 | Extra Pro monthly / yearly | `ajk_extrapro_monthly` / `ajk_extrapro_yearly` |
-| 50 / 100 / 250 credit packs | `credits_50` / `credits_100` / `credits_250` |
+| 500 / 1000 / 2500 credit packs | `credits_500` / `credits_1000` / `credits_2500` |
 
 ### Launch checklist — Google Play (owner steps, in order)
 
@@ -2068,9 +2112,9 @@ Besides subscriptions, users can buy one-time credit packs from the app's
 
 | Pack | Price |
 |---|---|
-| 50 credits | Rs 899 |
-| 100 credits | Rs 1,499 |
-| 250 credits | Rs 3,499 |
+| 500 credits | Rs 899 |
+| 1000 credits | Rs 1,499 |
+| 2500 credits | Rs 3,499 |
 
 Packs are seeded into the `credit_packs` table and are editable (credits,
 price, active) in the Admin Panel or via `GET|PUT /api/admin/packs(/:id)`.
