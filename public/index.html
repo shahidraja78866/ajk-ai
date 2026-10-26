@@ -1140,6 +1140,40 @@
         background:none; border:0; cursor:pointer; font:inherit;
         font-size:13px; font-weight:700; color:var(--accent);
       }
+
+      /* ---------- Screen Split: dedicated tool views + composer
+         settings chip. The tool views hold the EXISTING cards (moved,
+         not copied); styling matches the studio cards they came from. */
+      .tool-view-head{
+        display:flex; align-items:center; gap:12px; margin:2px 0 14px;
+      }
+      .tool-view-title{ font-size:20px; font-weight:800; margin:0; letter-spacing:.2px; }
+      .view-back{
+        display:inline-flex; align-items:center; gap:5px; flex:none;
+        padding:8px 13px 8px 9px; border-radius:999px; cursor:pointer;
+        border:1px solid var(--line); background:var(--panel-2);
+        color:var(--text); font:inherit; font-size:13.5px; font-weight:700;
+      }
+      .view-back svg{ width:17px; height:17px; }
+      .view-back:hover{ border-color:var(--blue); }
+      [dir="rtl"] .view-back svg{ transform:scaleX(-1); }
+      #view-create .card, #view-tools .card, #view-tool-voice .card,
+      #view-tool-sound .card, #view-tool-chars .card{ padding:16px; }
+      #view-tools .card, #view-tool-voice .card, #view-tool-sound .card,
+      #view-tool-chars .card{ margin-top:0; }
+      .settings-chip{
+        display:flex; align-items:center; gap:9px; width:100%;
+        margin-top:12px; padding:11px 14px; border-radius:12px; cursor:pointer;
+        border:1px solid var(--line); background:var(--panel-2);
+        color:var(--text); font:inherit; font-size:14px; font-weight:600;
+        text-align:left;
+      }
+      .settings-chip:hover{ border-color:var(--blue); }
+      .settings-chip > svg{ width:18px; height:18px; flex:none; opacity:.85; }
+      .settings-chip-text{ flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .settings-chip-chev{ font-size:21px; line-height:1; opacity:.65; flex:none; }
+      [dir="rtl"] .settings-chip{ text-align:right; }
+      [dir="rtl"] .settings-chip-chev{ transform:scaleX(-1); display:inline-block; }
     </style>
   </head>
   <body>
@@ -1244,7 +1278,7 @@
           <div class="actionbar-row">
             <div class="actionbar-cost">
               <span class="actionbar-label" data-i18n="total_cost">Total cost</span>
-              <strong><span id="costNum">10</span> credits</strong>
+              <strong><span id="costNum">120</span> credits</strong>
             </div>
             <button type="button" class="btn primary generate-btn actionbar-btn" id="generateBtn">
               <svg viewBox="0 0 24 24" fill="currentColor" id="generateIcon"><path d="M8 5.5v13l11-6.5-11-6.5z"/></svg>
@@ -1252,6 +1286,12 @@
             </button>
           </div>
         </div>
+
+        <button type="button" class="settings-chip" id="createSettingsChip" aria-label="Create settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+          <span class="settings-chip-text" id="createSettingsChipText">Settings</span>
+          <span class="settings-chip-chev" aria-hidden="true">›</span>
+        </button>
 
             <!-- Phase Q: three quick-action tiles wired to the real
                  controls only (prompt focus / source-image upload /
@@ -1340,6 +1380,30 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M8.5 14s1.2 2.2 3.5 2.2 3.5-2.2 3.5-2.2"/><circle cx="9" cy="9.5" r=".6" fill="currentColor"/><circle cx="15" cy="9.5" r=".6" fill="currentColor"/></svg>
               <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_cartoon_episode">Cartoon Episode</span></span>
             </button>
+            <button type="button" class="tpl-chip" data-template="nature-doc">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22v-6"/><path d="M12 16c0-6-4-10-9-10 0 5 4 9 9 10z"/><path d="M12 12c0-4 3-8 8-8 0 4-3 8-8 8z"/></svg>
+              <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_nature_doc">Nature Documentary</span></span>
+            </button>
+            <button type="button" class="tpl-chip" data-template="food-ad">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17h16"/><path d="M5 17a7 7 0 0 1 14 0"/><path d="M12 10V8.5"/><circle cx="12" cy="7" r="1"/><path d="M3 21h18"/></svg>
+              <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_food_ad">Food Ad</span></span>
+            </button>
+            <button type="button" class="tpl-chip" data-template="fashion-shoot">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8a2 2 0 1 1 2-2"/><path d="M12 8v1.5L20 16H4l8-6.5"/></svg>
+              <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_fashion_shoot">Fashion Shoot</span></span>
+            </button>
+            <button type="button" class="tpl-chip" data-template="travel-vlog">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7z"/></svg>
+              <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_travel_vlog">Travel Vlog</span></span>
+            </button>
+            <button type="button" class="tpl-chip" data-template="wedding-film">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="14" r="5"/><circle cx="15" cy="10" r="5"/></svg>
+              <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_wedding_film">Wedding Film</span></span>
+            </button>
+            <button type="button" class="tpl-chip" data-template="anime-story">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+              <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_anime_story">Anime Story</span></span>
+            </button>
           </div>
         </div>
 
@@ -1354,358 +1418,7 @@
               <div class="hr-rail" id="homeRecentRail" role="group" aria-label="Recent creations"></div>
             </div>
 
-            <div class="card vt-card" id="vt_toolsCard">
-              <div class="tpl-head">
-                <h2 class="tpl-head-title"><span data-i18n="vt_title">Video Tools</span><span class="i18n-alt"> · ویڈیو ٹولز</span></h2>
-              </div>
-              <p class="sub">Every tool below is a real, working part of the studio — each one opens its own controls.</p>
-              <div class="vt-grid">
-                <button type="button" class="vt-row" id="vt_toolImage">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="m4.5 17.5 5-5 3.5 3.5 2.5-2.5 4 4"/></svg>
-                  <span><span data-i18n="vt_image">Image to Video</span><span class="i18n-alt"> · تصویر سے ویڈیو</span></span>
-                </button>
-                <button type="button" class="vt-row" id="vt_toolVoice">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4M8 22h8"/></svg>
-                  <span><span data-i18n="vt_voice">Voice &amp; Lip Sync</span><span class="i18n-alt"> · آواز اور لپ سنک</span></span>
-                </button>
-                <button type="button" class="vt-row" id="vt_toolSound">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
-                  <span><span data-i18n="vt_sound">Sound &amp; Effects</span><span class="i18n-alt"> · ساؤنڈ اور ایفیکٹس</span></span>
-                </button>
-                <button type="button" class="vt-row" id="vt_toolCharacters">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8.5" r="3.8"/><path d="M5 20c1.4-3.4 4-5 7-5s5.6 1.6 7 5"/></svg>
-                  <span><span data-i18n="vt_characters">My Characters</span><span class="i18n-alt"> · میرے کردار</span></span>
-                </button>
-                <button type="button" class="vt-row" id="vt_toolJoin">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 7h11M8 12h11M8 17h11"/><circle cx="4.5" cy="7" r="1.3"/><circle cx="4.5" cy="12" r="1.3"/><circle cx="4.5" cy="17" r="1.3"/></svg>
-                  <span><span data-i18n="vt_join">Join Clips</span><span class="i18n-alt"> · کلپس جوڑیں</span></span>
-                </button>
-                <button type="button" class="vt-row" id="vt_toolTemplates">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="8" height="8" rx="2"/><rect x="13" y="4" width="8" height="8" rx="2"/><rect x="3" y="14" width="8" height="6" rx="2"/><rect x="13" y="14" width="8" height="6" rx="2"/></svg>
-                  <span><span data-i18n="vt_templates">Templates</span><span class="i18n-alt"> · ٹیمپلیٹس</span></span>
-                </button>
-              </div>
-            </div>
 
-            <!-- Phase E/F: ALL manual controls — language, format/length,
-                 prompt ideas, mode, character, start image, style/quality,
-                 Voice, Sound, Watermark — live in this ONE container,
-                 collapsed by default, so Home stays a clean prompt +
-                 Generate flow like the owner's reference mockup (moved
-                 here 2026-10-26 at his marking). All element ids are
-                 unchanged, and the generate flow reads their values
-                 exactly as before. -->
-            <div class="card collapsible is-collapsed" id="advancedCard">
-              <button type="button" class="collapse-head" data-collapse-head aria-expanded="false" aria-controls="advancedCardBody">
-                <span class="collapse-title"><span data-i18n="advanced_settings">Advanced settings</span><span class="opt-tag" data-i18n="optional_tag">optional</span><span class="i18n-alt"> · مزید ترتیبات (اختیاری)</span></span>
-                <svg class="collapse-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
-              </button>
-              <div class="collapse-body" id="advancedCardBody">
-
-              <div class="composer-lang">
-                <label for="promptLang" data-i18n="prompt_language">Language</label>
-                <select id="promptLang">
-                  <option value="en" selected>English</option>
-                  <option value="ur">اردو (Urdu)</option>
-                  <option value="ks">کشمیری (Kashmiri)</option>
-                  <option value="ar">العربية (Arabic)</option>
-                  <option value="fa">فارسی (Persian)</option>
-                  <option value="hi">हिन्दी (Hindi)</option>
-                  <option value="zh">中文 (Chinese)</option>
-                </select>
-              </div>
-
-            <div class="composer-chips" aria-label="Quick video settings">
-              <div class="chip-group">
-                <span class="chip-group-label" data-i18n="format_label">Format</span>
-                <div class="seg chip-seg" id="aspectSeg" role="group" aria-label="Aspect ratio"></div>
-              </div>
-              <div class="chip-group">
-                <span class="chip-group-label" data-i18n="length_label">Length</span>
-                <div class="seg chip-seg" id="durationSeg" role="group" aria-label="Duration"></div>
-              </div>
-              <label class="auto-switch" title="AI Auto plans the settings from your prompt and asks before extra-cost choices">
-                <input type="checkbox" id="aiAutoToggle" checked aria-label="AI Auto" />
-                <span data-i18n="auto_label">Auto</span>
-              </label>
-            </div>
-
-              <div class="prompt-tools">
-                <button type="button" class="tool-btn" id="enhanceBtn">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg>
-                  <span data-i18n="enhance_prompt">Enhance prompt</span>
-                </button>
-                <button type="button" class="tool-btn" data-example="A red panda eating bamboo in a misty forest, soft morning light, slow push-in camera">Try: red panda</button>
-                <button type="button" class="tool-btn" data-example="A paper boat sailing down a rainy city street at night, neon reflections on wet pavement, tracking shot">Try: paper boat</button>
-                <button type="button" class="tool-btn" data-example="Fresh bread being sliced on a wooden table in a sunlit bakery, steam rising, close-up, warm tones">Try: bakery</button>
-              </div>
-
-              <div class="field-label"><span data-i18n="video_mode">Video mode</span></div>
-              <div class="mode-grid mode-compact" id="modeGrid" role="group" aria-label="Video mode">
-                <button type="button" class="mode-card sel" data-mode="realistic">
-                  <strong data-i18n="mode_realistic">Realistic Human Video</strong>
-                  <span>Lifelike people and real-world scenes with natural-looking movement.</span>
-                  <small>Best for realistic and cinematic styles.</small>
-                </button>
-                <button type="button" class="mode-card" data-mode="cartoon">
-                  <strong data-i18n="mode_cartoon">Cartoon / Animation</strong>
-                  <span>Cartoon characters, animated stories, funny animals and child-friendly scenes.</span>
-                  <small>Best for cartoon and anime styles.</small>
-                </button>
-              </div>
-              <p class="mode-note">Both modes include model-generated audio; the dialogue language isn't guaranteed — Urdu speech isn't officially documented for this model.</p>
-
-              <div class="field-label"><span data-i18n="character_optional">Character (optional)</span></div>
-              <div style="display:flex;gap:10px;align-items:center;">
-                <img id="genCharThumb" alt="" style="display:none;width:44px;height:44px;object-fit:cover;border-radius:8px;" />
-                <select id="genCharacter" style="flex:1;">
-                  <option value="">No character</option>
-                </select>
-              </div>
-              <p class="lang-hint">Pick one of your saved characters (My Characters card below) and the model uses its photo as the subject reference, so the character stays recognisable from video to video. A chosen character overrides the starting image below. Character consistency is the model's best effort — it is not a guarantee. The credit cost is the standard rate for the chosen quality and duration — characters cost nothing extra.</p>
-
-              <div class="field-label"><span data-i18n="starting_image">Starting image (optional)</span></div>
-              <input type="file" class="file-input" id="sourceImage" accept="image/png,image/jpeg,image/webp" />
-              <p class="lang-hint" id="imageStatus">Add a PNG, JPEG or WebP image (max 5 MB) to animate it as the opening frame.</p>
-              <button type="button" class="tool-btn" id="removeImageBtn" style="display:none;" data-i18n="remove_image">Remove image</button>
-
-              <div class="field-label"><span data-i18n="visual_style">Visual style</span></div>
-              <div class="style-grid" id="styleGrid"></div>
-
-              <div class="field-label"><span data-i18n="quality_label">Quality</span></div>
-              <div class="seg" id="qualitySeg" role="group" aria-label="Quality">
-                <button type="button" class="sel" data-quality="full">Full quality<small>your plan's quality</small></button>
-                <button type="button" data-quality="draft">Draft · 480P<small><span id="draftCostHint">7 / 14</span> credits</small></button>
-                <button type="button" data-quality="seedance" id="seedanceQualityBtn" class="locked" aria-disabled="true">Seedance 2.5 · Premium<small>Top-ranked quality · 720p · Extra Pro</small></button>
-              </div>
-              <p class="lang-hint" id="draftHint" style="display:none;">Draft = a cheap 480P preview of your idea. Sound and voice add-ons are not available on drafts — upgrade the draft from your History to full quality first, then add them there.</p>
-              <p class="lang-hint" id="seedanceHint" style="display:none;">Seedance 2.5 premium engine — the price in the bar below is the full price, native audio included. Sound and voice add-ons can't be combined with it, and AI Auto never selects it — you choose it here.</p>
-
-              <!-- Phase L: cinematic direction chips. These are prompt
-                   directives: the server appends the chosen phrases to
-                   the prompt sent to the model — no engine in our
-                   wiring has a mechanical camera control, and the hint
-                   below says so plainly. Free (no credit change). -->
-              <div class="field-label"><span data-i18n="camera_movement">Camera movement (optional)</span></div>
-              <div class="seg" id="cameraSeg" role="group" aria-label="Camera movement">
-                <button type="button" class="sel" data-camera="">None</button>
-                <button type="button" data-camera="zoom_in">Zoom In</button>
-                <button type="button" data-camera="zoom_out">Zoom Out</button>
-                <button type="button" data-camera="pan_left">Pan Left</button>
-                <button type="button" data-camera="pan_right">Pan Right</button>
-                <button type="button" data-camera="tilt_up">Tilt Up</button>
-                <button type="button" data-camera="tilt_down">Tilt Down</button>
-                <button type="button" data-camera="tracking">Tracking Shot</button>
-                <button type="button" data-camera="orbit">Orbit</button>
-                <button type="button" data-camera="handheld">Handheld</button>
-                <button type="button" data-camera="static">Static</button>
-              </div>
-              <div class="field-label"><span data-i18n="shot_size">Shot size (optional)</span></div>
-              <div class="seg" id="shotSeg" role="group" aria-label="Shot size">
-                <button type="button" class="sel" data-shot="">None</button>
-                <button type="button" data-shot="close_up">Close-up</button>
-                <button type="button" data-shot="medium">Medium Shot</button>
-                <button type="button" data-shot="wide">Wide Shot</button>
-                <button type="button" data-shot="aerial">Aerial / Drone</button>
-              </div>
-              <p class="lang-hint">Camera moves are prompt directions to the AI · کیمرہ حرکات AI کو ہدایات ہیں — the model follows them as guidance, not as a mechanical guarantee. They never change the credit cost.</p>
-
-              <p class="fineprint">Credits are charged by the server when it accepts your job. Failed generations are refunded automatically. Mode, a starting image and watermark text do not change the credit cost — the same duration and quality pricing applies. Sound, voice and music options are included in this price — there are no separate audio fees. The total cost and the Generate button stay in the bar at the bottom of this screen.</p>
-
-            <div class="card collapsible is-collapsed" id="voiceCard">
-              <button type="button" class="collapse-head" data-collapse-head aria-expanded="false" aria-controls="voiceCardBody">
-                <span class="collapse-title"><span data-i18n="voice_dialogue">Voice &amp; Dialogue</span><span class="opt-tag" data-i18n="optional_tag">optional</span></span>
-                <svg class="collapse-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
-              </button>
-              <div class="form-error" id="voiceNotice" style="display:none;" role="alert"></div>
-              <div class="collapse-body" id="voiceCardBody">
-              <p class="sub">Write a script, hear the voice first — free — then turn a photo into a talking character, or re-voice a finished video. Voice quality is new and still being proven with real samples; listen to the preview before spending credits.</p>
-
-              <div id="voiceControls">
-                <div class="field-label"><span data-i18n="script_label">Script</span><span class="count"><span id="voiceCharCount">0</span> / 300</span></div>
-                <textarea id="voiceScript" maxlength="300" placeholder="The words the character should say — in Urdu, Hindi or English script, or in Roman letters (choose Roman below)."></textarea>
-                <p class="lang-hint">Up to 300 characters · 300 حروف تک — included in your plan</p>
-
-                <div class="field-label"><span data-i18n="spoken_language">Spoken language</span></div>
-                <select id="voiceLang">
-                  <option value="ur" selected>Urdu</option>
-                  <option value="hi">Hindi</option>
-                  <option value="en">English</option>
-                </select>
-
-                <div class="field-label"><span data-i18n="script_typed">Script you typed in</span></div>
-                <select id="voiceScriptMode">
-                  <option value="native" selected>Native script (اردو / हिन्दी / English)</option>
-                  <option value="roman">Roman letters (mera naam …)</option>
-                </select>
-                <p class="lang-hint">Roman input is converted to the native script on the server before speaking — a best-effort conversion; native script always gives the most reliable pronunciation.</p>
-
-                <div class="field-label"><span data-i18n="voice_provider">Voice provider</span></div>
-                <select id="voiceProvider"></select>
-
-                <div class="field-label"><span data-i18n="voice_label">Voice</span></div>
-                <select id="voiceVoice"></select>
-
-                <div class="field-label"><span data-i18n="style_label">Style</span></div>
-                <select id="voiceStyle">
-                  <option value="narration">Narration</option>
-                  <option value="conversation" selected>Conversation</option>
-                  <option value="news">News reader</option>
-                  <option value="energetic">Energetic</option>
-                  <option value="emotional">Emotional</option>
-                </select>
-
-                <div class="field-label"><span data-i18n="speed_label">Speed</span></div>
-                <select id="voiceSpeed">
-                  <option value="slow">Slow</option>
-                  <option value="normal" selected>Normal</option>
-                  <option value="fast">Fast</option>
-                </select>
-
-                <div class="cost-row">
-                  <span data-i18n="voice_preview">Voice preview</span>
-                  <strong data-i18n="free_word">Free</strong>
-                </div>
-                <p class="lang-hint" id="voicePreviewCap">Free preview — no credits charged.</p>
-                <button type="button" class="btn" id="voicePreviewBtn" data-i18n="preview_voice_btn">Preview voice</button>
-                <audio id="voicePreviewAudio" controls style="display:none;width:100%;margin-top:10px;"></audio>
-                <p class="lang-hint" id="voicePreviewStatus"></p>
-                <p style="margin-top:10px;"><button type="button" class="btn small" id="langLabLink" data-i18n="test_languages">Test languages · زبان آزمائیں</button></p>
-
-                <div class="field-label" style="margin-top:18px;"><span data-i18n="talking_character">Talking character (lip-sync)</span></div>
-                <!-- Phase O2: the lip-sync audio can be a typed script
-                     (synthesized voice, above) OR your own uploaded
-                     recording. The toggle only changes which audio the
-                     lip-sync button sends — preview/voiceover always use
-                     the script above. -->
-                <div class="field-label"><span data-i18n="audio_source">Voice source for lip-sync</span></div>
-                <div class="seg" id="lipAudioSourceSeg" role="group" aria-label="Lip-sync voice source">
-                  <button type="button" class="sel" data-lip-audio="script" data-i18n="audio_source_script">Type script</button>
-                  <button type="button" data-lip-audio="upload" data-i18n="audio_source_upload">Upload your voice</button>
-                </div>
-                <div id="lipUploadBox" style="display:none;margin-top:10px;">
-                  <input type="file" id="lipAudioFile" accept="audio/*" />
-                  <p class="lang-hint" data-i18n="upload_voice_note">Use only your own voice, or with the speaker's permission · صرف اپنی آواز استعمال کریں یا اجازت کے ساتھ</p>
-                  <p class="lang-hint">MP3, WAV, M4A, OGG or WebM — up to 10 MB and 60 seconds. Your recording is used as-is; no voice is synthesized.</p>
-                  <button type="button" class="btn" id="lipUploadBtn" data-i18n="upload_and_use">Upload &amp; use</button>
-                  <p class="lang-hint" id="lipUploadStatus"></p>
-                </div>
-                <div class="field-label"><span data-i18n="saved_character">Saved character (optional)</span></div>
-                <select id="lipsyncCharacter">
-                  <option value="">No character — use the image or video below</option>
-                </select>
-                <p class="lang-hint">Picking a saved character fills its photo and its bound voice automatically — the voice choices above then come from the character.</p>
-                <label class="check-row"><input type="radio" name="lipsyncSource" value="image" checked /> <span>Animate the starting image above (upload one first)</span></label>
-                <label class="check-row"><input type="radio" name="lipsyncSource" value="video" /> <span>Lip-sync a finished video (picked below)</span></label>
-                <button type="button" class="btn primary generate-btn" id="lipsyncBtn" style="margin-top:10px;">Create talking character</button>
-                <p class="lang-hint" id="lipsyncNote">Lip-sync needs the Pro or Extra Pro plan.</p>
-
-                <div class="field-label" style="margin-top:18px;"><span data-i18n="voiceover_finished">Voiceover for a finished video</span></div>
-                <div class="field-label"><span data-i18n="finished_video">Finished video</span></div>
-                <select id="voiceGenSelect"></select>
-                <p class="lang-hint">The voiceover <strong>replaces</strong> the video's original audio with the synthesized voice.</p>
-                <button type="button" class="btn primary generate-btn" id="voiceoverBtn">Add voiceover</button>
-
-                <div class="form-error" id="voiceError" role="alert"></div>
-                <p class="fineprint">Costs are shown on the buttons before you confirm. Voiceover is free — included in the price. If a paid voice job fails, its credits are refunded automatically. Finished voice jobs appear in your History.</p>
-              </div>
-              </div>
-            </div>
-
-            <div class="card collapsible is-collapsed" id="soundCard">
-              <button type="button" class="collapse-head" data-collapse-head aria-expanded="false" aria-controls="soundCardBody">
-                <span class="collapse-title"><span data-i18n="sound_effects">Sound &amp; Effects</span><span class="opt-tag" data-i18n="optional_tag">optional</span></span>
-                <svg class="collapse-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
-              </button>
-              <div class="form-error" id="soundNotice" style="display:none;" role="alert"></div>
-              <div class="collapse-body" id="soundCardBody">
-              <p class="sub">Add an AI soundtrack, sound effects or a music bed to the video you are generating — or create a sound on its own. The AI matches sounds to the picture; the timing is the model's estimate, not a frame-exact guarantee.</p>
-
-              <div id="soundControls">
-                <div class="field-label"><span data-i18n="sound_for_video">Sound for the video above</span></div>
-                <select id="soundMode">
-                  <option value="none" selected>None — video only</option>
-                  <option value="sync">Auto sync sound</option>
-                  <option value="sfx">Sound effects</option>
-                  <option value="music">Background music</option>
-                </select>
-                <p class="lang-hint">Auto sync sound <strong>replaces</strong> the video's original audio with an AI soundtrack generated from the finished video. Sound effects and background music are mixed <strong>under</strong> the original audio at the volume below. If the sound step fails, your video is still delivered — sound is included in the price, so no separate fee is involved.</p>
-
-                <div class="field-label"><span data-i18n="describe_sounds">Describe the sounds (optional)</span><span class="count"><span id="soundCharCount">0</span> / 500</span></div>
-                <textarea id="soundPrompt" maxlength="500" placeholder="Rain on a tin roof, distant thunder, a train passing… Write in Urdu, Hindi, English or any language offered in the prompt box — it is translated automatically. Leave empty to use your video prompt."></textarea>
-
-                <div class="field-label"><span data-i18n="sound_volume">Sound volume</span><span class="count"><span id="soundVolumeLabel">100</span>%</span></div>
-                <input type="range" id="soundVolume" min="10" max="100" step="5" value="100" style="width:100%;" />
-
-                <div class="field-label" style="margin-top:18px;"><span data-i18n="just_sound">Just a sound (no video)</span></div>
-                <select id="soundOnlyKind">
-                  <option value="sfx" selected>Sound effect</option>
-                  <option value="music">Music bed</option>
-                </select>
-                <div class="field-label"><span data-i18n="length_label">Length</span></div>
-                <select id="soundOnlyDuration"></select>
-                <p class="lang-hint">Uses the description above. The finished sound plays here and is saved in your History with a player and a download.</p>
-                <button type="button" class="btn primary generate-btn" id="soundOnlyBtn">Generate sound only</button>
-                <audio id="soundOnlyAudio" controls style="display:none;width:100%;margin-top:10px;"></audio>
-
-                <div class="form-error" id="soundError" role="alert"></div>
-                <p class="fineprint">Sound is included in the generation price — no separate credits are charged for sound jobs. Any cost is shown before you confirm.</p>
-              </div>
-              </div>
-            </div>
-
-            <div class="card" id="watermarkCard">
-              <h2 data-i18n="watermark_title">Watermark (optional)</h2>
-              <label class="check-row" style="margin-top:6px;"><input type="checkbox" id="watermarkEnabled" /> <span data-i18n="add_watermark">Add watermark text</span></label>
-              <input type="text" class="text-input" id="watermarkText" maxlength="30" placeholder="e.g. SMT Movies" disabled style="margin-top:9px;" />
-              <p class="lang-hint">Latin letters only, up to 30 characters. It appears at the bottom-right. Watermarking does not change the credit cost.</p>
-            </div>
-
-              </div><!-- /advancedCardBody -->
-            </div><!-- /advancedCard -->
-
-            <div class="card" id="charactersCard">
-              <h2 data-i18n="my_characters">My Characters</h2>
-              <p class="sub">Save a character once — a photo plus, if you like, a bound voice — then reuse it in the video form and in lip-sync, so the same character keeps appearing in your videos. The model does its best to keep the character consistent; consistency is a best effort, not a guarantee. You can save up to <span id="charMaxHint">10</span> characters.</p>
-
-              <div class="field-label"><span data-i18n="character_name">Character name</span></div>
-              <input type="text" class="text-input" id="charName" maxlength="60" placeholder="e.g. Captain Sara" />
-
-              <div class="field-label"><span data-i18n="character_photo">Character photo</span></div>
-              <input type="file" class="file-input" id="charImage" accept="image/png,image/jpeg,image/webp" />
-              <p class="lang-hint" id="charImageStatus">Choose a clear PNG, JPEG or WebP photo of the character (max 5 MB). A front-facing photo works best.</p>
-
-              <div class="field-label"><span data-i18n="bound_voice">Bound voice (optional)</span></div>
-              <select id="charVoiceProvider">
-                <option value="">No bound voice</option>
-              </select>
-              <div class="field-label"><span data-i18n="voice_language">Voice language</span></div>
-              <select id="charVoiceLang">
-                <option value="ur" selected>Urdu</option>
-                <option value="hi">Hindi</option>
-                <option value="en">English</option>
-              </select>
-              <div class="field-label"><span data-i18n="voice_label">Voice</span></div>
-              <select id="charVoice"></select>
-              <div class="field-label"><span data-i18n="voice_style">Voice style</span></div>
-              <select id="charVoiceStyle">
-                <option value="narration">Narration</option>
-                <option value="conversation" selected>Conversation</option>
-                <option value="news">News reader</option>
-                <option value="energetic">Energetic</option>
-                <option value="emotional">Emotional</option>
-              </select>
-              <p class="lang-hint">The bound voice is used automatically when this character speaks in a lip-sync video (you can still override it for a single job in the Voice card).</p>
-
-              <button type="button" class="btn primary generate-btn" id="charCreateBtn" data-i18n="save_character">Save character</button>
-              <div class="form-error" id="charError" role="alert"></div>
-
-              <div class="field-label" style="margin-top:18px;"><span data-i18n="saved_characters">Saved characters</span></div>
-              <div id="charList">
-                <p class="lang-hint" id="charListEmpty">Sign in to see and save your characters.</p>
-              </div>
-              <p class="fineprint">Deleting a character never deletes the videos you already made with it — they stay in your History.</p>
-            </div>
           </div>
 
           <div class="card preview-card">
@@ -2135,6 +1848,406 @@
           <button type="button" class="btn small" id="reportBtn2" style="margin-top:8px;">Report inappropriate content</button>
         </div>
       </section>
+      <section class="view" id="view-create">
+        <div class="tool-view-head">
+          <button type="button" class="view-back" id="createBackBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 5l-7 7 7 7"/></svg><span>Back · واپس</span></button>
+          <h2 class="tool-view-title">Create · تخلیق کریں</h2>
+        </div>
+            <!-- Phase E/F: ALL manual controls — language, format/length,
+                 prompt ideas, mode, character, start image, style/quality,
+                 Voice, Sound, Watermark — live in this ONE container,
+                 collapsed by default, so Home stays a clean prompt +
+                 Generate flow like the owner's reference mockup (moved
+                 here 2026-10-26 at his marking). All element ids are
+                 unchanged, and the generate flow reads their values
+                 exactly as before. -->
+            <div class="card collapsible is-collapsed" id="advancedCard">
+              <button type="button" class="collapse-head" data-collapse-head aria-expanded="false" aria-controls="advancedCardBody">
+                <span class="collapse-title"><span data-i18n="advanced_settings">Advanced settings</span><span class="opt-tag" data-i18n="optional_tag">optional</span><span class="i18n-alt"> · مزید ترتیبات (اختیاری)</span></span>
+                <svg class="collapse-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+              </button>
+              <div class="collapse-body" id="advancedCardBody">
+
+              <!-- Batch 2: model picker — a presentation of the REAL
+                   engine routes only (Auto / MiniMax H3 / Kling O3 /
+                   Seedance 2.5 / Speaking). Gated models
+                   follow the Seedance pattern: visible, locked-styled,
+                   explained on tap, enforced by the server. -->
+              <div class="field-label"><span data-i18n="model_label">Model</span><span class="i18n-alt"> · ماڈل</span></div>
+              <div class="seg" id="modelPicker" role="group" aria-label="Model">
+                <button type="button" class="sel" data-model="auto">Auto<small>خودکار · best route for your prompt</small></button>
+                <button type="button" data-model="h3">MiniMax H3<small>standard video engine</small></button>
+                <button type="button" data-model="kling" id="klingModelBtn">Kling O3 · Native 4K<small>Extra Pro plan</small></button>
+                <button type="button" data-model="seedance" id="seedanceModelBtn">Seedance 2.5 · Premium<small>720p · Extra Pro plan</small></button>
+                <button type="button" data-model="speaking" id="speakingModelBtn">Speaking<small>بولتی ویڈیو · Gemini Omni · Pro plan or above</small></button>
+              </div>
+              <p class="lang-hint" id="speakingModelHint" style="display:none;">Speaking video: 16:9 or 9:16, Pro plan or above · بولتی ویڈیو: صرف 16:9 یا 9:16، Pro یا اوپر والا پلان</p>
+              <p class="lang-hint" id="modelGateHint" style="display:none;"></p>
+
+              <div class="composer-lang">
+                <label for="promptLang" data-i18n="prompt_language">Language</label>
+                <select id="promptLang">
+                  <option value="en" selected>English</option>
+                  <option value="ur">اردو (Urdu)</option>
+                  <option value="ks">کشمیری (Kashmiri)</option>
+                  <option value="ar">العربية (Arabic)</option>
+                  <option value="fa">فارسی (Persian)</option>
+                  <option value="hi">हिन्दी (Hindi)</option>
+                  <option value="zh">中文 (Chinese)</option>
+                </select>
+              </div>
+
+            <div class="composer-chips" aria-label="Quick video settings">
+              <div class="chip-group">
+                <span class="chip-group-label" data-i18n="format_label">Format</span>
+                <div class="seg chip-seg" id="aspectSeg" role="group" aria-label="Aspect ratio"></div>
+              </div>
+              <div class="chip-group">
+                <span class="chip-group-label" data-i18n="length_label">Length</span>
+                <div class="seg chip-seg" id="durationSeg" role="group" aria-label="Duration"></div>
+              </div>
+              <label class="auto-switch" title="AI Auto plans the settings from your prompt and asks before extra-cost choices">
+                <input type="checkbox" id="aiAutoToggle" checked aria-label="AI Auto" />
+                <span data-i18n="auto_label">Auto</span>
+              </label>
+            </div>
+
+              <div class="prompt-tools">
+                <button type="button" class="tool-btn" id="enhanceBtn">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg>
+                  <span data-i18n="enhance_prompt">Add detail</span>
+                </button>
+                <button type="button" class="tool-btn" data-example="A red panda eating bamboo in a misty forest, soft morning light, slow push-in camera">Try: red panda</button>
+                <button type="button" class="tool-btn" data-example="A paper boat sailing down a rainy city street at night, neon reflections on wet pavement, tracking shot">Try: paper boat</button>
+                <button type="button" class="tool-btn" data-example="Fresh bread being sliced on a wooden table in a sunlit bakery, steam rising, close-up, warm tones">Try: bakery</button>
+              </div>
+
+              <div class="field-label"><span data-i18n="video_mode">Video mode</span></div>
+              <div class="mode-grid mode-compact" id="modeGrid" role="group" aria-label="Video mode">
+                <button type="button" class="mode-card sel" data-mode="realistic">
+                  <strong data-i18n="mode_realistic">Realistic Human Video</strong>
+                  <span>Lifelike people and real-world scenes with natural-looking movement.</span>
+                  <small>Best for realistic and cinematic styles.</small>
+                </button>
+                <button type="button" class="mode-card" data-mode="cartoon">
+                  <strong data-i18n="mode_cartoon">Cartoon / Animation</strong>
+                  <span>Cartoon characters, animated stories, funny animals and child-friendly scenes.</span>
+                  <small>Best for cartoon and anime styles.</small>
+                </button>
+              </div>
+              <p class="mode-note">Both modes include model-generated audio; the dialogue language isn't guaranteed — Urdu speech isn't officially documented for this model.</p>
+
+              <div class="field-label"><span data-i18n="character_optional">Character (optional)</span></div>
+              <div style="display:flex;gap:10px;align-items:center;">
+                <img id="genCharThumb" alt="" style="display:none;width:44px;height:44px;object-fit:cover;border-radius:8px;" />
+                <select id="genCharacter" style="flex:1;">
+                  <option value="">No character</option>
+                </select>
+              </div>
+              <p class="lang-hint">Pick one of your saved characters (My Characters card below) and the model uses its photo as the subject reference, so the character stays recognisable from video to video. A chosen character overrides the starting image below. Character consistency is the model's best effort — it is not a guarantee. The credit cost is the standard rate for the chosen quality and duration — characters cost nothing extra.</p>
+
+              <div class="field-label"><span data-i18n="starting_image">Starting image (optional)</span></div>
+              <input type="file" class="file-input" id="sourceImage" accept="image/png,image/jpeg,image/webp" />
+              <p class="lang-hint" id="imageStatus">Add a PNG, JPEG or WebP image (max 5 MB) to animate it as the opening frame.</p>
+              <button type="button" class="tool-btn" id="removeImageBtn" style="display:none;" data-i18n="remove_image">Remove image</button>
+
+              <div class="field-label"><span data-i18n="visual_style">Visual style</span></div>
+              <div class="style-grid" id="styleGrid"></div>
+
+              <div class="field-label"><span data-i18n="quality_label">Quality</span></div>
+              <div class="seg" id="qualitySeg" role="group" aria-label="Quality">
+                <button type="button" class="sel" data-quality="full">Full quality<small>your plan's quality</small></button>
+                <button type="button" data-quality="draft">Draft · 480P<small><span id="draftCostHint">70 / 140</span> credits</small></button>
+                <button type="button" data-quality="seedance" id="seedanceQualityBtn" class="locked" aria-disabled="true">Seedance 2.5 · Premium<small>Top-ranked quality · 720p · Extra Pro</small></button>
+              </div>
+              <p class="lang-hint" id="draftHint" style="display:none;">Draft = a cheap 480P preview of your idea. Sound and voice add-ons are not available on drafts — upgrade the draft from your History to full quality first, then add them there.</p>
+              <p class="lang-hint" id="seedanceHint" style="display:none;">Seedance 2.5 premium engine — the price in the bar below is the full price, native audio included. Sound and voice add-ons can't be combined with it, and AI Auto never selects it — you choose it here.</p>
+
+              <!-- Phase L: cinematic direction chips. These are prompt
+                   directives: the server appends the chosen phrases to
+                   the prompt sent to the model — no engine in our
+                   wiring has a mechanical camera control, and the hint
+                   below says so plainly. Free (no credit change). -->
+              <div class="field-label"><span data-i18n="camera_movement">Camera movement (optional)</span></div>
+              <div class="seg" id="cameraSeg" role="group" aria-label="Camera movement">
+                <button type="button" class="sel" data-camera="">None</button>
+                <button type="button" data-camera="zoom_in">Zoom In</button>
+                <button type="button" data-camera="zoom_out">Zoom Out</button>
+                <button type="button" data-camera="pan_left">Pan Left</button>
+                <button type="button" data-camera="pan_right">Pan Right</button>
+                <button type="button" data-camera="tilt_up">Tilt Up</button>
+                <button type="button" data-camera="tilt_down">Tilt Down</button>
+                <button type="button" data-camera="tracking">Tracking Shot</button>
+                <button type="button" data-camera="orbit">Orbit</button>
+                <button type="button" data-camera="handheld">Handheld</button>
+                <button type="button" data-camera="static">Static</button>
+              </div>
+              <div class="field-label"><span data-i18n="shot_size">Shot size (optional)</span></div>
+              <div class="seg" id="shotSeg" role="group" aria-label="Shot size">
+                <button type="button" class="sel" data-shot="">None</button>
+                <button type="button" data-shot="close_up">Close-up</button>
+                <button type="button" data-shot="medium">Medium Shot</button>
+                <button type="button" data-shot="wide">Wide Shot</button>
+                <button type="button" data-shot="aerial">Aerial / Drone</button>
+              </div>
+              <p class="lang-hint">Camera moves are prompt directions to the AI · کیمرہ حرکات AI کو ہدایات ہیں — the model follows them as guidance, not as a mechanical guarantee. They never change the credit cost.</p>
+
+              <p class="fineprint">Credits are charged by the server when it accepts your job. Failed generations are refunded automatically. Mode, a starting image and watermark text do not change the credit cost — the same duration and quality pricing applies. Sound, voice and music options are included in this price — there are no separate audio fees. The total cost and the Generate button stay in the bar at the bottom of this screen.</p>
+
+
+            <div class="card" id="watermarkCard">
+              <h2 data-i18n="watermark_title">Watermark (optional)</h2>
+              <label class="check-row" style="margin-top:6px;"><input type="checkbox" id="watermarkEnabled" /> <span data-i18n="add_watermark">Add watermark text</span></label>
+              <input type="text" class="text-input" id="watermarkText" maxlength="30" placeholder="e.g. SMT Movies" disabled style="margin-top:9px;" />
+              <p class="lang-hint">Latin letters only, up to 30 characters. It appears at the bottom-right. Watermarking does not change the credit cost.</p>
+            </div>
+
+              </div><!-- /advancedCardBody -->
+            </div><!-- /advancedCard -->
+      </section>
+
+      <section class="view" id="view-tools">
+        <div class="tool-view-head">
+          <button type="button" class="view-back" id="toolsBackBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 5l-7 7 7 7"/></svg><span>Back · واپس</span></button>
+          <h2 class="tool-view-title">Video Tools · ویڈیو ٹولز</h2>
+        </div>
+            <div class="card vt-card" id="vt_toolsCard">
+              <div class="tpl-head">
+                <h2 class="tpl-head-title"><span data-i18n="vt_title">Video Tools</span><span class="i18n-alt"> · ویڈیو ٹولز</span></h2>
+              </div>
+              <p class="sub">Every tool below is a real, working part of the studio — each one opens its own controls.</p>
+              <div class="vt-grid">
+                <button type="button" class="vt-row" id="vt_toolImage">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="m4.5 17.5 5-5 3.5 3.5 2.5-2.5 4 4"/></svg>
+                  <span><span data-i18n="vt_image">Image to Video</span><span class="i18n-alt"> · تصویر سے ویڈیو</span></span>
+                </button>
+                <button type="button" class="vt-row" id="vt_toolVoice">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4M8 22h8"/></svg>
+                  <span><span data-i18n="vt_voice">Voice &amp; Lip Sync</span><span class="i18n-alt"> · آواز اور لپ سنک</span></span>
+                </button>
+                <button type="button" class="vt-row" id="vt_toolSound">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                  <span><span data-i18n="vt_sound">Sound &amp; Effects</span><span class="i18n-alt"> · ساؤنڈ اور ایفیکٹس</span></span>
+                </button>
+                <button type="button" class="vt-row" id="vt_toolCharacters">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8.5" r="3.8"/><path d="M5 20c1.4-3.4 4-5 7-5s5.6 1.6 7 5"/></svg>
+                  <span><span data-i18n="vt_characters">My Characters</span><span class="i18n-alt"> · میرے کردار</span></span>
+                </button>
+                <button type="button" class="vt-row" id="vt_toolJoin">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 7h11M8 12h11M8 17h11"/><circle cx="4.5" cy="7" r="1.3"/><circle cx="4.5" cy="12" r="1.3"/><circle cx="4.5" cy="17" r="1.3"/></svg>
+                  <span><span data-i18n="vt_join">Join Clips</span><span class="i18n-alt"> · کلپس جوڑیں</span></span>
+                </button>
+                <button type="button" class="vt-row" id="vt_toolTemplates">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="8" height="8" rx="2"/><rect x="13" y="4" width="8" height="8" rx="2"/><rect x="3" y="14" width="8" height="6" rx="2"/><rect x="13" y="14" width="8" height="6" rx="2"/></svg>
+                  <span><span data-i18n="vt_templates">Templates</span><span class="i18n-alt"> · ٹیمپلیٹس</span></span>
+                </button>
+              </div>
+            </div>
+      </section>
+
+      <section class="view" id="view-tool-voice">
+        <div class="tool-view-head">
+          <button type="button" class="view-back" id="voiceBackBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 5l-7 7 7 7"/></svg><span>Back · واپس</span></button>
+          <h2 class="tool-view-title">Voice &amp; Lip Sync · آواز اور لپ سنک</h2>
+        </div>
+            <div class="card collapsible is-collapsed" id="voiceCard">
+              <button type="button" class="collapse-head" data-collapse-head aria-expanded="false" aria-controls="voiceCardBody">
+                <span class="collapse-title"><span data-i18n="voice_dialogue">Voice &amp; Dialogue</span><span class="opt-tag" data-i18n="optional_tag">optional</span></span>
+                <svg class="collapse-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+              </button>
+              <div class="form-error" id="voiceNotice" style="display:none;" role="alert"></div>
+              <div class="collapse-body" id="voiceCardBody">
+              <p class="sub">Write a script, hear the voice first — free — then turn a photo into a talking character, or re-voice a finished video. Voice quality is new and still being proven with real samples; listen to the preview before spending credits.</p>
+
+              <div id="voiceControls">
+                <div class="field-label"><span data-i18n="script_label">Script</span><span class="count"><span id="voiceCharCount">0</span> / 300</span></div>
+                <textarea id="voiceScript" maxlength="300" placeholder="The words the character should say — in Urdu, Hindi or English script, or in Roman letters (choose Roman below)."></textarea>
+                <p class="lang-hint">Up to 300 characters · 300 حروف تک — included in your plan</p>
+
+                <div class="field-label"><span data-i18n="spoken_language">Spoken language</span></div>
+                <select id="voiceLang">
+                  <option value="ur" selected>Urdu</option>
+                  <option value="hi">Hindi</option>
+                  <option value="en">English</option>
+                </select>
+
+                <div class="field-label"><span data-i18n="script_typed">Script you typed in</span></div>
+                <select id="voiceScriptMode">
+                  <option value="native" selected>Native script (اردو / हिन्दी / English)</option>
+                  <option value="roman">Roman letters (mera naam …)</option>
+                </select>
+                <p class="lang-hint">Roman input is converted to the native script on the server before speaking — a best-effort conversion; native script always gives the most reliable pronunciation.</p>
+
+                <div class="field-label"><span data-i18n="voice_provider">Voice provider</span></div>
+                <select id="voiceProvider"></select>
+
+                <div class="field-label"><span data-i18n="voice_label">Voice</span></div>
+                <select id="voiceVoice"></select>
+
+                <div class="field-label"><span data-i18n="style_label">Style</span></div>
+                <select id="voiceStyle">
+                  <option value="narration">Narration</option>
+                  <option value="conversation" selected>Conversation</option>
+                  <option value="news">News reader</option>
+                  <option value="energetic">Energetic</option>
+                  <option value="emotional">Emotional</option>
+                </select>
+
+                <div class="field-label"><span data-i18n="speed_label">Speed</span></div>
+                <select id="voiceSpeed">
+                  <option value="slow">Slow</option>
+                  <option value="normal" selected>Normal</option>
+                  <option value="fast">Fast</option>
+                </select>
+
+                <div class="cost-row">
+                  <span data-i18n="voice_preview">Voice preview</span>
+                  <strong data-i18n="free_word">Free</strong>
+                </div>
+                <p class="lang-hint" id="voicePreviewCap">Free preview — no credits charged.</p>
+                <button type="button" class="btn" id="voicePreviewBtn" data-i18n="preview_voice_btn">Preview voice</button>
+                <audio id="voicePreviewAudio" controls style="display:none;width:100%;margin-top:10px;"></audio>
+                <p class="lang-hint" id="voicePreviewStatus"></p>
+                <p style="margin-top:10px;"><button type="button" class="btn small" id="langLabLink" data-i18n="test_languages">Test languages · زبان آزمائیں</button></p>
+
+                <div class="field-label" style="margin-top:18px;"><span data-i18n="talking_character">Talking character (lip-sync)</span></div>
+                <!-- Phase O2: the lip-sync audio can be a typed script
+                     (synthesized voice, above) OR your own uploaded
+                     recording. The toggle only changes which audio the
+                     lip-sync button sends — preview/voiceover always use
+                     the script above. -->
+                <div class="field-label"><span data-i18n="audio_source">Voice source for lip-sync</span></div>
+                <div class="seg" id="lipAudioSourceSeg" role="group" aria-label="Lip-sync voice source">
+                  <button type="button" class="sel" data-lip-audio="script" data-i18n="audio_source_script">Type script</button>
+                  <button type="button" data-lip-audio="upload" data-i18n="audio_source_upload">Upload your voice</button>
+                </div>
+                <div id="lipUploadBox" style="display:none;margin-top:10px;">
+                  <input type="file" id="lipAudioFile" accept="audio/*" />
+                  <p class="lang-hint" data-i18n="upload_voice_note">Use only your own voice, or with the speaker's permission · صرف اپنی آواز استعمال کریں یا اجازت کے ساتھ</p>
+                  <p class="lang-hint">MP3, WAV, M4A, OGG or WebM — up to 10 MB and 60 seconds. Your recording is used as-is; no voice is synthesized.</p>
+                  <button type="button" class="btn" id="lipUploadBtn" data-i18n="upload_and_use">Upload &amp; use</button>
+                  <p class="lang-hint" id="lipUploadStatus"></p>
+                </div>
+                <div class="field-label"><span data-i18n="saved_character">Saved character (optional)</span></div>
+                <select id="lipsyncCharacter">
+                  <option value="">No character — use the image or video below</option>
+                </select>
+                <p class="lang-hint">Picking a saved character fills its photo and its bound voice automatically — the voice choices above then come from the character.</p>
+                <label class="check-row"><input type="radio" name="lipsyncSource" value="image" checked /> <span>Animate the starting image above (upload one first)</span></label>
+                <label class="check-row"><input type="radio" name="lipsyncSource" value="video" /> <span>Lip-sync a finished video (picked below)</span></label>
+                <button type="button" class="btn primary generate-btn" id="lipsyncBtn" style="margin-top:10px;">Create talking character</button>
+                <p class="lang-hint" id="lipsyncNote">Lip-sync needs the Pro or Extra Pro plan.</p>
+
+                <div class="field-label" style="margin-top:18px;"><span data-i18n="voiceover_finished">Voiceover for a finished video</span></div>
+                <div class="field-label"><span data-i18n="finished_video">Finished video</span></div>
+                <select id="voiceGenSelect"></select>
+                <p class="lang-hint">The voiceover <strong>replaces</strong> the video's original audio with the synthesized voice.</p>
+                <button type="button" class="btn primary generate-btn" id="voiceoverBtn">Add voiceover</button>
+
+                <div class="form-error" id="voiceError" role="alert"></div>
+                <p class="fineprint">Costs are shown on the buttons before you confirm. Voiceover is free — included in the price. If a paid voice job fails, its credits are refunded automatically. Finished voice jobs appear in your History.</p>
+              </div>
+              </div>
+            </div>
+      </section>
+
+      <section class="view" id="view-tool-sound">
+        <div class="tool-view-head">
+          <button type="button" class="view-back" id="soundBackBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 5l-7 7 7 7"/></svg><span>Back · واپس</span></button>
+          <h2 class="tool-view-title">Sound &amp; Effects · ساؤنڈ اور ایفیکٹس</h2>
+        </div>
+            <div class="card collapsible is-collapsed" id="soundCard">
+              <button type="button" class="collapse-head" data-collapse-head aria-expanded="false" aria-controls="soundCardBody">
+                <span class="collapse-title"><span data-i18n="sound_effects">Sound &amp; Effects</span><span class="opt-tag" data-i18n="optional_tag">optional</span></span>
+                <svg class="collapse-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+              </button>
+              <div class="form-error" id="soundNotice" style="display:none;" role="alert"></div>
+              <div class="collapse-body" id="soundCardBody">
+              <p class="sub">Add an AI soundtrack, sound effects or a music bed to the video you are generating — or create a sound on its own. The AI matches sounds to the picture; the timing is the model's estimate, not a frame-exact guarantee.</p>
+
+              <div id="soundControls">
+                <div class="field-label"><span data-i18n="sound_for_video">Sound for the video above</span></div>
+                <select id="soundMode">
+                  <option value="none" selected>None — video only</option>
+                  <option value="sync">Auto sync sound</option>
+                  <option value="sfx">Sound effects</option>
+                  <option value="music">Background music</option>
+                </select>
+                <p class="lang-hint">Auto sync sound <strong>replaces</strong> the video's original audio with an AI soundtrack generated from the finished video. Sound effects and background music are mixed <strong>under</strong> the original audio at the volume below. If the sound step fails, your video is still delivered — sound is included in the price, so no separate fee is involved.</p>
+
+                <div class="field-label"><span data-i18n="describe_sounds">Describe the sounds (optional)</span><span class="count"><span id="soundCharCount">0</span> / 500</span></div>
+                <textarea id="soundPrompt" maxlength="500" placeholder="Rain on a tin roof, distant thunder, a train passing… Write in Urdu, Hindi, English or any language offered in the prompt box — it is translated automatically. Leave empty to use your video prompt."></textarea>
+
+                <div class="field-label"><span data-i18n="sound_volume">Sound volume</span><span class="count"><span id="soundVolumeLabel">100</span>%</span></div>
+                <input type="range" id="soundVolume" min="10" max="100" step="5" value="100" style="width:100%;" />
+
+                <div class="field-label" style="margin-top:18px;"><span data-i18n="just_sound">Just a sound (no video)</span></div>
+                <select id="soundOnlyKind">
+                  <option value="sfx" selected>Sound effect</option>
+                  <option value="music">Music bed</option>
+                </select>
+                <div class="field-label"><span data-i18n="length_label">Length</span></div>
+                <select id="soundOnlyDuration"></select>
+                <p class="lang-hint">Uses the description above. The finished sound plays here and is saved in your History with a player and a download.</p>
+                <button type="button" class="btn primary generate-btn" id="soundOnlyBtn">Generate sound only</button>
+                <audio id="soundOnlyAudio" controls style="display:none;width:100%;margin-top:10px;"></audio>
+
+                <div class="form-error" id="soundError" role="alert"></div>
+                <p class="fineprint">Sound is included in the generation price — no separate credits are charged for sound jobs. Any cost is shown before you confirm.</p>
+              </div>
+              </div>
+            </div>
+      </section>
+
+      <section class="view" id="view-tool-chars">
+        <div class="tool-view-head">
+          <button type="button" class="view-back" id="charsBackBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 5l-7 7 7 7"/></svg><span>Back · واپس</span></button>
+          <h2 class="tool-view-title">My Characters · میرے کردار</h2>
+        </div>
+            <div class="card" id="charactersCard">
+              <h2 data-i18n="my_characters">My Characters</h2>
+              <p class="sub">Save a character once — a photo plus, if you like, a bound voice — then reuse it in the video form and in lip-sync, so the same character keeps appearing in your videos. The model does its best to keep the character consistent; consistency is a best effort, not a guarantee. You can save up to <span id="charMaxHint">10</span> characters.</p>
+
+              <div class="field-label"><span data-i18n="character_name">Character name</span></div>
+              <input type="text" class="text-input" id="charName" maxlength="60" placeholder="e.g. Captain Sara" />
+
+              <div class="field-label"><span data-i18n="character_photo">Character photo</span></div>
+              <input type="file" class="file-input" id="charImage" accept="image/png,image/jpeg,image/webp" />
+              <p class="lang-hint" id="charImageStatus">Choose a clear PNG, JPEG or WebP photo of the character (max 5 MB). A front-facing photo works best.</p>
+
+              <div class="field-label"><span data-i18n="bound_voice">Bound voice (optional)</span></div>
+              <select id="charVoiceProvider">
+                <option value="">No bound voice</option>
+              </select>
+              <div class="field-label"><span data-i18n="voice_language">Voice language</span></div>
+              <select id="charVoiceLang">
+                <option value="ur" selected>Urdu</option>
+                <option value="hi">Hindi</option>
+                <option value="en">English</option>
+              </select>
+              <div class="field-label"><span data-i18n="voice_label">Voice</span></div>
+              <select id="charVoice"></select>
+              <div class="field-label"><span data-i18n="voice_style">Voice style</span></div>
+              <select id="charVoiceStyle">
+                <option value="narration">Narration</option>
+                <option value="conversation" selected>Conversation</option>
+                <option value="news">News reader</option>
+                <option value="energetic">Energetic</option>
+                <option value="emotional">Emotional</option>
+              </select>
+              <p class="lang-hint">The bound voice is used automatically when this character speaks in a lip-sync video (you can still override it for a single job in the Voice card).</p>
+
+              <button type="button" class="btn primary generate-btn" id="charCreateBtn" data-i18n="save_character">Save character</button>
+              <div class="form-error" id="charError" role="alert"></div>
+
+              <div class="field-label" style="margin-top:18px;"><span data-i18n="saved_characters">Saved characters</span></div>
+              <div id="charList">
+                <p class="lang-hint" id="charListEmpty">Sign in to see and save your characters.</p>
+              </div>
+              <p class="fineprint">Deleting a character never deletes the videos you already made with it — they stay in your History.</p>
+            </div>
+      </section>
+
     </main>
 
     <footer>
@@ -2374,7 +2487,7 @@
           prompt_language: { en: "Language", ur: "زبان" },
           prompt_label: { en: "Prompt", ur: "پرامپٹ" },
           prompt_ph: { en: "Describe your imagination…", ur: "اپنے تخیل کی وضاحت کریں…" },
-          enhance_prompt: { en: "Enhance prompt", ur: "پرامپٹ بہتر کریں" },
+          enhance_prompt: { en: "Add detail", ur: "تفصیل شامل کریں" },
           format_label: { en: "Format", ur: "فارمیٹ" },
           length_label: { en: "Length", ur: "دورانیہ" },
           auto_label: { en: "Auto", ur: "خودکار" },
@@ -2540,6 +2653,13 @@
           tpl_breaking_news: { en: "Breaking-News Short", ur: "بریکنگ نیوز شارٹ" },
           tpl_music_video: { en: "Music Video", ur: "میوزک ویڈیو" },
           tpl_cartoon_episode: { en: "Cartoon Episode", ur: "کارٹون قسط" },
+          tpl_nature_doc: { en: "Nature Documentary", ur: "قدرتی دستاویزی فلم" },
+          tpl_food_ad: { en: "Food Ad", ur: "کھانے کا اشتہار" },
+          tpl_fashion_shoot: { en: "Fashion Shoot", ur: "فیشن شوٹ" },
+          tpl_travel_vlog: { en: "Travel Vlog", ur: "سفری ولاگ" },
+          tpl_wedding_film: { en: "Wedding Film", ur: "شادی کی فلم" },
+          tpl_anime_story: { en: "Anime Story", ur: "اینیمے کہانی" },
+          model_label: { en: "Model", ur: "ماڈل" },
           q_tagline: { en: "Your Imagination. AI Motion.", ur: "آپ کا تصور، اے آئی کی حرکت" },
           q_templates_title: { en: "Ready templates", ur: "تیار ٹیمپلیٹس" },
           q_tile_text: { en: "Text to Video", ur: "متن سے ویڈیو" },
@@ -2679,11 +2799,11 @@
           styles: ["realistic", "cinematic", "cartoon", "anime"],
           aspect_ratios: ["16:9", "9:16", "1:1"],
           durations: [5, 10],
-          cost_by_duration: { "5": 10, "10": 20 },
+          cost_by_duration: { "5": 120, "10": 240 },
           cost_by_quality: {
-            "768P": { "5": 10, "10": 20 },
-            "2K": { "5": 15, "10": 30 },
-            "4K": { "5": 40, "10": 80 }
+            "768P": { "5": 120, "10": 240 },
+            "2K": { "5": 180, "10": 360 },
+            "4K": { "5": 450, "10": 900 }
           }
         };
         var cfg = null;            // last /api/config response
@@ -2691,7 +2811,7 @@
         var credits = null;        // last known balance (server-sourced)
         var state = {
           aspect: "16:9", aspectExplicit: false, duration: 5, style: "realistic", mode: "realistic",
-          quality: "full", camera: "", shot: "", auto: lsGet(LS_AUTO) !== "0",
+          quality: "full", model: "auto", camera: "", shot: "", auto: lsGet(LS_AUTO) !== "0",
           imagePath: null, imageName: "",
           generating: false, currentJobId: null, pollTimer: null, pollCount: 0,
           reportTarget: null, lastStudioJob: null
@@ -2836,38 +2956,46 @@
           return q;
         }
         function costFor(d) {
+          // Speaking engine (Batch 2 manual picker): the flat speaking
+          // price from the server config — the same for either duration,
+          // and no sound add-on is ever stacked on it (updateCost and
+          // currentSoundSpec both exclude add-ons while it is picked).
+          if (state.model === "speaking") {
+            var spk = (cfg && cfg.speaking_engine && cfg.speaking_engine.price_credits);
+            return (spk === undefined || spk === null) ? 250 : spk;
+          }
           // Seedance 2.5 premium engine (Phase J, durations extended by
           // Phase L): a per-duration premium price read from the
-          // server's config (a linear 12 credits/second — 60 / 5s up to
-          // 360 / 30s) — the sticky bar shows the full price up front,
+          // server's config (a linear 120 credits/second — 600 / 5s up to
+          // 3600 / 30s) — the sticky bar shows the full price up front,
           // exactly like every other route.
           if (state.quality === "seedance") {
-            var sp = (cfg && cfg.seedance_engine && cfg.seedance_engine.price_credits) || { "5": 60, "10": 120, "15": 180, "20": 240, "30": 360 };
+            var sp = (cfg && cfg.seedance_engine && cfg.seedance_engine.price_credits) || { "5": 600, "10": 1200, "15": 1800, "20": 2400, "30": 3600 };
             var sv = sp[String(d)];
-            return (sv === undefined || sv === null) ? 60 : sv;
+            return (sv === undefined || sv === null) ? 600 : sv;
           }
           // Draft quality is a flat cheap rate (480P preview), read from
           // the server's config like everything else.
           if (state.quality === "draft") {
-            var dt = (cfg && cfg.draft && cfg.draft.cost_by_duration) || { "5": 7, "10": 14 };
+            var dt = (cfg && cfg.draft && cfg.draft.cost_by_duration) || { "5": 70, "10": 140 };
             var dv = dt[String(d)];
-            return (dv === undefined || dv === null) ? 7 : dv;
+            return (dv === undefined || dv === null) ? 70 : dv;
           }
           // The server charges by the routed quality's own rate card
-          // (768P 10/20, 2K 15/30, native 4K 40/80 for 5s/10s) — read the
+          // (768P 120/240, 2K 180/360, native 4K 450/900 for 5s/10s) — read the
           // row for the signed-in user's quality so the hint is exact.
           var table = (cfg && cfg.cost_by_quality) || FALLBACK.cost_by_quality;
           var row = table[effectiveQuality()] || table["768P"] ||
             (cfg && cfg.cost_by_duration) || FALLBACK.cost_by_duration;
           var v = row[String(d)];
-          return (v === undefined || v === null) ? 10 : v;
+          return (v === undefined || v === null) ? 120 : v;
         }
         function updateCost() {
           var total = costFor(state.duration);
           var sm = $("#soundMode");
           // Drafts and the Seedance premium engine cannot take sound
           // add-ons — the hint never adds them for those routes.
-          if (state.quality === "full" && sm && soundCfg && soundCfg.configured && sm.value && sm.value !== "none" && soundCfg.costs)
+          if (state.quality === "full" && state.model !== "speaking" && sm && soundCfg && soundCfg.configured && sm.value && sm.value !== "none" && soundCfg.costs)
             total += Number(soundCfg.costs[sm.value] || 0);
           $("#costNum").textContent = total;
           // The duration buttons show per-duration prices — refresh them
@@ -2974,7 +3102,114 @@
             // and the selection re-clamps when the set shrinks.
             renderDurationSeg();
             updateCost();
+            // Batch 2: a manual quality pick is the truth for the
+            // model picker too — Seedance maps to the Seedance model,
+            // anything else returns the picker to Auto. Picker-driven
+            // clicks (driveQualitySeg) skip this via the guard flag.
+            if (!pickerDrivingSeg) {
+              state.model = (q === "seedance") ? "seedance" : "auto";
+              syncModelPicker();
+            }
           });
+        });
+
+        /* ---------- model picker (Batch 2) ----------
+           state.model is the single source of truth for the manual
+           engine choice; the quality seg stays the truth for quality,
+           and the two sync both ways:
+             auto     — today's behaviour, nothing forced;
+             h3       — the standard engine (drives quality to Full);
+             kling    — the native-4K Kling O3 route, which IS "Full
+                        quality" on a 4K plan (the server routes it);
+                        gated like Seedance for everyone else;
+             seedance — drives the existing Seedance quality option;
+             speaking — the Gemini Omni one-step speaking engine:
+                        engine:'speaking' is added to the generate body
+                        and the AI Auto plan step is skipped (exactly
+                        like Seedance, the server rejects engine +
+                        confirmed-plan combinations). The displayed
+                        cost is the flat speaking price (costFor). */
+        function speakingEntitled() {
+          return !!(me && me.plan && me.plan.features && me.plan.features.can_veo);
+        }
+        function klingEntitled() {
+          return !!((me && me.plan && me.plan.quality) === "4K");
+        }
+        function syncModelPicker() {
+          $$("#modelPicker button").forEach(function (x) {
+            x.classList.toggle("sel", (x.getAttribute("data-model") || "auto") === state.model);
+          });
+          var sh = $("#speakingModelHint");
+          if (sh) sh.style.display = state.model === "speaking" ? "block" : "none";
+          if (window.updateSettingsChip) window.updateSettingsChip();
+        }
+        function modelGateNote(kind) {
+          var gh = $("#modelGateHint");
+          var planBit = (me && me.plan && me.plan.name) ? " — your current plan is " + me.plan.name + "." : ".";
+          var msg = kind === "kling"
+            ? "Kling O3 native 4K videos are included with the Extra Pro plan" + planBit + " The server checks your plan before charging anything."
+            : "Speaking video clips are included with the Pro and Extra Pro plans" + planBit + " The server checks your plan before charging anything.";
+          if (gh) { gh.textContent = msg; gh.style.display = "block"; }
+          toast(kind === "kling" ? "Native 4K (Kling O3) needs the Extra Pro plan." : "Speaking videos need the Pro or Extra Pro plan.");
+        }
+        function fillModelGate() {
+          var kb = $("#klingModelBtn"), sb = $("#seedanceModelBtn"), pb = $("#speakingModelBtn");
+          var kCan = klingEntitled(), sCan = seedanceEntitled(), pCan = speakingEntitled();
+          if (kb) { kb.classList.toggle("locked", !kCan); kb.setAttribute("aria-disabled", kCan ? "false" : "true"); }
+          if (sb) { sb.classList.toggle("locked", !sCan); sb.setAttribute("aria-disabled", sCan ? "false" : "true"); }
+          if (pb) { pb.classList.toggle("locked", !pCan); pb.setAttribute("aria-disabled", pCan ? "false" : "true"); }
+          // A plan change (sign-out, downgrade) must never leave a
+          // gated model selected for someone who can't use it.
+          if ((state.model === "kling" && !kCan) || (state.model === "seedance" && !sCan) || (state.model === "speaking" && !pCan))
+            state.model = "auto";
+          syncModelPicker();
+          updateCost();
+        }
+        // Drive the quality seg from the picker by clicking its real
+        // button, so every side effect of a manual quality pick
+        // (sel classes, hints, the Phase L duration set, cost) happens
+        // identically. The guard flag stops the seg handler's own
+        // picker-sync from firing on picker-driven clicks.
+        var pickerDrivingSeg = false;
+        function driveQualitySeg(q) {
+          var btn = null, cur = null;
+          $$("#qualitySeg button").forEach(function (x) {
+            if (x.getAttribute("data-quality") === q) btn = x;
+            if (x.classList.contains("sel")) cur = x;
+          });
+          if (!btn || (cur && cur.getAttribute("data-quality") === q)) return;
+          pickerDrivingSeg = true;
+          btn.click();
+          pickerDrivingSeg = false;
+        }
+        function ensureSpeakingAspect() {
+          var allowed = (cfg && cfg.speaking_engine && cfg.speaking_engine.aspects) || ["16:9", "9:16"];
+          if (allowed.indexOf(state.aspect) !== -1) return;
+          state.aspect = "16:9";
+          state.aspectExplicit = true;
+          renderControls(cfg || FALLBACK);
+          toast("Speaking videos are 16:9 or 9:16 — the format was switched to 16:9.");
+        }
+        function setModel(m) {
+          if (m === "seedance" && !seedanceEntitled()) { fillSeedanceGate(); syncModelPicker(); return; }
+          if (m === "kling" && !klingEntitled()) { modelGateNote("kling"); syncModelPicker(); return; }
+          if (m === "speaking" && !speakingEntitled()) { modelGateNote("speaking"); syncModelPicker(); return; }
+          state.model = m;
+          if (m === "seedance") driveQualitySeg("seedance");
+          else if (m === "speaking") {
+            // The server rejects the speaking engine combined with a
+            // draft or the Seedance engine — Full quality is its route.
+            if (state.quality !== "full") driveQualitySeg("full");
+            ensureSpeakingAspect();
+          } else if (m === "kling" || m === "h3") {
+            driveQualitySeg("full");
+          }
+          // 'auto': the quality seg stays exactly where the user left it.
+          syncModelPicker();
+          updateCost();
+        }
+        $$("#modelPicker button").forEach(function (b) {
+          b.addEventListener("click", function () { setModel(b.getAttribute("data-model") || "auto"); });
         });
 
         // Camera & shot chips (Phase L): single-select prompt directives.
@@ -3102,7 +3337,19 @@
           "music-video": { mode: "realistic", style: "cinematic", aspect: "16:9", sound: "music",
             prompt: "A singer performs on a small stage with warm spotlights and a happy crowd, cinematic camera moves, music-video energy" },
           "cartoon-episode": { mode: "cartoon", style: "cartoon", aspect: "16:9",
-            prompt: "Episode opening: two cartoon friends arrive in a colourful village square and wave at the camera, cheerful animation, bright morning light" }
+            prompt: "Episode opening: two cartoon friends arrive in a colourful village square and wave at the camera, cheerful animation, bright morning light" },
+          "nature-doc": { mode: "realistic", style: "cinematic", aspect: "16:9",
+            prompt: "A sweeping nature documentary scene: a herd of deer crosses a misty mountain valley at dawn, golden light through the pines, slow drifting camera, rich natural detail" },
+          "food-ad": { mode: "realistic", style: "realistic", aspect: "9:16",
+            prompt: "A mouth-watering food commercial: a juicy burger with melting cheese and rising steam on a dark rustic table, dramatic side light, slow rotating close-up, space for text at the top" },
+          "fashion-shoot": { mode: "realistic", style: "cinematic", aspect: "9:16",
+            prompt: "A fashion shoot: a model in an elegant outfit walks down a sunlit city street toward the camera, confident stride, soft slow-motion feel, editorial lighting" },
+          "travel-vlog": { mode: "realistic", style: "realistic", aspect: "16:9",
+            prompt: "A travel vlog opening: a backpacker reaches a viewpoint above a turquoise lake ringed by mountains, wind moving the grass, bright morning light, gentle forward camera move" },
+          "wedding-film": { mode: "realistic", style: "cinematic", aspect: "16:9",
+            prompt: "A cinematic wedding film moment: a couple in wedding dress walk through falling flower petals in a decorated garden, warm golden light, slow dreamy camera move" },
+          "anime-story": { mode: "cartoon", style: "anime", aspect: "16:9",
+            prompt: "An anime story opening: a young hero stands on a grassy hill above a seaside town at sunset, wind moving the grass and the clouds, emotional cinematic framing" }
         };
         function applyTemplate(key) {
           if (key === "talking-photo") {
@@ -3118,9 +3365,11 @@
           state.aspect = t.aspect;
           state.aspectExplicit = true;
           state.quality = "full";
+          state.model = "auto";
           $$("#qualitySeg button").forEach(function (x) {
             x.classList.toggle("sel", x.getAttribute("data-quality") === "full");
           });
+          syncModelPicker();
           var hint = $("#draftHint");
           if (hint) hint.style.display = "none";
           var shint2 = $("#seedanceHint");
@@ -3329,6 +3578,7 @@
               fillPlanUI();
               fillVoiceGate();
               fillSeedanceGate();
+              fillModelGate();
               loadCharacters();
               loadIdentities();
               fillAccountMeta();
@@ -4035,16 +4285,21 @@
           setGenerating(true);
 
           var idemKey = uuid(); // fresh per click — the server dedupes retries with it
+          // Speaking picker (Batch 2): re-check the aspect gate at
+          // submit time too — the format chips may have changed after
+          // the model was picked.
+          if (state.model === "speaking") ensureSpeakingAspect();
           var sndSpec = currentSoundSpec();
           var genBody = { prompt: prompt, aspect_ratio: state.aspect, duration: state.duration, style: state.style,
                     mode: state.mode,
                     ...(state.quality === "draft" ? { quality: "draft" } : {}),
                     ...(state.quality === "seedance" ? { engine: "seedance" } : {}),
+                    ...(state.model === "speaking" ? { engine: "speaking" } : {}),
                     ...(state.camera ? { camera: state.camera } : {}),
                     ...(state.shot ? { shot: state.shot } : {}),
                     language: ($("#promptLang") ? $("#promptLang").value : "en"),
-                    ...(state.imagePath ? { image_path: state.imagePath } : {}),
-                    ...($("#genCharacter").value ? { character_id: Number($("#genCharacter").value) } : {}),
+                    ...(state.model !== "speaking" && state.imagePath ? { image_path: state.imagePath } : {}),
+                    ...(state.model !== "speaking" && $("#genCharacter").value ? { character_id: Number($("#genCharacter").value) } : {}),
                     ...(sndSpec ? { sound: sndSpec } : {}),
                     ...($("#watermarkEnabled").checked && $("#watermarkText").value.trim()
                       ? { watermark_text: $("#watermarkText").value.trim() } : {}) };
@@ -4088,8 +4343,10 @@
           // AI Auto NEVER routes to, so a Seedance generation skips the
           // plan step entirely and submits genBody as-is (the server
           // rejects engine + confirmed-plan combinations regardless).
+          // The manually picked Speaking engine (Batch 2) is likewise a
+          // direct choice: it submits genBody + engine:'speaking' as-is.
           var autoCfg = cfg && cfg.auto;
-          if (state.auto && state.quality !== "seedance" && (!autoCfg || autoCfg.enabled !== false)) {
+          if (state.auto && state.quality !== "seedance" && state.model !== "speaking" && (!autoCfg || autoCfg.enabled !== false)) {
             var planBody = Object.assign({}, genBody);
             if (!state.aspectExplicit) delete planBody.aspect_ratio;
             var vpSel = $("#voiceProvider");
@@ -5660,6 +5917,7 @@
         function currentSoundSpec() {
           if (state.quality === "draft") return null; // drafts take no sound add-ons
           if (state.quality === "seedance") return null; // the premium engine makes its own audio
+          if (state.model === "speaking") return null; // the speaking engine makes its own synchronized audio
           if (!soundCfg || !soundCfg.configured) return null;
           var mode = $("#soundMode").value;
           if (!mode || mode === "none") return null;
@@ -5742,7 +6000,7 @@
           hint.className = "lang-hint";
           hint.textContent = "Sync modes replace the video's audio track with an AI soundtrack matched to the picture (timing is the model's estimate). Premium sync keeps the existing dialogue. Effects and music are mixed under the original audio.";
           var plan = (typeof me !== "undefined" && me && me.plan) ? me.plan : null;
-          var canPremium = !!(plan && (plan.id === "pro" || plan.id === "extrapro"));
+          var canPremium = !!(plan && (plan.id === "pro" || plan.id === "extrapro" || plan.id === "extrapremier"));
           if (!canPremium)
             hint.textContent += " Premium sync needs the Pro or Extra Pro plan" +
               (plan ? " — your current plan is " + plan.name + "." : ".") +
@@ -5787,7 +6045,7 @@
         }
         /* ---------- finishers + draft upgrade (Phase C1) ---------- */
         var FINISH_LABELS = { reframe: "Reframe (new aspect ratio) — free",
-                              captions: "Add captions — 5 credits",
+                              captions: "Add captions — 50 credits",
                               extend: "Extend video (AI continuation)",
                               upscale: "Upscale (AI, higher resolution)" };
         // The per-video "Finish" panel in History: one-tap finishers that
@@ -5886,7 +6144,7 @@
               hint.textContent = "Extend generates a NEW AI continuation from the video's last frame and joins it on. It is charged at the standard rate for this video's quality. Continuity is the model's best effort — the join may not be perfectly seamless.";
               runBtn.textContent = "Extend video";
             } else {
-              hint.textContent = "Upscale raises the resolution with an AI upscaler (Topaz). The price is calculated by the server from the video's real length and output size (minimum 10 credits) and your plan must include the target quality. The result is an enhanced upscale — it is labelled with the tier it reaches, not native capture.";
+              hint.textContent = "Upscale raises the resolution with an AI upscaler (Topaz). The price is calculated by the server from the video's real length and output size (minimum 100 credits) and your plan must include the target quality. The result is an enhanced upscale — it is labelled with the tier it reaches, not native capture.";
               runBtn.textContent = "Upscale video";
             }
           }
@@ -6317,7 +6575,7 @@
         var tText = el('q_tileText');
         if (tText) tText.addEventListener('click', function () { clearImage(); focusPrompt(); });
         var tImg = el('q_tileImage');
-        if (tImg) tImg.addEventListener('click', pickImage);
+        if (tImg) tImg.addEventListener('click', function () { if (window.ajkGo) window.ajkGo('create'); });
         var tAuto = el('q_tileAuto');
         var autoToggle = el('aiAutoToggle');
         function syncAutoTile() { if (tAuto && autoToggle) tAuto.classList.toggle('q-on', !!autoToggle.checked); }
@@ -6382,7 +6640,7 @@
         function act(id, fn) { var n = el(id); if (n) n.addEventListener('click', function () { closeDrawer(); fn(); }); }
         act('dr_itemHome', function () { go('studio'); window.scrollTo({ top: 0, behavior: 'smooth' }); });
         act('dr_itemCreate', function () { go('studio'); focusPrompt(); });
-        act('dr_itemImage', function () { go('studio'); pickImage(); });
+        act('dr_itemImage', function () { if (window.ajkGo) window.ajkGo('create'); });
         act('dr_itemHistory', function () { go('history'); });
         act('dr_itemJoin', function () {
           go('history');
@@ -6471,25 +6729,17 @@
         var dAuto = el('dr_itemAuto');
         if (dAuto) dAuto.addEventListener('click', function () { closeDrawer(); goStudio(); ensureAutoOn(); focusPrompt(); });
         var dTools = el('dr_itemTools');
-        if (dTools) dTools.addEventListener('click', function () { closeDrawer(); goStudio(); scrollToEl(el('vt_toolsCard'), 200); });
+        if (dTools) dTools.addEventListener('click', function () { closeDrawer(); if (window.ajkGo) window.ajkGo('tools'); });
 
         /* Video Tools card rows */
         var vImage = el('vt_toolImage');
-        if (vImage) vImage.addEventListener('click', function () {
-          expandCard('advancedCard');
-          var f = el('sourceImage');
-          if (f) f.click();
-        });
+        if (vImage) vImage.addEventListener('click', function () { if (window.ajkGo) window.ajkGo('create'); });
         var vVoice = el('vt_toolVoice');
-        if (vVoice) vVoice.addEventListener('click', function () {
-          expandCard('advancedCard'); expandCard('voiceCard'); scrollToEl(el('voiceCard'), 200);
-        });
+        if (vVoice) vVoice.addEventListener('click', function () { if (window.ajkGo) window.ajkGo('tool-voice'); });
         var vSound = el('vt_toolSound');
-        if (vSound) vSound.addEventListener('click', function () {
-          expandCard('advancedCard'); expandCard('soundCard'); scrollToEl(el('soundCard'), 200);
-        });
+        if (vSound) vSound.addEventListener('click', function () { if (window.ajkGo) window.ajkGo('tool-sound'); });
         var vChars = el('vt_toolCharacters');
-        if (vChars) vChars.addEventListener('click', function () { scrollToEl(el('charactersCard'), 120); });
+        if (vChars) vChars.addEventListener('click', function () { if (window.ajkGo) window.ajkGo('tool-chars'); });
         var vJoin = el('vt_toolJoin');
         if (vJoin) vJoin.addEventListener('click', function () {
           if (typeof showView === 'function') showView('history');
@@ -6537,6 +6787,129 @@
         if (bnHist) bnHist.addEventListener('click', function () {
           if (bnJoin) bnJoin.classList.remove('active');
         });
+      })();
+    </script>
+
+    <script>
+      // Screen Split — navigation for the dedicated tool views
+      // (Create / Video Tools / Voice & Lip Sync / Sound & Effects /
+      // My Characters). The cards inside those views are the app's
+      // EXISTING cards, moved in the markup — every id and handler is
+      // unchanged. showView() lives inside the main script's IIFE and
+      // is not reachable from here, so ajkGo() mirrors its DOM effects
+      // exactly (view .active toggling, tab highlighting, scroll top)
+      // and, for the two views that have real tabs (studio, history),
+      // clicks the tab so the main script's own hooks run as before.
+      (function () {
+        function el(id) { return document.getElementById(id); }
+        function expandSplitCard(id) {
+          var c = el(id);
+          if (!c) return;
+          c.classList.remove('is-collapsed');
+          var h = c.querySelector('[data-collapse-head]');
+          if (h) h.setAttribute('aria-expanded', 'true');
+        }
+        var EXPAND_ON_ENTER = { 'create': 'advancedCard', 'tool-voice': 'voiceCard', 'tool-sound': 'soundCard' };
+        window.ajkGo = function (name) {
+          try {
+            if (name === 'studio' || name === 'history') {
+              var tab = document.querySelector('.topnav .tab[data-view="' + name + '"]') ||
+                        document.querySelector('.tab[data-view="' + name + '"]');
+              if (tab) { tab.click(); return; }
+            }
+            document.querySelectorAll('.view').forEach(function (v) {
+              v.classList.toggle('active', v.id === 'view-' + name);
+            });
+            document.querySelectorAll('.tab').forEach(function (b) {
+              b.classList.toggle('active', b.getAttribute('data-view') === name);
+            });
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+            var cid = EXPAND_ON_ENTER[name];
+            if (cid) expandSplitCard(cid);
+          } catch (e) {}
+        };
+        function bindBack(id, view) {
+          var b = el(id);
+          if (b) b.addEventListener('click', function () { window.ajkGo(view); });
+        }
+        bindBack('createBackBtn', 'studio');
+        bindBack('toolsBackBtn', 'studio');
+        bindBack('voiceBackBtn', 'tools');
+        bindBack('soundBackBtn', 'tools');
+        bindBack('charsBackBtn', 'tools');
+
+        /* Talking Photo template: its flow lives in the Voice card,
+           which now has its own screen — take the user there (the
+           template's own toast + state handlers still run). */
+        var talking = document.querySelector('#templateGrid [data-template="talking-photo"]');
+        if (talking) talking.addEventListener('click', function () { window.ajkGo('tool-voice'); });
+
+        /* ----- composer settings chip (Kling pattern): a slim
+           summary of the current create settings under the action
+           bar; one tap opens the Create screen. ----- */
+        function segLabel(btn) {
+          if (!btn) return '';
+          for (var i = 0; i < btn.childNodes.length; i++) {
+            var n = btn.childNodes[i];
+            if (n.nodeType === 3) {
+              var t = (n.textContent || '').trim();
+              if (t) return t;
+            }
+          }
+          return (btn.textContent || '').trim();
+        }
+        function selLabel(segId) {
+          var seg = el(segId);
+          if (!seg) return '';
+          var b = seg.querySelector('button.sel') || seg.querySelector('button');
+          return segLabel(b);
+        }
+        function updateSettingsChip() {
+          try {
+            var txt = el('createSettingsChipText');
+            if (!txt) return;
+            var parts = [];
+            // Batch 2: a manually picked model leads the summary
+            // (e.g. "Seedance 2.5 · 16:9 · 5s · Auto on") and replaces
+            // the quality label; Auto keeps the quality label.
+            var modelBtn = document.querySelector('#modelPicker button.sel');
+            var modelVal = modelBtn ? (modelBtn.getAttribute('data-model') || 'auto') : 'auto';
+            if (modelBtn && modelVal !== 'auto') parts.push(segLabel(modelBtn));
+            else { var q = selLabel('qualitySeg'); if (q) parts.push(q); }
+            var a = selLabel('aspectSeg').replace(/\s*:\s*/g, ':');
+            if (a) parts.push(a);
+            var d = selLabel('durationSeg');
+            var dm = /^(\d+)\s*seconds?$/.exec(d || '');
+            if (dm) d = dm[1] + 's';
+            if (d) parts.push(d);
+            var auto = el('aiAutoToggle');
+            parts.push(auto && auto.checked ? 'Auto on' : 'Auto off');
+            txt.textContent = parts.join(' · ');
+          } catch (e) {}
+        }
+        window.updateSettingsChip = updateSettingsChip;
+        var chip = el('createSettingsChip');
+        if (chip) chip.addEventListener('click', function () { window.ajkGo('create'); });
+        // Refresh the summary whenever a segmented control is used
+        // (the seg's own handler runs first; defer to read final state).
+        document.addEventListener('click', function (e) {
+          try {
+            if (e.target && e.target.closest && e.target.closest('.seg')) {
+              setTimeout(updateSettingsChip, 0);
+            }
+          } catch (err) {}
+        });
+        var autoT = el('aiAutoToggle');
+        if (autoT) autoT.addEventListener('change', updateSettingsChip);
+        // Initial fill: the segs are rendered by the main script once
+        // /api/config lands — poll briefly until they have children.
+        var tries = 0;
+        (function fillChip() {
+          var seg = el('aspectSeg');
+          if ((seg && seg.children.length) || tries >= 20) { updateSettingsChip(); return; }
+          tries++;
+          setTimeout(fillChip, 400);
+        })();
       })();
     </script>
   </body>
