@@ -1221,46 +1221,11 @@
                 <span class="composer-model" id="modelLine"></span>
               </div>
 
-              <div class="composer-lang">
-                <label for="promptLang" data-i18n="prompt_language">Language</label>
-                <select id="promptLang">
-                  <option value="en" selected>English</option>
-                  <option value="ur">اردو (Urdu)</option>
-                  <option value="ks">کشمیری (Kashmiri)</option>
-                  <option value="ar">العربية (Arabic)</option>
-                  <option value="fa">فارسی (Persian)</option>
-                  <option value="hi">हिन्दी (Hindi)</option>
-                  <option value="zh">中文 (Chinese)</option>
-                </select>
-              </div>
 
               <div class="field-label"><span data-i18n="prompt_label">Prompt</span><span class="count"><span id="charCount">0</span> / 500</span></div>
               <textarea id="prompt" maxlength="500" data-i18n-ph="prompt_ph" placeholder="Describe your imagination…"></textarea>
-              <div class="prompt-tools">
-                <button type="button" class="tool-btn" id="enhanceBtn">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg>
-                  <span data-i18n="enhance_prompt">Enhance prompt</span>
-                </button>
-                <button type="button" class="tool-btn" data-example="A red panda eating bamboo in a misty forest, soft morning light, slow push-in camera">Try: red panda</button>
-                <button type="button" class="tool-btn" data-example="A paper boat sailing down a rainy city street at night, neon reflections on wet pavement, tracking shot">Try: paper boat</button>
-                <button type="button" class="tool-btn" data-example="Fresh bread being sliced on a wooden table in a sunlit bakery, steam rising, close-up, warm tones">Try: bakery</button>
-              </div>
             </div>
 
-            <div class="composer-chips" aria-label="Quick video settings">
-              <div class="chip-group">
-                <span class="chip-group-label" data-i18n="format_label">Format</span>
-                <div class="seg chip-seg" id="aspectSeg" role="group" aria-label="Aspect ratio"></div>
-              </div>
-              <div class="chip-group">
-                <span class="chip-group-label" data-i18n="length_label">Length</span>
-                <div class="seg chip-seg" id="durationSeg" role="group" aria-label="Duration"></div>
-              </div>
-              <label class="auto-switch" title="AI Auto plans the settings from your prompt and asks before extra-cost choices">
-                <input type="checkbox" id="aiAutoToggle" checked aria-label="AI Auto" />
-                <span data-i18n="auto_label">Auto</span>
-              </label>
-            </div>
 
             <div class="auto-panel studio-auto-panel" id="autoPlanPanel" hidden>
               <h3>AI Auto نے یہ سمجھا</h3>
@@ -1422,18 +1387,58 @@
               </div>
             </div>
 
-            <!-- Phase E/F: the remaining manual controls — mode, character,
-                 start image, style/quality, Voice, Sound, Watermark — live
-                 in this ONE container, collapsed by default. Aspect and
-                 duration are the same controls in the quick chip row above.
-                 All element ids are unchanged, and the generate flow reads
-                 their values exactly as before. -->
+            <!-- Phase E/F: ALL manual controls — language, format/length,
+                 prompt ideas, mode, character, start image, style/quality,
+                 Voice, Sound, Watermark — live in this ONE container,
+                 collapsed by default, so Home stays a clean prompt +
+                 Generate flow like the owner's reference mockup (moved
+                 here 2026-10-26 at his marking). All element ids are
+                 unchanged, and the generate flow reads their values
+                 exactly as before. -->
             <div class="card collapsible is-collapsed" id="advancedCard">
               <button type="button" class="collapse-head" data-collapse-head aria-expanded="false" aria-controls="advancedCardBody">
                 <span class="collapse-title"><span data-i18n="advanced_settings">Advanced settings</span><span class="opt-tag" data-i18n="optional_tag">optional</span><span class="i18n-alt"> · مزید ترتیبات (اختیاری)</span></span>
                 <svg class="collapse-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
               </button>
               <div class="collapse-body" id="advancedCardBody">
+
+              <div class="composer-lang">
+                <label for="promptLang" data-i18n="prompt_language">Language</label>
+                <select id="promptLang">
+                  <option value="en" selected>English</option>
+                  <option value="ur">اردو (Urdu)</option>
+                  <option value="ks">کشمیری (Kashmiri)</option>
+                  <option value="ar">العربية (Arabic)</option>
+                  <option value="fa">فارسی (Persian)</option>
+                  <option value="hi">हिन्दी (Hindi)</option>
+                  <option value="zh">中文 (Chinese)</option>
+                </select>
+              </div>
+
+            <div class="composer-chips" aria-label="Quick video settings">
+              <div class="chip-group">
+                <span class="chip-group-label" data-i18n="format_label">Format</span>
+                <div class="seg chip-seg" id="aspectSeg" role="group" aria-label="Aspect ratio"></div>
+              </div>
+              <div class="chip-group">
+                <span class="chip-group-label" data-i18n="length_label">Length</span>
+                <div class="seg chip-seg" id="durationSeg" role="group" aria-label="Duration"></div>
+              </div>
+              <label class="auto-switch" title="AI Auto plans the settings from your prompt and asks before extra-cost choices">
+                <input type="checkbox" id="aiAutoToggle" checked aria-label="AI Auto" />
+                <span data-i18n="auto_label">Auto</span>
+              </label>
+            </div>
+
+              <div class="prompt-tools">
+                <button type="button" class="tool-btn" id="enhanceBtn">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg>
+                  <span data-i18n="enhance_prompt">Enhance prompt</span>
+                </button>
+                <button type="button" class="tool-btn" data-example="A red panda eating bamboo in a misty forest, soft morning light, slow push-in camera">Try: red panda</button>
+                <button type="button" class="tool-btn" data-example="A paper boat sailing down a rainy city street at night, neon reflections on wet pavement, tracking shot">Try: paper boat</button>
+                <button type="button" class="tool-btn" data-example="Fresh bread being sliced on a wooden table in a sunlit bakery, steam rising, close-up, warm tones">Try: bakery</button>
+              </div>
 
               <div class="field-label"><span data-i18n="video_mode">Video mode</span></div>
               <div class="mode-grid mode-compact" id="modeGrid" role="group" aria-label="Video mode">
