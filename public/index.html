@@ -69,6 +69,7 @@
         margin:0; background:var(--bg); color:var(--text);
         font-family:var(--font-body); font-size:15px; line-height:1.55;
         -webkit-font-smoothing:antialiased;
+        overflow-x:clip;
       }
       button{ font-family:inherit; cursor:pointer; }
       input,textarea,select{ font-family:inherit; }
@@ -649,7 +650,7 @@
         .topnav{ display:none; }
         .bottomnav{ display:block; }
         .brand .brand-sub{ font-size:9px; }
-        .home-greeting{ font-size:23px; margin-bottom:12px; }
+        .home-greeting{ font-size:19px; margin-bottom:8px; }
         textarea#prompt{ min-height:92px; }
         .wrap{ padding:18px 14px 40px; }
         footer{ padding-bottom:110px; }
@@ -686,7 +687,7 @@
       .tpl-chip .tpl-name{ font-size:13.5px; }
       .composer-card{ padding:18px; }
       .composer-head{
-        display:flex; align-items:flex-start; justify-content:space-between; gap:14px; margin-bottom:12px;
+        display:flex; align-items:flex-start; justify-content:space-between; gap:14px; margin-bottom:8px;
       }
       .composer-head h2{ margin:0; }
       .composer-model{
@@ -701,13 +702,13 @@
         width:auto; min-width:138px; padding:7px 30px 7px 10px;
         border-radius:999px; font-size:13.5px;
       }
-      .composer-card .field-label{ margin-top:12px; }
+      .composer-card .field-label{ margin-top:8px; }
       textarea#prompt{
-        min-height:104px; border-radius:14px; font-size:16px; padding:14px;
+        min-height:88px; border-radius:14px; font-size:16px; padding:12px;
       }
       .composer-chips{
         display:flex; align-items:center; gap:10px; flex-wrap:nowrap;
-        margin-top:12px; padding:2px 0 6px; overflow-x:auto; scrollbar-width:none;
+        margin-top:8px; padding:2px 0 4px; overflow-x:auto; scrollbar-width:none;
       }
       .composer-chips::-webkit-scrollbar{ display:none; }
       .chip-group{ display:flex; align-items:center; gap:6px; flex:none; }
@@ -751,7 +752,7 @@
         .composer-head{ flex-wrap:wrap; gap:6px 10px; }
         .composer-model{ max-width:100%; text-align:left; }
         select#promptLang{ min-width:126px; }
-        textarea#prompt{ min-height:88px; }
+        textarea#prompt{ min-height:62px; }
       }
       @media (prefers-reduced-motion: reduce){
         *{ animation:none !important; transition:none !important; }
@@ -877,20 +878,20 @@
       .q-brand-tag{ font-size:13px; color:var(--text); }
       #view-studio .composer-card{ border-radius:18px; }
       #view-studio .studio-actionbar{
-        border-radius:16px; padding:14px 16px;
+        border-radius:16px; padding:10px 12px;
         background:linear-gradient(120deg, rgba(61,107,255,.12), rgba(168,85,247,.08)), var(--panel);
       }
-      #view-studio .actionbar-cost strong{ font-size:19px; }
-      #view-studio #generateBtn{ font-size:17px; padding:14px 32px; border-radius:999px; }
+      #view-studio .actionbar-cost strong{ font-size:17px; }
+      #view-studio #generateBtn{ font-size:16px; padding:11px 24px; border-radius:999px; }
       .q-tiles{ display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:12px; }
       .q-tile{
-        display:flex; flex-direction:column; align-items:center; gap:8px;
-        padding:16px 8px; border-radius:16px; text-align:center;
+        display:flex; flex-direction:column; align-items:center; gap:6px;
+        padding:11px 6px; border-radius:14px; text-align:center;
         background:var(--panel-2); border:1px solid var(--line);
-        color:var(--text); font-weight:600; font-size:14px;
+        color:var(--text); font-weight:600; font-size:13px;
       }
       .q-tile:hover{ background:var(--panel-3); }
-      .q-tile svg{ width:24px; height:24px; color:var(--amber); }
+      .q-tile svg{ width:21px; height:21px; color:var(--amber); }
       .q-tile.q-on{ border-color:var(--purple); box-shadow:0 0 0 1px var(--purple); }
       .q-showcase{
         position:relative; margin-top:12px; border-radius:18px; overflow:hidden;
@@ -1013,10 +1014,10 @@
       .q-brand-sub{ font-size:10px; }
       .q-brand-tag{ font-size:12.5px; }
       .home-status-pill{
-        display:inline-flex; align-items:center; gap:8px;
-        padding:7px 14px; margin-bottom:14px; border-radius:999px;
+        display:inline-flex; align-items:center; gap:7px;
+        padding:5px 11px; margin-bottom:10px; border-radius:999px;
         border:1px solid var(--line); background:var(--panel-2);
-        font-size:13px; font-weight:600; color:var(--text);
+        font-size:12.5px; font-weight:600; color:var(--text);
       }
       .home-status-pill .conn-dot{ width:9px; height:9px; border-radius:50%; background:var(--amber); flex:none; }
       .home-status-pill.checking .conn-dot{ background:var(--amber); animation:pulse 1s ease-in-out infinite; }
@@ -1024,7 +1025,7 @@
       .home-status-pill.ok .conn-dot{ background:var(--green); }
       .home-status-pill.bad{ border-color:rgba(240,168,50,.45); }
       .home-status-pill.bad .conn-dot{ background:var(--warn); }
-      #view-studio .composer-card{ padding:22px; box-shadow:0 12px 34px rgba(2,4,12,.30); }
+      #view-studio .composer-card{ padding:14px; box-shadow:0 12px 34px rgba(2,4,12,.30); }
       #view-studio .composer-model{ display:none; }
       #view-studio #prompt{ min-height:110px; font-size:15.5px; }
       #view-studio #generateBtn{
@@ -1060,8 +1061,8 @@
         .q-brand-name{ font-size:18px; }
         .q-brand-mark{ width:32px; height:32px; border-radius:10px; }
         .q-brand-mark svg{ width:18px; height:18px; }
-        #view-studio .composer-card{ padding:16px; }
-        #view-studio #generateBtn{ padding:14px 24px; font-size:16.5px; }
+        #view-studio .composer-card{ padding:12px; }
+        #view-studio #generateBtn{ padding:11px 20px; font-size:15.5px; }
         .q-showcase img{ height:210px; }
       }
 
@@ -1070,8 +1071,19 @@
            single dominant action. The featured image stays a labelled
            style preview: NO 4K badge, by the owner's honesty rules. -- */
       .t-section-head{
-        font-family:var(--font-display); font-size:17px; font-weight:700;
-        margin:18px 0 4px; color:var(--text);
+        font-family:var(--font-display); font-size:16px; font-weight:700;
+        margin:12px 0 2px; color:var(--text);
+      }
+      /* Compact density pass (owner, 2026-10-26): the whole Home
+         stack is tightened so the create flow fits a phone screen
+         like his reference mockup; no feature or control changes. */
+      #view-studio .card + .card{ margin-top:14px; }
+      #view-studio .studio-grid{ gap:14px; }
+      .home-greeting{ margin:2px 0 8px; }
+      @media (max-width:640px){
+        #view-studio .q-showcase{ aspect-ratio:21/10; }
+        .q-showcase-play{ width:48px; height:48px; }
+        .q-showcase-play svg{ width:22px; height:22px; }
       }
       #view-studio .q-showcase{ aspect-ratio:16/9; }
       #view-studio .q-showcase img{ height:100%; }
