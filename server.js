@@ -128,8 +128,14 @@ const CONFIG = {
   appVersion: (process.env.APP_VERSION || '1.0').trim() || '1.0',
   // Base URL for server-side prompt translation (Google Translate "gtx" web
   // endpoint). Overridable via TRANSLATE_API_BASE — tests point it at a
-  // local stub so the suite never calls the real endpoint.
+  // local stub so the suite never calls the real endpoint. When the override
+  // is set it is the ONLY provider used (test determinism).
   translateBase: (process.env.TRANSLATE_API_BASE || 'https://translate.googleapis.com').replace(/\/+$/, ''),
+  translateBaseOverridden: !!process.env.TRANSLATE_API_BASE,
+  // Contact email sent to the MyMemory translation API (its `de` parameter).
+  // MyMemory's free quota is far higher when a contact email is provided;
+  // without it, shared/datacenter IPs exhaust the anonymous quota quickly.
+  translateEmail: (process.env.TRANSLATE_EMAIL || 'Shahidraja78866@gmail.com').trim(),
   // Manual payment destinations for credit-pack purchases, shown to buyers
   // on the Buy Credits page. Only the methods actually set in the
   // environment are exposed (via /api/config as payment_methods).
@@ -559,7 +565,7 @@ function promptCameraClash(text, cameraMove, shotSize) {
 // (client=gtx). The response is nested arrays: data[0] is the list of
 // translated segments and each segment's [0] is its text — join them all.
 // Throws on any HTTP error, malformed body, or empty result.
-async function translatePrompt(text, fromCode) {
+async function translateViaGtx(text, fromCode) {
   const url = `${CONFIG.translateBase}/translate_a/single?client=gtx&sl=${encodeURIComponent(fromCode)}&tl=en&dt=t&q=${encodeURIComponent(text)}`;
   const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
   if (!r.ok) throw new Error(`translate returned ${r.status}`);
@@ -568,6 +574,35 @@ async function translatePrompt(text, fromCode) {
   const out = segments.map(s => (Array.isArray(s) ? String(s[0] ?? '') : '')).join('').trim();
   if (!out) throw new Error('translate returned empty text');
   return out;
+}
+
+// MyMemory (free, no key). Rejects quota warnings and "echo" replies (the
+// input returned unchanged, which happens for languages it cannot actually
+// translate) so a fake success is never recorded as a translation.
+async function translateViaMyMemory(text, fromCode) {
+  const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${encodeURIComponent(fromCode)}%7Cen&de=${encodeURIComponent(CONFIG.translateEmail)}`;
+  const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
+  if (!r.ok) throw new Error(`mymemory returned ${r.status}`);
+  const data = await r.json();
+  const out = String(data?.responseData?.translatedText || '').trim();
+  if (!out || data?.quotaFinished) throw new Error('mymemory quota exhausted');
+  if (/MYMEMORY WARNING|QUERY LENGTH LIMIT|NO QUERY SPECIFIED|INVALID/i.test(out)) throw new Error('mymemory returned a warning, not a translation');
+  if (out === text.trim()) throw new Error('mymemory echoed the input (language not supported)');
+  return out;
+}
+
+// Provider chain (production): MyMemory first — the free Google "gtx" web
+// endpoint now refuses datacenter IPs (302 to a "sorry" page, verified live
+// 2026-10-27, which silently broke ALL non-English prompts) — with the gtx
+// endpoint kept as a fallback in case it answers again. When
+// TRANSLATE_API_BASE is set (tests), only that endpoint is used.
+async function translatePrompt(text, fromCode) {
+  if (CONFIG.translateBaseOverridden) return translateViaGtx(text, fromCode);
+  try { return await translateViaMyMemory(text, fromCode); }
+  catch (e1) {
+    try { return await translateViaGtx(text, fromCode); }
+    catch (e2) { throw new Error(`all translation providers failed (${e1.message}; ${e2.message})`); }
+  }
 }
 
 // Resolutions the model API accepts, cheapest → most expensive.
