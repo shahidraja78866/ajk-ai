@@ -1174,6 +1174,152 @@
       .settings-chip-chev{ font-size:21px; line-height:1; opacity:.65; flex:none; }
       [dir="rtl"] .settings-chip{ text-align:right; }
       [dir="rtl"] .settings-chip-chev{ transform:scaleX(-1); display:inline-block; }
+
+      /* ---------- Compact action bar (owner, 2026-10-27): Kling-style
+         single row — compact cost block on the start side, a
+         right-sized Generate button on the end side. These rules come
+         last on purpose: they consolidate the Phase Q/T/T2 overrides
+         above (column row + full-width button) into the final layout.
+         Gradient, colours and labels are untouched. */
+      #view-studio .actionbar-row{ flex-direction:row; align-items:center; justify-content:space-between; gap:12px; }
+      #view-studio .actionbar-cost{ flex-direction:column; align-items:flex-start; gap:0; line-height:1.25; }
+      #view-studio .actionbar-label{ font-size:10.5px; }
+      #view-studio .actionbar-cost strong{ font-size:16.5px; font-weight:600; white-space:nowrap; }
+      #view-studio .studio-actionbar #generateBtn{
+        flex:0 1 auto; width:auto; height:46px;
+        min-width:148px; max-width:250px;
+        margin:0; padding:0 22px; border-radius:12px; font-size:15.5px;
+      }
+      @media (max-width:640px){
+        #view-studio .studio-actionbar #generateBtn{ height:44px; }
+      }
+      @media (max-width:350px){
+        #view-studio .actionbar-row{ gap:8px; }
+        #view-studio .studio-actionbar #generateBtn{ min-width:128px; padding:0 14px; }
+      }
+      /* Tiles: three equal columns that can never overflow the phone
+         screen — minmax(0,1fr) + min-width:0 stop grid blowout from
+         long bilingual labels; tighter gap on phones, desktop gap
+         (12px) unchanged. */
+      .q-tiles{ grid-template-columns:repeat(3,minmax(0,1fr)); }
+      .q-tile{ min-width:0; }
+      .q-tile > span{ min-width:0; }
+      @media (max-width:640px){
+        .q-tiles{ gap:8px; }
+      }
+
+      /* ---------- Phase U: Kling-style interface (owner brief,
+         2026-10-27). Home gains Create/Toolbox cards + a Recommended
+         grid, the composer follows Kling's Create-screen anatomy
+         (Generate as the prompt card's inner footer, three summary
+         chips under the card), the bottom nav becomes five buttons
+         with a raised centre Create, Explore gets its own screen,
+         and the Create screen gets its own sticky Generate bar.
+         These rules come last on purpose. ---------- */
+      /* E1 — the studio action bar is the composer card's inner
+         footer: same card surface, only a hairline on top. The old
+         sticky separate-card treatment (own background, border,
+         radius, shadow, sticky offset) is fully neutralised. */
+      #view-studio .studio-actionbar{
+        position:static; margin-top:14px; padding:12px 0 0;
+        background:transparent;
+        border-top-width:1px; border-top-style:solid; border-top-color:var(--line-soft);
+        border-right:0; border-bottom:0; border-left:0;
+        border-radius:0; box-shadow:none; backdrop-filter:none;
+      }
+      /* E3 — the greeting wraps cleanly in both directions (never
+         clipped at the screen edge), the grid column can shrink,
+         and the prompt is 16px on small screens so mobile browsers
+         do not auto-zoom on focus. */
+      #homeGreeting{ max-width:100%; white-space:normal; overflow-wrap:break-word; }
+      .studio-grid > div{ min-width:0; }
+      @media (max-width:900px){
+        #view-studio textarea#prompt{ font-size:16px; }
+      }
+      /* E2 — three summary chips under the composer card (the row
+         keeps the #createSettingsChip id; each chip is a button and
+         every chip opens the Create screen). */
+      .settings-chips{ display:flex; gap:8px; margin-top:12px; }
+      .settings-chips .settings-chip{
+        flex:1 1 0; min-width:0; margin-top:0; justify-content:center;
+        text-align:center; padding:11px 8px;
+      }
+      .settings-chips .settings-chip-text{ text-align:center; }
+      [dir="rtl"] .settings-chips .settings-chip{ text-align:center; }
+      /* A1 — Home Create / Toolbox cards (Kling home anatomy). */
+      .home-cards{ display:grid; grid-template-columns:58fr 42fr; gap:10px; margin-top:12px; }
+      .home-card{
+        display:flex; flex-direction:column; align-items:center; justify-content:center;
+        gap:8px; min-height:92px; padding:14px 8px; border-radius:16px; cursor:pointer;
+        background:var(--panel); border:1px solid var(--line); color:var(--text);
+        font:inherit; font-size:16px; font-weight:700; text-align:center; line-height:1.3;
+      }
+      .home-card svg{ width:30px; height:30px; flex:none; }
+      .home-card-create{
+        background:linear-gradient(135deg, rgba(61,107,255,.20), rgba(168,85,247,.20)), var(--panel);
+        border-color:rgba(99,102,241,.45); box-shadow:0 8px 24px rgba(99,102,241,.18);
+      }
+      .home-card-create svg{ color:#a5b4ff; }
+      .home-card-tools svg{ color:var(--amber); }
+      .home-card:hover{ border-color:var(--blue); }
+      /* A2/A3 — Recommended (Home) + Explore grids. Cards reuse the
+         .sr-label/.sr-sub overlay treatment; the small print always
+         says these are style previews, never finished videos. */
+      .rec-cardwrap{ margin-top:14px; }
+      .rec-grid{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+      .rec-card{
+        position:relative; display:block; width:100%; min-width:0;
+        border-radius:14px; overflow:hidden; padding:0; cursor:pointer;
+        border:1px solid var(--line); background:var(--panel-2);
+        text-align:start; color:#fff; font:inherit;
+      }
+      .rec-card img{ display:block; width:100%; height:110px; object-fit:cover; }
+      .exp-tpl-grid{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+      .exp-tpl-grid .tpl-chip{ width:100%; min-width:0; }
+      .exp-tpl-grid .tpl-name{ white-space:normal; }
+      .exp-styles{ display:flex; flex-direction:column; gap:8px; }
+      .exp-style-row{
+        display:flex; align-items:center; gap:10px; width:100%; min-width:0;
+        padding:12px 14px; border-radius:12px; cursor:pointer; text-align:start;
+        border:1px solid var(--line); background:var(--panel-2);
+        color:var(--text); font:inherit; font-size:14.5px; font-weight:600;
+      }
+      .exp-style-row:hover{ background:var(--panel-3); }
+      /* B — bottom nav: raised centre Create button. It keeps the
+         raised gradient style in both active and inactive states. */
+      .bottomnav .bn-create{ overflow:visible; }
+      .bn-create-circle{
+        display:flex; align-items:center; justify-content:center; flex:none;
+        width:46px; height:46px; border-radius:50%; margin-top:-22px;
+        background:var(--accent-grad); color:#fff;
+        border:2px solid rgba(13,15,19,.9);
+        box-shadow:0 8px 22px rgba(99,102,241,.5);
+      }
+      .bottomnav .bn-create-circle svg{ width:24px; height:24px; }
+      .bottomnav button.active .bn-create-circle{
+        box-shadow:0 8px 22px rgba(99,102,241,.5), 0 0 0 2px var(--amber);
+      }
+      .bottomnav button > span{ max-width:100%; line-height:1.25; }
+      /* C2 — Create screen sticky Generate bar: mirrors the home
+         cost and fires the one true Generate button. */
+      .create-gen-bar{
+        position:sticky; bottom:12px; z-index:30; margin-top:16px;
+        display:flex; align-items:center; justify-content:space-between; gap:12px;
+        background:rgba(16,19,29,.94); backdrop-filter:blur(10px);
+        border:1px solid var(--line); border-radius:14px; padding:10px 12px;
+        box-shadow:0 10px 30px rgba(0,0,0,.45);
+      }
+      :root[data-theme="light"] .create-gen-bar{ background:rgba(255,255,255,.95); }
+      .create-gen-bar #createGenerateBtn{
+        flex:0 1 auto; width:auto; height:44px;
+        min-width:148px; max-width:250px;
+        margin:0; padding:0 22px; border-radius:12px; font-size:15.5px;
+        box-shadow:0 10px 28px rgba(99,102,241,.45);
+      }
+      @media (max-width:640px){
+        .create-gen-bar{ bottom:calc(64px + env(safe-area-inset-bottom)); }
+        .create-gen-bar #createGenerateBtn{ min-width:128px; padding:0 16px; }
+      }
     </style>
   </head>
   <body>
@@ -1258,7 +1404,6 @@
 
               <div class="field-label"><span data-i18n="prompt_label">Prompt</span><span class="count"><span id="charCount">0</span> / 500</span></div>
               <textarea id="prompt" maxlength="500" data-i18n-ph="prompt_ph" placeholder="Describe your imagination…"></textarea>
-            </div>
 
 
             <div class="auto-panel studio-auto-panel" id="autoPlanPanel" hidden>
@@ -1287,29 +1432,45 @@
           </div>
         </div>
 
-        <button type="button" class="settings-chip" id="createSettingsChip" aria-label="Create settings">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
-          <span class="settings-chip-text" id="createSettingsChipText">Settings</span>
-          <span class="settings-chip-chev" aria-hidden="true">›</span>
-        </button>
+            </div><!-- /composer-card -->
+
+        <!-- Phase U (E2): three summary chips under the composer
+             card — Model / Format / Duration. The row keeps the
+             #createSettingsChip id (the split wiring opens Create on
+             any click inside it); updateSettingsChip() writes the
+             three labels from the same live state as before. -->
+        <div class="settings-chips" id="createSettingsChip" role="group" aria-label="Create settings">
+          <button type="button" class="settings-chip" id="chipModelBtn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+            <span class="settings-chip-text" id="createSettingsChipText">Auto</span>
+          </button>
+          <button type="button" class="settings-chip" id="chipFormatBtn">
+            <span class="settings-chip-text" id="chipFormatText">Full quality · 16:9</span>
+          </button>
+          <button type="button" class="settings-chip" id="chipDurationBtn">
+            <span class="settings-chip-text" id="chipDurationText">5s</span>
+          </button>
+        </div>
 
             <!-- Phase Q: three quick-action tiles wired to the real
                  controls only (prompt focus / source-image upload /
                  the AI Auto toggle), plus the wide showcase preview.
                  The image is a style sample, labelled as such. -->
             <h2 class="t-section-head"><span data-i18n="tools_heading">Your creative tools</span><span class="i18n-alt"> · آپ کے تخلیقی ٹولز</span></h2>
-            <div class="q-tiles">
-              <button type="button" class="q-tile" id="q_tileText">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 6V4h14v2M12 4v16M9 20h6"/></svg>
-                <span><span data-i18n="q_tile_text">Text to Video</span><span class="i18n-alt"> · متن سے ویڈیو</span></span>
+            <!-- Phase U (A1): Kling home anatomy — one large Create
+                 card + a Toolbox card replace the three small tiles.
+                 Nothing is lost: Text-to-Video is the composer above
+                 (+ Create), Image-to-Video lives at the top of the
+                 Create screen and in the Toolbox, and the AI Auto
+                 Director toggle lives in Create + the settings chips. -->
+            <div class="home-cards">
+              <button type="button" class="home-card home-card-create" id="homeCreateCard">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9.5v5l4.5-2.5L10 9.5z" fill="currentColor" stroke="none"/></svg>
+                <span>Create<span class="i18n-alt"> · بنائیں</span></span>
               </button>
-              <button type="button" class="q-tile" id="q_tileImage">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="m4.5 17.5 5-5 3.5 3.5 2.5-2.5 4 4"/></svg>
-                <span><span data-i18n="q_tile_image">Image to Video</span><span class="i18n-alt"> · تصویر سے ویڈیو</span></span>
-              </button>
-              <button type="button" class="q-tile" id="q_tileAuto">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/><path d="M18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2z"/></svg>
-                <span><span data-i18n="q_tile_auto">AI Auto Director</span><span class="i18n-alt"> · اے آئی خودکار ڈائریکٹر</span></span>
+              <button type="button" class="home-card home-card-tools" id="homeToolboxCard">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="8" height="8" rx="2"/><rect x="13" y="4" width="8" height="8" rx="2"/><rect x="3" y="14" width="8" height="6" rx="2"/><rect x="13" y="14" width="8" height="6" rx="2"/></svg>
+                <span>Toolbox<span class="i18n-alt"> · ٹولز</span></span>
               </button>
             </div>
 
@@ -1349,6 +1510,41 @@
                 </button>
               </div>
               <p class="lang-hint">Tap a style to set it in the studio — the pictures are style previews, not finished videos.</p>
+            </div>
+
+<!-- Phase U (A2): Recommended grid — the same four showcase
+                 images as the Styles rail, as a 2-column card grid.
+                 The small print on every card says these are style
+                 previews, never finished videos (owner honesty rule);
+                 tapping one applies the matching style via the rail's
+                 own handler and opens the Create screen. -->
+            <div class="card rec-cardwrap" id="recCardWrap">
+              <div class="tpl-head">
+                <h2 class="tpl-head-title"><span data-i18n="rec_heading">Recommended for you</span><span class="i18n-alt"> · آپ کے لیے تجویز</span></h2>
+              </div>
+              <div class="rec-grid">
+                <button type="button" class="rec-card" id="recCardRealistic">
+                  <img src="/showcase/showcase-realistic.jpg" alt="" loading="lazy" />
+                  <span class="sr-label"><span data-i18n="sr_realistic">Realistic</span><span class="i18n-alt"> · حقیقت پسندانہ</span></span>
+                  <span class="sr-sub">Style preview · انداز کا نمونہ</span>
+                </button>
+                <button type="button" class="rec-card" id="recCardCartoon">
+                  <img src="/showcase/showcase-cartoon.jpg" alt="" loading="lazy" />
+                  <span class="sr-label"><span data-i18n="sr_cartoon">Cartoon</span><span class="i18n-alt"> · کارٹون</span></span>
+                  <span class="sr-sub">Style preview · انداز کا نمونہ</span>
+                </button>
+                <button type="button" class="rec-card" id="recCardAnimals">
+                  <img src="/showcase/showcase-animals.jpg" alt="" loading="lazy" />
+                  <span class="sr-label"><span data-i18n="sr_animals">Animals</span><span class="i18n-alt"> · جانور</span></span>
+                  <span class="sr-sub">Style preview · انداز کا نمونہ</span>
+                </button>
+                <button type="button" class="rec-card" id="recCardSpeaking">
+                  <img src="/showcase/showcase-speaking.jpg" alt="" loading="lazy" />
+                  <span class="sr-label"><span data-i18n="sr_speaking">Speaking</span><span class="i18n-alt"> · بولتا کردار</span></span>
+                  <span class="sr-sub">Style preview · انداز کا نمونہ</span>
+                </button>
+              </div>
+              <p class="lang-hint">Tap a picture to load that style in the Create screen — the pictures are style previews, not finished videos.</p>
             </div>
 
 <div class="card tpl-card" id="templateCard">
@@ -1884,6 +2080,15 @@
               <p class="lang-hint" id="speakingModelHint" style="display:none;">Speaking video: 16:9 or 9:16, Pro plan or above · بولتی ویڈیو: صرف 16:9 یا 9:16، Pro یا اوپر والا پلان</p>
               <p class="lang-hint" id="modelGateHint" style="display:none;"></p>
 
+              <!-- Phase U (C1): the reference-image upload sits right
+                   under the model picker — Kling's Create screen puts
+                   the + add-media slot at the top of the editor. Same
+                   input, same ids, same upload handler. -->
+              <div class="field-label"><span data-i18n="starting_image">Starting image (optional)</span></div>
+              <input type="file" class="file-input" id="sourceImage" accept="image/png,image/jpeg,image/webp" />
+              <p class="lang-hint" id="imageStatus">Add a PNG, JPEG or WebP image (max 5 MB) to animate it as the opening frame.</p>
+              <button type="button" class="tool-btn" id="removeImageBtn" style="display:none;" data-i18n="remove_image">Remove image</button>
+
               <div class="composer-lang">
                 <label for="promptLang" data-i18n="prompt_language">Language</label>
                 <select id="promptLang">
@@ -1944,12 +2149,7 @@
                   <option value="">No character</option>
                 </select>
               </div>
-              <p class="lang-hint">Pick one of your saved characters (My Characters card below) and the model uses its photo as the subject reference, so the character stays recognisable from video to video. A chosen character overrides the starting image below. Character consistency is the model's best effort — it is not a guarantee. The credit cost is the standard rate for the chosen quality and duration — characters cost nothing extra.</p>
-
-              <div class="field-label"><span data-i18n="starting_image">Starting image (optional)</span></div>
-              <input type="file" class="file-input" id="sourceImage" accept="image/png,image/jpeg,image/webp" />
-              <p class="lang-hint" id="imageStatus">Add a PNG, JPEG or WebP image (max 5 MB) to animate it as the opening frame.</p>
-              <button type="button" class="tool-btn" id="removeImageBtn" style="display:none;" data-i18n="remove_image">Remove image</button>
+              <p class="lang-hint">Pick one of your saved characters (My Characters card below) and the model uses its photo as the subject reference, so the character stays recognisable from video to video. A chosen character overrides the starting image above. Character consistency is the model's best effort — it is not a guarantee. The credit cost is the standard rate for the chosen quality and duration — characters cost nothing extra.</p>
 
               <div class="field-label"><span data-i18n="visual_style">Visual style</span></div>
               <div class="style-grid" id="styleGrid"></div>
@@ -2004,6 +2204,121 @@
 
               </div><!-- /advancedCardBody -->
             </div><!-- /advancedCard -->
+
+        <!-- Phase U (C2): the Create screen's own sticky Generate
+             bar — the cost mirrors the home composer's #costNum and
+             the button fires the ONE true #generateBtn (via the
+             studio view), so plan checks, the Auto Director flow and
+             idempotency all run exactly as on Home. -->
+        <div class="create-gen-bar" id="createGenBar">
+          <div class="actionbar-cost">
+            <span class="actionbar-label" data-i18n="total_cost">Total cost</span>
+            <strong><span id="createCostMirror">120</span> credits</strong>
+          </div>
+          <button type="button" class="btn primary generate-btn" id="createGenerateBtn">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5-11-6.5z"/></svg>
+            <span data-i18n="generate_video">Generate video</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- Phase U (A3): Explore — discovery surface whose every
+           control runs a REAL action: style cards dispatch a click
+           on the matching Styles-rail card (the rail's own handler
+           applies mode/style), template cards dispatch a click on
+           the matching chip in #templateGrid (the one true
+           applyTemplate), and the user lands where the result
+           shows. Nothing here is a dead visual. -->
+      <section class="view" id="view-explore">
+        <div class="tool-view-head">
+          <button type="button" class="view-back" id="exploreBackBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 5l-7 7 7 7"/></svg><span>Back · واپس</span></button>
+          <h2 class="tool-view-title">Explore · دریافت کریں</h2>
+        </div>
+
+        <h3 class="t-section-head"><span data-i18n="styles_heading">Styles</span><span class="i18n-alt"> · انداز</span></h3>
+        <div class="rec-grid">
+          <button type="button" class="rec-card" id="expCardRealistic">
+            <img src="/showcase/showcase-realistic.jpg" alt="" loading="lazy" />
+            <span class="sr-label"><span data-i18n="sr_realistic">Realistic</span><span class="i18n-alt"> · حقیقت پسندانہ</span></span>
+            <span class="sr-sub">Style preview · انداز کا نمونہ</span>
+          </button>
+          <button type="button" class="rec-card" id="expCardCartoon">
+            <img src="/showcase/showcase-cartoon.jpg" alt="" loading="lazy" />
+            <span class="sr-label"><span data-i18n="sr_cartoon">Cartoon</span><span class="i18n-alt"> · کارٹون</span></span>
+            <span class="sr-sub">Style preview · انداز کا نمونہ</span>
+          </button>
+          <button type="button" class="rec-card" id="expCardAnimals">
+            <img src="/showcase/showcase-animals.jpg" alt="" loading="lazy" />
+            <span class="sr-label"><span data-i18n="sr_animals">Animals</span><span class="i18n-alt"> · جانور</span></span>
+            <span class="sr-sub">Style preview · انداز کا نمونہ</span>
+          </button>
+          <button type="button" class="rec-card" id="expCardSpeaking">
+            <img src="/showcase/showcase-speaking.jpg" alt="" loading="lazy" />
+            <span class="sr-label"><span data-i18n="sr_speaking">Speaking</span><span class="i18n-alt"> · بولتا کردار</span></span>
+            <span class="sr-sub">Style preview · انداز کا نمونہ</span>
+          </button>
+        </div>
+        <p class="lang-hint">The pictures are style previews, not finished videos.</p>
+
+        <h3 class="t-section-head"><span data-i18n="q_templates_title">Ready templates</span><span class="i18n-alt"> · تیار ٹیمپلیٹس</span></h3>
+        <div class="exp-tpl-grid">
+          <button type="button" class="tpl-chip exp-tpl-chip" data-template="talking-photo">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4M8 22h8"/></svg>
+            <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_talking_photo">Talking Photo</span></span>
+          </button>
+          <button type="button" class="tpl-chip exp-tpl-chip" data-template="kids-story">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 6c-1.6-1.6-4.2-2.2-8-2.2v14.4c3.8 0 6.4.6 8 2.2 1.6-1.6 4.2-2.2 8-2.2V3.8C16.2 3.8 13.6 4.4 12 6z"/><path d="M12 6v14.4"/></svg>
+            <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_kids_story">Kids Story</span></span>
+          </button>
+          <button type="button" class="tpl-chip exp-tpl-chip" data-template="product-ad">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><circle cx="7" cy="7" r="1.3"/></svg>
+            <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_product_ad">Product Ad</span></span>
+          </button>
+          <button type="button" class="tpl-chip exp-tpl-chip" data-template="breaking-news">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="2"/><path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M4.9 4.9a10 10 0 0 0 0 14.2M19.1 4.9a10 10 0 0 1 0 14.2"/></svg>
+            <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_breaking_news">Breaking-News Short</span></span>
+          </button>
+          <button type="button" class="tpl-chip exp-tpl-chip" data-template="music-video">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+            <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_music_video">Music Video</span></span>
+          </button>
+          <button type="button" class="tpl-chip exp-tpl-chip" data-template="cartoon-episode">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M8.5 14s1.2 2.2 3.5 2.2 3.5-2.2 3.5-2.2"/><circle cx="9" cy="9.5" r=".6" fill="currentColor"/><circle cx="15" cy="9.5" r=".6" fill="currentColor"/></svg>
+            <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_cartoon_episode">Cartoon Episode</span></span>
+          </button>
+          <button type="button" class="tpl-chip exp-tpl-chip" data-template="nature-doc">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22v-6"/><path d="M12 16c0-6-4-10-9-10 0 5 4 9 9 10z"/><path d="M12 12c0-4 3-8 8-8 0 4-3 8-8 8z"/></svg>
+            <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_nature_doc">Nature Documentary</span></span>
+          </button>
+          <button type="button" class="tpl-chip exp-tpl-chip" data-template="food-ad">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17h16"/><path d="M5 17a7 7 0 0 1 14 0"/><path d="M12 10V8.5"/><circle cx="12" cy="7" r="1"/><path d="M3 21h18"/></svg>
+            <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_food_ad">Food Ad</span></span>
+          </button>
+          <button type="button" class="tpl-chip exp-tpl-chip" data-template="fashion-shoot">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8a2 2 0 1 1 2-2"/><path d="M12 8v1.5L20 16H4l8-6.5"/></svg>
+            <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_fashion_shoot">Fashion Shoot</span></span>
+          </button>
+          <button type="button" class="tpl-chip exp-tpl-chip" data-template="travel-vlog">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7z"/></svg>
+            <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_travel_vlog">Travel Vlog</span></span>
+          </button>
+          <button type="button" class="tpl-chip exp-tpl-chip" data-template="wedding-film">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="14" r="5"/><circle cx="15" cy="10" r="5"/></svg>
+            <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_wedding_film">Wedding Film</span></span>
+          </button>
+          <button type="button" class="tpl-chip exp-tpl-chip" data-template="anime-story">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+            <span class="tpl-texts"><span class="tpl-name" data-i18n="tpl_anime_story">Anime Story</span></span>
+          </button>
+        </div>
+
+        <h3 class="t-section-head"><span data-i18n="styles_heading">Styles</span><span class="i18n-alt"> · انداز</span></h3>
+        <div class="exp-styles">
+          <button type="button" class="exp-style-row" id="expStyleRealistic"><span><span data-i18n="sr_realistic">Realistic</span><span class="i18n-alt"> · حقیقت پسندانہ</span></span></button>
+          <button type="button" class="exp-style-row" id="expStyleCartoon"><span><span data-i18n="sr_cartoon">Cartoon</span><span class="i18n-alt"> · کارٹون</span></span></button>
+          <button type="button" class="exp-style-row" id="expStyleAnimals"><span><span data-i18n="sr_animals">Animals</span><span class="i18n-alt"> · جانور</span></span></button>
+          <button type="button" class="exp-style-row" id="expStyleSpeaking"><span><span data-i18n="sr_speaking">Speaking</span><span class="i18n-alt"> · بولتا کردار</span></span></button>
+        </div>
       </section>
 
       <section class="view" id="view-tools">
@@ -2264,19 +2579,23 @@
       <div class="row">
         <button type="button" class="tab active" id="bn_homeBtn" data-view="studio">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 11.5 12 4l8 7.5"/><path d="M6 10v10h12V10"/></svg>
-          <span data-i18n="bn_home">Home</span>
+          <span><span data-i18n="bn_home">Home</span><span class="i18n-alt"> · ہوم</span></span>
+        </button>
+        <button type="button" class="tab" id="bn_exploreBtn" data-view="explore">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="m15.5 8.5-2 5-5 2 2-5z"/></svg>
+          <span><span data-i18n="bn_explore">Explore</span><span class="i18n-alt"> · دریافت</span></span>
+        </button>
+        <button type="button" class="tab bn-create" id="bn_createBtn" data-view="create">
+          <span class="bn-create-circle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg></span>
+          <span><span data-i18n="bn_create">Create</span><span class="i18n-alt"> · بنائیں</span></span>
         </button>
         <button type="button" class="tab" id="bn_historyBtn" data-view="history">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/><path d="M12 7v5l3.5 2"/></svg>
-          <span data-i18n="nav_history">History</span>
-        </button>
-        <button type="button" class="tab" id="bn_joinBtn" data-view="history">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 7h11M8 12h11M8 17h11"/><circle cx="4.5" cy="7" r="1.3"/><circle cx="4.5" cy="12" r="1.3"/><circle cx="4.5" cy="17" r="1.3"/></svg>
-          <span data-i18n="dr_join">Join Clips</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+          <span><span data-i18n="bn_assets">Assets</span><span class="i18n-alt"> · اثاثے</span></span>
         </button>
         <button type="button" class="tab" id="bn_dashboardBtn" data-view="dashboard">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>
-          <span data-i18n="dr_dashboard">Dashboard</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3.6"/><path d="M5 20c1.2-3.2 3.8-4.8 7-4.8s5.8 1.6 7 4.8"/></svg>
+          <span><span data-i18n="bn_myspace">My Space</span><span class="i18n-alt"> · میری جگہ</span></span>
         </button>
       </div>
     </nav>
@@ -2695,6 +3014,11 @@
           dr_auto: { en: "AI Auto Director", ur: "اے آئی خودکار ڈائریکٹر" },
           dr_tools: { en: "Video Tools", ur: "ویڈیو ٹولز" },
           bn_home: { en: "Home", ur: "ہوم" },
+          bn_explore: { en: "Explore", ur: "دریافت" },
+          bn_create: { en: "Create", ur: "بنائیں" },
+          bn_assets: { en: "Assets", ur: "اثاثے" },
+          bn_myspace: { en: "My Space", ur: "میری جگہ" },
+          rec_heading: { en: "Recommended for you", ur: "آپ کے لیے تجویز" },
           tech_status: { en: "Technical status", ur: "تکنیکی حالت" },
           vt_title: { en: "Video Tools", ur: "ویڈیو ٹولز" },
           vt_image: { en: "Image to Video", ur: "تصویر سے ویڈیو" },
@@ -6866,25 +7190,34 @@
         }
         function updateSettingsChip() {
           try {
-            var txt = el('createSettingsChipText');
-            if (!txt) return;
-            var parts = [];
-            // Batch 2: a manually picked model leads the summary
-            // (e.g. "Seedance 2.5 · 16:9 · 5s · Auto on") and replaces
-            // the quality label; Auto keeps the quality label.
+            // Phase U (E2): the summary now fills THREE chips under
+            // the composer card — Model / Format / Duration — from
+            // the same live state as the old single chip. The Model
+            // chip carries #createSettingsChipText: a picked model
+            // shows its name; Auto shows the Auto Director state.
+            var modelTxt = el('createSettingsChipText');
+            var fmtTxt = el('chipFormatText');
+            var durTxt = el('chipDurationText');
             var modelBtn = document.querySelector('#modelPicker button.sel');
             var modelVal = modelBtn ? (modelBtn.getAttribute('data-model') || 'auto') : 'auto';
-            if (modelBtn && modelVal !== 'auto') parts.push(segLabel(modelBtn));
-            else { var q = selLabel('qualitySeg'); if (q) parts.push(q); }
-            var a = selLabel('aspectSeg').replace(/\s*:\s*/g, ':');
-            if (a) parts.push(a);
-            var d = selLabel('durationSeg');
-            var dm = /^(\d+)\s*seconds?$/.exec(d || '');
-            if (dm) d = dm[1] + 's';
-            if (d) parts.push(d);
             var auto = el('aiAutoToggle');
-            parts.push(auto && auto.checked ? 'Auto on' : 'Auto off');
-            txt.textContent = parts.join(' · ');
+            if (modelTxt) {
+              if (modelBtn && modelVal !== 'auto') modelTxt.textContent = segLabel(modelBtn);
+              else modelTxt.textContent = 'Auto · ' + (auto && auto.checked ? 'On' : 'Off');
+            }
+            if (fmtTxt) {
+              var parts = [];
+              var q = selLabel('qualitySeg'); if (q) parts.push(q);
+              var a = selLabel('aspectSeg').replace(/\s*:\s*/g, ':');
+              if (a) parts.push(a);
+              fmtTxt.textContent = parts.join(' · ');
+            }
+            if (durTxt) {
+              var d = selLabel('durationSeg');
+              var dm = /^(\d+)\s*seconds?$/.exec(d || '');
+              if (dm) d = dm[1] + 's';
+              durTxt.textContent = d || '';
+            }
           } catch (e) {}
         }
         window.updateSettingsChip = updateSettingsChip;
@@ -6910,6 +7243,92 @@
           tries++;
           setTimeout(fillChip, 400);
         })();
+
+        /* ----- Phase U wiring (Kling-style interface) ----- */
+        bindBack('exploreBackBtn', 'studio');
+
+        /* A1: Home Create / Toolbox cards. */
+        var homeCreate = el('homeCreateCard');
+        if (homeCreate) homeCreate.addEventListener('click', function () { window.ajkGo('create'); });
+        var homeTools = el('homeToolboxCard');
+        if (homeTools) homeTools.addEventListener('click', function () { window.ajkGo('tools'); });
+
+        /* A2/A3: style cards (Recommended on Home, cards + list rows
+           on Explore) reuse the Styles rail EXACTLY: a real click on
+           the matching rail card runs applyModeStyle / the Talking
+           Photo route. If that click already navigated (Speaking →
+           Voice screen), respect it; otherwise land on Create, where
+           the applied mode/style now lives. */
+        function applyStyleTwin(srId) {
+          var twin = el(srId);
+          if (twin) twin.click();
+          var active = document.querySelector('.view.active');
+          if (!active || active.id === 'view-studio' || active.id === 'view-explore') {
+            window.ajkGo('create');
+          }
+        }
+        function bindStyleTwin(id, srId) {
+          var n = el(id);
+          if (n) n.addEventListener('click', function () { applyStyleTwin(srId); });
+        }
+        bindStyleTwin('recCardRealistic', 'sr_realistic');
+        bindStyleTwin('recCardCartoon', 'sr_cartoon');
+        bindStyleTwin('recCardAnimals', 'sr_animals');
+        bindStyleTwin('recCardSpeaking', 'sr_speaking');
+        bindStyleTwin('expCardRealistic', 'sr_realistic');
+        bindStyleTwin('expCardCartoon', 'sr_cartoon');
+        bindStyleTwin('expCardAnimals', 'sr_animals');
+        bindStyleTwin('expCardSpeaking', 'sr_speaking');
+        bindStyleTwin('expStyleRealistic', 'sr_realistic');
+        bindStyleTwin('expStyleCartoon', 'sr_cartoon');
+        bindStyleTwin('expStyleAnimals', 'sr_animals');
+        bindStyleTwin('expStyleSpeaking', 'sr_speaking');
+
+        /* A3: Explore template cards dispatch a real click on their
+           #templateGrid twin — the one true applyTemplate runs
+           (state, prompt, toast). Talking Photo's twin navigates to
+           the Voice screen itself; for the rest, land on the Studio
+           where the loaded prompt + Generate live. */
+        document.querySelectorAll('#view-explore [data-template]').forEach(function (card) {
+          card.addEventListener('click', function () {
+            var twin = document.querySelector('#templateGrid [data-template="' + card.getAttribute('data-template') + '"]');
+            if (twin) twin.click();
+            var active = document.querySelector('.view.active');
+            if (active && active.id === 'view-explore') window.ajkGo('studio');
+          });
+        });
+
+        /* B: the centre bottom-nav Create button is switched by the
+           main script's own .tab binding (its data-view="create"
+           runs showView like every tab) — this only adds the same
+           expand-on-enter the Create screen gets via ajkGo. */
+        var bnCreate = el('bn_createBtn');
+        if (bnCreate) bnCreate.addEventListener('click', function () { expandSplitCard('advancedCard'); });
+
+        /* C2: Create screen Generate bar — the cost mirrors the home
+           #costNum live, the disabled state mirrors #generateBtn,
+           and a click routes through ajkGo('studio') + the real
+           #generateBtn so every check runs on the one true path. */
+        var costNum = el('costNum');
+        var costMirror = el('createCostMirror');
+        var homeGenBtn = el('generateBtn');
+        var createGenBtn = el('createGenerateBtn');
+        function syncCreateBar() {
+          try {
+            if (costNum && costMirror) costMirror.textContent = costNum.textContent;
+            if (homeGenBtn && createGenBtn) createGenBtn.disabled = !!homeGenBtn.disabled;
+          } catch (e) {}
+        }
+        if (window.MutationObserver) {
+          if (costNum) new MutationObserver(syncCreateBar).observe(costNum, { childList: true, characterData: true, subtree: true });
+          if (homeGenBtn) new MutationObserver(syncCreateBar).observe(homeGenBtn, { attributes: true, attributeFilter: ['disabled'] });
+        }
+        syncCreateBar();
+        if (createGenBtn) createGenBtn.addEventListener('click', function () {
+          window.ajkGo('studio');
+          var gb = el('generateBtn');
+          if (gb) gb.click();
+        });
       })();
     </script>
   </body>
