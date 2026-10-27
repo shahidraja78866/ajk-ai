@@ -2138,6 +2138,7 @@
                 <span class="chip-group-label" data-i18n="length_label">Length</span>
                 <div class="seg chip-seg" id="durationSeg" role="group" aria-label="Duration"></div>
               </div>
+              <p class="lang-hint" id="duration20Note">20s videos are made in two parts and joined automatically · 20 سیکنڈ کی ویڈیو دو حصوں میں بن کر خودکار جُڑتی ہے</p>
               <label class="auto-switch" title="AI Auto plans the settings from your prompt and asks before extra-cost choices">
                 <input type="checkbox" id="aiAutoToggle" checked aria-label="AI Auto" />
                 <span data-i18n="auto_label">Auto</span>
@@ -3179,10 +3180,10 @@
           styles: ["realistic", "cinematic", "cartoon", "anime"],
           aspect_ratios: ["16:9", "9:16", "1:1"],
           durations: [5, 10],
-          cost_by_duration: { "5": 120, "10": 240 },
+          cost_by_duration: { "5": 120, "10": 240, "20": 480 },
           cost_by_quality: {
-            "768P": { "5": 120, "10": 240 },
-            "2K": { "5": 180, "10": 360 },
+            "768P": { "5": 120, "10": 240, "20": 480 },
+            "2K": { "5": 180, "10": 360, "20": 720 },
             "4K": { "5": 450, "10": 900 }
           }
         };
@@ -3357,7 +3358,7 @@
           // Draft quality is a flat cheap rate (480P preview), read from
           // the server's config like everything else.
           if (state.quality === "draft") {
-            var dt = (cfg && cfg.draft && cfg.draft.cost_by_duration) || { "5": 70, "10": 140 };
+            var dt = (cfg && cfg.draft && cfg.draft.cost_by_duration) || { "5": 70, "10": 140, "20": 280 };
             var dv = dt[String(d)];
             return (dv === undefined || dv === null) ? 70 : dv;
           }
@@ -3397,7 +3398,16 @@
             var sd = cfg && cfg.seedance_engine && cfg.seedance_engine.durations;
             return (sd && sd.length) ? sd : [5, 10, 15, 20, 30];
           }
-          return (cfg && cfg.durations) || FALLBACK.durations;
+          // 20s (2026-10-27): offered on the standard H3 routes only, as
+          // an automatic two-part generation joined by the server. The
+          // speaking engine (schema max 10s) and the native-4K quality
+          // keep 5/10 — renderDurationSeg re-clamps a selected 20 back
+          // to 10 when the user switches to either of them. (A 4K plan
+          // at a non-4K aspect routes to 2K server-side, where 20s IS
+          // available — effectiveQuality mirrors that fallback.)
+          if (state.model === "speaking") return [5, 10];
+          if (state.quality === "full" && effectiveQuality() === "4K") return [5, 10];
+          return [5, 10, 20];
         }
         function renderDurationSeg() {
           var durations = currentDurations();
@@ -3586,6 +3596,10 @@
           }
           // 'auto': the quality seg stays exactly where the user left it.
           syncModelPicker();
+          // The duration set belongs to the engine too: switching to
+          // the speaking engine drops the 20s option (and re-clamps a
+          // selected 20 to 10) even when the quality seg did not move.
+          renderDurationSeg();
           updateCost();
         }
         $$("#modelPicker button").forEach(function (b) {
@@ -3676,6 +3690,9 @@
               state.aspectExplicit = true;
               $$("#aspectSeg button").forEach(function (x) { x.classList.toggle("sel", x === b); });
               applyFrameAspect();
+              // The 4K aspect fallback also moves the duration set
+              // (20s exists at 2K, not at native 4K) — re-render it.
+              renderDurationSeg();
               updateCost(); // 4K falls back to the 2K rate at unsupported aspects
             });
             aseg.appendChild(b);
@@ -3871,7 +3888,7 @@
               updateAdSlots();
               if (cfg && cfg.draft && cfg.draft.cost_by_duration) {
                 var dh = $("#draftCostHint");
-                if (dh) dh.textContent = (cfg.draft.cost_by_duration["5"] || 7) + " / " + (cfg.draft.cost_by_duration["10"] || 14);
+                if (dh) dh.textContent = (cfg.draft.cost_by_duration["5"] || 70) + " / " + (cfg.draft.cost_by_duration["10"] || 140) + " / " + (cfg.draft.cost_by_duration["20"] || 280);
               }
               return true;
             }
@@ -3960,6 +3977,10 @@
               fillPlanUI();
               fillVoiceGate();
               fillSeedanceGate();
+              // The duration set is plan-dependent too (native-4K
+              // plans never see the 20s option) — re-render it now
+              // that the plan is known, not just at first paint.
+              renderDurationSeg();
               fillModelGate();
               loadCharacters();
               loadIdentities();
@@ -5229,6 +5250,16 @@
                 er.className = "job-error";
                 er.textContent = g.error + " (credits refunded)";
                 main.appendChild(er);
+              }
+              // 20s two-part chain: when the second part could not be
+              // made, the row carries the honest settle note (part 1
+              // delivered at 10s + the second half refunded) — shown
+              // verbatim so the shorter duration is never silent.
+              if (g.chain_note) {
+                var cn = document.createElement("p");
+                cn.className = "job-meta";
+                cn.textContent = g.chain_note;
+                main.appendChild(cn);
               }
               top.appendChild(main);
               var chip = document.createElement("span");
