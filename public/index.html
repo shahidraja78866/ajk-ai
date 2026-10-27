@@ -3356,6 +3356,16 @@
           }
         }
         function setConnStatus(html) { $("#connStatus").innerHTML = html; }
+        // Slow first open (the free server sleeps): if the backend check is
+        // still pending after a few seconds, say plainly that the server is
+        // starting, so a long first load is not mistaken for a broken app.
+        setTimeout(function () {
+          var pill2 = $("#homeStatusPill");
+          if (pill2 && pill2.classList.contains("checking")) {
+            var pt2 = $("#homeStatusText");
+            if (pt2) pt2.textContent = "Server is starting — the first open can take up to a minute · سرور شروع ہو رہا ہے — پہلی بار کھلنے میں ایک منٹ تک لگ سکتا ہے";
+          }
+        }, 6000);
 
         /* ---------- controls (populated from /api/config) ---------- */
         function routedQuality() {
