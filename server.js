@@ -61,8 +61,8 @@ if (!FAL_KEY || !JWT_SECRET) {
 // per-second deductions converted at the Rs 1.40/credit floor and verified
 // no-loss on every row (768P 120/240, 2K 180/360).
 const COST_BY_QUALITY = {
-  '768P': { 5: 120, 10: 240 },
-  '2K':   { 5: 180, 10: 360 },
+  '768P': { 5: 120, 10: 240, 20: 480 },
+  '2K':   { 5: 180, 10: 360, 20: 720 },
   '4K':   { 5: 450, 10: 900 },
 };
 function generationCost(resolution, duration) {
@@ -103,7 +103,13 @@ const CONFIG = {
   modelRef: (process.env.FAL_MODEL_REF || 'minimax/h3/reference-to-video').trim(),
   resolution: process.env.FAL_RESOLUTION || '768P',
   aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'],
-  durations: [5, 10],                       // seconds offered in the UI
+  durations: [5, 10],                       // seconds in ONE provider call (fal H3 schema cap)
+  // 20s (owner request, 2026-10-27): offered on the standard H3 routes
+  // only, as an automatic TWO-PART generation (10s + a chained 10s
+  // extension, joined server-side — migration v25). The speaking engine
+  // (schema max 10s) and the native-4K Kling route never accept it;
+  // both reject pre-charge in /api/generate. Seedance keeps its own set.
+  durations20: [5, 10, 20],
   styles: ['realistic', 'cinematic', 'cartoon', 'anime'],
   // The full per-quality rate card (see COST_BY_QUALITY above).
   // costByDuration stays as the 768P row for backward compatibility.
@@ -277,7 +283,7 @@ const CONFIG = {
   // model (480P is a documented H3 tier at $0.05/s) at a flat cheap rate.
   // Drafts take no sound/voice add-ons; the full-quality version is a
   // separate standard-rate generation (POST /api/generations/:id/upgrade).
-  draftCost: { 5: 70, 10: 140 },
+  draftCost: { 5: 70, 10: 140, 20: 280 },
   // --- Advertising preparation (Google AdMob groundwork) ------------------
   // INERT until the owner has an AdMob account: ADS_ENABLED=1 AND a valid
   // ADMOB_PUBLISHER_ID (pub- followed by exactly 16 digits) must BOTH be
@@ -1121,6 +1127,15 @@ const MIGRATIONS = [
             '4K', 'Native 4K', '4K', 'fal-ai/kling-video/o3/4k/text-to-video', 4,
             'ajk_extrapremier_monthly', 'ajk_extrapremier_yearly',
             NULL, NULL, NULL, 1, 1, 1);` },
+  // v25 — 20-second videos (owner request, 2026-10-27): the two-part
+  // chain marker + the user-visible settle note on generations.
+  // chain_stage is NULL for every ordinary job; a 20s H3 job is born
+  // 'part1', flips to 'extending' when part 1 completes and the chain
+  // runs, and settles 'done' exactly once (joined 20s success, or
+  // part-1 delivered at 10s with the second half refunded + chain_note).
+  { version: 25, up: `
+    ALTER TABLE generations ADD COLUMN chain_stage TEXT;
+    ALTER TABLE generations ADD COLUMN chain_note TEXT;` },
 ];
 {
   const applied = new Set(db.prepare('SELECT version FROM schema_migrations').all().map(r => r.version));
@@ -1962,7 +1977,9 @@ function publicModels() {
       models: { text_to_video: CONFIG.model, image_to_video: CONFIG.modelI2V,
                 reference_to_video: CONFIG.modelRef },
       resolutions: Object.keys(COST_BY_QUALITY),
-      durations: CONFIG.durations,
+      // 20s is offered on the H3 routes as an automatic two-part
+      // generation (10s + 10s joined server-side) — see migration v25.
+      durations: [5, 10, 20],
       price: { by_quality: COST_BY_QUALITY, draft_by_duration: CONFIG.draftCost },
       plan_gate: 'all', notes: 'native_audio_included' },
     { id: 'kling_o3_4k', name: 'Kling O3 4K', kind: 'video',
@@ -3294,13 +3311,19 @@ function analyzeAutoDirector(opts) {
   const speakingScene = contentClass === 'human' || contentClass === 'news';
   const omniRoute = !!(dialogue && !dialogue.from_translation &&
     ['ur', 'hi', 'en'].includes(dialogue.language) && !isDraft &&
+    // 20s is a manual-only choice: the speaking engine's schema caps at
+    // 10s, so a 20s request NEVER auto-routes to it — the dialogue takes
+    // the standard two-part route with the voice step instead.
+    Number(duration) <= 10 &&
     canSpeaking && !character && !hasSourceImage && speakingScene &&
     !voiceSelection && !existingSound && !neg.mute && !neg.dialogue &&
     CONFIG.speakingAspects.includes(finalAspect));
   if (dialogue && canSpeaking && !character && !hasSourceImage && !isDraft &&
       speakingScene && !dialogue.from_translation &&
       ['ur', 'hi', 'en'].includes(dialogue.language) && !omniRoute) {
-    if (!CONFIG.speakingAspects.includes(finalAspect))
+    if (Number(duration) === 20)
+      notes.push('20-second videos are made on the standard engine in two parts, so this dialogue uses the voice route instead of the speaking engine.');
+    else if (!CONFIG.speakingAspects.includes(finalAspect))
       notes.push('The speaking engine only makes 16:9 or 9:16 videos, so this dialogue uses the voice route instead.');
     else if (existingSound)
       notes.push('You selected a sound add-on yourself, so the one-step speaking engine was not used — its own synchronized audio would clash with the add-on. The dialogue uses the voice route instead.');
@@ -3558,8 +3581,8 @@ app.post('/api/generate/plan', auth, generateLimiter, async (req, res) => {
     return res.status(400).json({ error: 'Please describe your video in 3–500 characters.' });
   if (!CONFIG.aspectRatios.includes(selectedAspect))
     return res.status(400).json({ error: `aspect_ratio must be one of: ${CONFIG.aspectRatios.join(', ')}` });
-  if (!CONFIG.durations.includes(Number(duration)))
-    return res.status(400).json({ error: `duration must be one of: ${CONFIG.durations.join(', ')} seconds` });
+  if (!CONFIG.durations20.includes(Number(duration)))
+    return res.status(400).json({ error: `duration must be one of: ${CONFIG.durations20.join(', ')} seconds` });
   if (!CONFIG.styles.includes(style))
     return res.status(400).json({ error: `style must be one of: ${CONFIG.styles.join(', ')}` });
   if (!Object.hasOwn(VIDEO_MODES, mode))
@@ -3670,15 +3693,16 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
     return res.status(400).json({ error: 'Please describe your video in 3–500 characters.' });
   if (!CONFIG.aspectRatios.includes(aspect_ratio))
     return res.status(400).json({ error: `aspect_ratio must be one of: ${CONFIG.aspectRatios.join(', ')}` });
-  // Duration set (Phase L): every engine is capped at the standard
-  // 5/10s EXCEPT the Seedance premium engine, whose fal schema genuinely
-  // allows up to 30s — it alone may use its extended set. The Seedance
-  // gates below still run before any charge, so an unentitled caller
-  // asking for 30s gets the 403 there, and any other engine asking for
-  // 15s+ is refused right here — longer durations are never faked.
+  // Duration set (Phase L, extended 2026-10-27): every engine is capped
+  // at the standard set EXCEPT the Seedance premium engine, whose fal
+  // schema genuinely allows up to 30s — it alone may use its extended
+  // set. The standard set now includes 20s, which ONLY the H3 routes
+  // (768P / 2K / Draft) honour — as a two-part chained generation; the
+  // speaking block and the post-routing 4K check below reject 20s for
+  // their routes BEFORE any charge, so a longer duration is never faked.
   const engineRequested = String(req.body?.engine || '').toLowerCase();
   const allowedDurations = ['seedance', 'seedance_premium'].includes(engineRequested)
-    ? CONFIG.seedanceDurations : CONFIG.durations;
+    ? CONFIG.seedanceDurations : CONFIG.durations20;
   if (!allowedDurations.includes(Number(duration)))
     return res.status(400).json({ error: `duration must be one of: ${allowedDurations.join(', ')} seconds` });
   if (!CONFIG.styles.includes(style))
@@ -3942,6 +3966,10 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
   let isSpeaking = false;
   let speakingDialogue = null;
   if (wantsSpeaking || planSpeaking) {
+    // 20s is never a speaking video: the Omni schema caps at 10s and the
+    // two-part chain exists only on the H3 routes. Rejected pre-charge.
+    if (Number(duration) === 20)
+      return res.status(400).json({ error: '20-second videos are made on the standard engine in two parts — the speaking engine makes up to 10 seconds. Remove the speaking engine, or choose 5 or 10 seconds.' });
     // Phase G: a speaking video CANNOT be silent — the engine always
     // generates synchronized speech audio. A silence request in the
     // prompt (or a confirmed mute plan) is a true conflict: reject with a
@@ -4067,6 +4095,18 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
   // structural gates above likewise guarantee no character/image/draft/
   // add-ons reach this point, so the override is unconditional here.
   if (isSeedance) { model = CONFIG.modelSeedance; resolution = '720P'; }
+  // 20s two-part chain (2026-10-27): after every override, a job still
+  // routed to native 4K (Kling O3 — its schema has no 20s and there is
+  // no chained route for it) is rejected BEFORE any charge. (A 4K job
+  // at an unsupported aspect already fell back to 2K above, so it takes
+  // the chain like any other 2K job; speaking rejected 20s in its own
+  // block; Seedance prices 20s from its own table.)
+  if (Number(duration) === 20 && !isSeedance && resolution === '4K')
+    return res.status(400).json({ error: '20 seconds is not available in native 4K. Choose 768P, 2K or Draft quality for a 20-second video — it is made in two parts and joined automatically.' });
+  // A 20s job that reaches the charge below is therefore always an H3
+  // route (text / image / reference, or a 480P draft): it is born with
+  // chain_stage 'part1' and its provider submission is a normal 10s job.
+  const isChain20 = Number(duration) === 20 && !isSeedance;
   // Rate card (v9, x10 scale since 2026-10-26): the credit cost comes
   // from the ROUTED quality's own row — 768P 100/200, 2K 150/300,
   // native 4K 450/900 for 5s/10s. Speaking jobs are the flat speaking
@@ -4117,14 +4157,15 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
       if (creditBuckets(user).total < totalCost) throw Object.assign(new Error('NO_CREDITS'), { status: 402 });
       spendBuckets(user, totalCost); // plan credits first, then free credits
       const info = db.prepare(
-        `INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, cost_credits, idempotency_key, resolution, model, prompt_language, translated_prompt, mode, source_image_path, watermark_text, watermark_status, sound_mode, sound_status, sound_prompt, sound_volume, sound_cost, stage, character_id, auto_plan, auto_voice_status, auto_voice_cost, mute_status, camera_move, shot_size)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(user.id, prompt.trim(), aspect_ratio, Number(duration), style, totalCost, idemKey, resolution, model, languageCode, translatedPrompt, mode, sourceImagePath, watermarkText, watermarkStatus,
+        `INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, cost_credits, idempotency_key, resolution, model, prompt_language, translated_prompt, mode, source_image_path, watermark_text, watermark_status, sound_mode, sound_status, sound_prompt, sound_volume, sound_cost, stage, character_id, auto_plan, auto_voice_status, auto_voice_cost, mute_status, camera_move, shot_size, chain_stage)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(user.id, prompt.trim(), aspect_ratio, Number(duration), style, totalCost, idemKey, resolution, model, languageCode, translatedPrompt, mode, sourceImagePath, watermarkText, watermarkStatus,
            soundSpec ? soundSpec.mode : null, soundSpec ? 'pending' : 'none',
            soundSpec ? soundSpec.prompt : null, soundSpec ? soundSpec.volume : null, soundCost,
            isDraft ? 'draft' : 'final', character ? character.id : null,
            autoPlanToStore ? JSON.stringify(autoPlanToStore) : null,
            autoVoiceSpec ? 'pending' : 'none', autoVoiceCost,
-           autoMute ? 'pending' : 'none', cameraMove, shotSize);
+           autoMute ? 'pending' : 'none', cameraMove, shotSize,
+           isChain20 ? 'part1' : null);
       return Number(info.lastInsertRowid);
     });
   } catch (e) {
@@ -4173,6 +4214,11 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
   // integers), aspect_ratio, and generate_audio pinned true (native
   // synchronized audio is part of the premium price). The schema's
   // draft / bitrate_mode / codec / end_user_id fields are never sent.
+  // A chained 20s job submits PART 1 as a completely normal 10s job —
+  // the provider never sees a 20s request (the H3 schemas cap at 15s and
+  // this app only ever orders 5/10s singles); the second 10s is chained
+  // on completion by ensureTwentyChain.
+  const submitDuration = isChain20 ? 10 : Number(duration);
   const falBody = isSpeaking
     ? { prompt: speakingPrompt, aspect_ratio,
         resolution: CONFIG.speakingResolution, duration: Number(duration) }
@@ -4182,19 +4228,19 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
         aspect_ratio, generate_audio: true }
     : character
     ? { prompt: `Image 1 is the main character. ${effectivePrompt} — style: ${style}`,
-        duration: Number(duration), aspect_ratio, resolution,
+        duration: submitDuration, aspect_ratio, resolution,
         enable_safety_checker: true,
         reference_image_urls: [sourceImageDataUri] }
     : sourceImagePath
     ? { prompt: `${effectivePrompt} — style: ${style}`,
-        duration: Number(duration), resolution,
+        duration: submitDuration, resolution,
         enable_safety_checker: true, image_url: sourceImageDataUri }
     : isNative4k
     ? { prompt: `${effectivePrompt} — style: ${style}`,
         duration: String(duration), aspect_ratio,
         generate_audio: false, enable_safety_checker: true }
     : { prompt: `${effectivePrompt} — style: ${style}`,
-        duration: Number(duration), aspect_ratio, resolution,
+        duration: submitDuration, aspect_ratio, resolution,
         enable_safety_checker: true };
   lastFalBody = falBody; // test hook (recorded only, never sent anywhere else)
   try {
@@ -4531,6 +4577,89 @@ async function ensureWatermarkApplied(job) {
   return db.prepare('SELECT * FROM generations WHERE id = ?').get(job.id) || job;
 }
 
+// ---------- 20-second two-part chain (2026-10-27, migration v25) --------
+// A 20s H3 job is charged once, up front, at 2x the 10s rate. Part 1 is a
+// normal 10s provider job; when it completes, the poll handler flips the
+// row to chain_stage 'extending' (part 1's URL stashed in video_url) and
+// calls this function, which mirrors the finish/extend action's
+// internals step for step — last frame -> CONFIG.modelI2V for 10s ->
+// joinTwoClips — but settles the SAME generation row:
+//   success: status 'completed', video_url = the joined file, duration
+//     stays the contracted 20 (the joined file's probed length is
+//     deliberately NOT recorded — the user bought 20 seconds);
+//   failure: settleTwentyChainFailure delivers part 1 at duration 10
+//     with exactly the second-half price refunded exactly once and a
+//     bilingual chain_note that History renders — never a silent
+//     shortening.
+// Exactly-once is enforced three ways: the in-flight set, the
+// conditional settle UPDATEs (chain_stage must still be 'extending'),
+// and the refund riding inside the settle's own transaction. The stage
+// marker lives on the row, so a restart mid-chain is resumed by the
+// next poll (and by the boot scan below) instead of losing the job.
+// Never throws: every failure lands in the part-1 settle.
+const chainInFlight = new Set();
+
+function settleTwentyChainFailure(job) {
+  const half = job.stage === 'draft' ? (CONFIG.draftCost[10] ?? 140)
+                                     : generationCost(job.resolution, 10);
+  const note = `The second part could not be made, so ${half} credits were refunded. · دوسرا حصہ نہیں بن سکا، ${half} کریڈٹ واپس کر دیے گئے`;
+  tx(() => {
+    const info = db.prepare(
+      `UPDATE generations SET status = 'completed', duration = 10,
+              chain_stage = 'done', chain_note = ?,
+              cost_credits = cost_credits - ?,
+              updated_at = datetime('now')
+       WHERE id = ? AND chain_stage = 'extending'`).run(note, half, job.id);
+    if (Number(info.changes) === 1) refundBuckets(job.user_id, half);
+  });
+}
+
+async function ensureTwentyChain(job) {
+  if (!job || Number(job.duration) !== 20 || job.chain_stage !== 'extending' ||
+      !job.video_url)
+    return job;
+  if (chainInFlight.has(job.id)) return job;
+  chainInFlight.add(job.id);
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ajk-chain-'));
+  try {
+    const part1Url = job.video_url;
+    const input = path.join(work, 'part1.mp4');
+    await downloadClip(part1Url, input, { left: JOIN_MAX_BYTES });
+    const probe = await probeMedia(input);
+    const frame = path.join(work, 'last-frame.jpg');
+    const seek = Math.max(0, probe.duration - 0.25).toFixed(2);
+    await runFfmpeg(['-y', '-ss', seek, '-i', input, '-frames:v', '1', '-q:v', '3', frame]);
+    if (!fs.existsSync(frame) || fs.statSync(frame).size === 0)
+      throw new Error('could not extract the last frame of part 1');
+    const frameUri = `data:image/jpeg;base64,${fs.readFileSync(frame).toString('base64')}`;
+    // The same prompt part 1 was sent: the stored (translated) prompt
+    // plus the recorded camera/shot directive, with the style suffix —
+    // exactly the finish/extend action's prompt construction.
+    const effectivePrompt = (job.translated_prompt || job.prompt) +
+      (cameraDirectiveSuffix(job.camera_move, job.shot_size) || '');
+    const tier = ['768P', '2K', '480P'].includes(job.resolution) ? job.resolution : '768P';
+    const result = await runFalQueueJob(CONFIG.modelI2V, {
+      prompt: `${effectivePrompt} — style: ${job.style}`,
+      duration: 10, resolution: tier,
+      enable_safety_checker: true, image_url: frameUri,
+    });
+    const extUrl = result?.video?.url || result?.data?.video?.url || null;
+    if (!extUrl) throw new Error('the second-part generation returned no video');
+    const joined = await joinTwoClips(part1Url, extUrl, work);
+    db.prepare(`UPDATE generations SET status = 'completed', video_url = ?,
+                chain_stage = 'done', updated_at = datetime('now')
+                WHERE id = ? AND chain_stage = 'extending'`)
+      .run(joined.videoUrl, job.id);
+  } catch (e) {
+    console.error(`20s chain failed for generation ${job.id}:`, e.message);
+    settleTwentyChainFailure(job);
+  } finally {
+    chainInFlight.delete(job.id);
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+  return db.prepare('SELECT * FROM generations WHERE id = ?').get(job.id) || job;
+}
+
 app.get('/api/generations/:id', auth, async (req, res) => {
   const job = db.prepare(
     `SELECT g.*, c.name AS character_name FROM generations g
@@ -4555,6 +4684,31 @@ app.get('/api/generations/:id', auth, async (req, res) => {
   }
   if (job.status === 'failed' || !job.fal_request_id)
     return res.json(publicGenerationRow(job));
+  // 20s chain restart-resume: the chain was claimed (chain_stage
+  // 'extending') but the process died before it settled. Part 1's URL
+  // is stashed on the row, so the chain finishes right here without
+  // asking the provider about the old request again; the post-steps
+  // then run on the FINAL file, in the usual order.
+  if (job.chain_stage === 'extending') {
+    if (job.video_url) {
+      const chained = await ensureTwentyChain(job);
+      if (chained.status !== 'completed')
+        return res.json(publicGenerationRow(chained));
+      const base = CONFIG.publicBaseUrl || `${req.protocol}://${req.get('host')}`;
+      if (chained.sound_status === 'pending')
+        await ensureSoundApplied(chained, base);
+      if (chained.auto_voice_status === 'pending')
+        await ensureAutoVoiceApplied(chained, base);
+      if (chained.mute_status === 'pending')
+        await ensureMuteApplied(chained);
+      return res.json(publicGenerationRow(await ensureWatermarkApplied(chained)));
+    }
+    // Claimed but part 1's URL never landed — nothing deliverable can
+    // be recovered, so fail safe to a full refund (exactly once).
+    failAndRefund(job.id, 'The 20-second video could not be completed.');
+    const fresh = db.prepare('SELECT * FROM generations WHERE id = ?').get(job.id);
+    return res.json(publicGenerationRow(fresh || job));
+  }
   const jobModel = job.model || CONFIG.model; // jobs remember their routed model
   try {
     const sr = await fetch(`${CONFIG.falQueueBase}/${jobModel}/requests/${job.fal_request_id}/status`,
@@ -4567,6 +4721,36 @@ app.get('/api/generations/:id', auth, async (req, res) => {
         const result = await rr.json();
         const url = result?.video?.url || result?.data?.video?.url || null;
         if (url) {
+          // 20s two-part chain: part 1 just finished at the provider.
+          // Claim the chain exactly once (this conditional UPDATE is
+          // the claim), stash part 1's URL on the row for restart
+          // resume, run the chain, and only then run the post-steps —
+          // so sound / voice / mute / watermark apply to the FINAL
+          // joined file, never to part 1 alone.
+          if (Number(job.duration) === 20 && job.chain_stage === 'part1') {
+            const claim = db.prepare(
+              `UPDATE generations SET chain_stage = 'extending', video_url = ?,
+                      updated_at = datetime('now')
+               WHERE id = ? AND chain_stage = 'part1'`).run(url, job.id);
+            if (Number(claim.changes) !== 1) {
+              // A parallel poll claimed the chain first — report the
+              // current state; that poll is finishing the job.
+              const cur = db.prepare('SELECT * FROM generations WHERE id = ?').get(job.id);
+              return res.json(publicGenerationRow(cur || job));
+            }
+            job.chain_stage = 'extending'; job.video_url = url;
+            const chained = await ensureTwentyChain(job);
+            if (chained.status !== 'completed')
+              return res.json(publicGenerationRow(chained));
+            const base = CONFIG.publicBaseUrl || `${req.protocol}://${req.get('host')}`;
+            if (chained.sound_status === 'pending')
+              await ensureSoundApplied(chained, base);
+            if (chained.auto_voice_status === 'pending')
+              await ensureAutoVoiceApplied(chained, base);
+            if (chained.mute_status === 'pending')
+              await ensureMuteApplied(chained);
+            return res.json(publicGenerationRow(await ensureWatermarkApplied(chained)));
+          }
           db.prepare(`UPDATE generations SET status = 'completed', video_url = ?,
                       updated_at = datetime('now') WHERE id = ?`).run(url, job.id);
           job.status = 'completed'; job.video_url = url;
@@ -6465,6 +6649,12 @@ app.post('/api/generations/:id/upgrade', auth, generateLimiter, async (req, res)
     fallbackNote = 'Native 4K is only available for 16:9, 9:16 and 1:1 videos; ' +
                    'this upgrade was generated at 2K instead.';
   }
+  // A 20s draft upgrades through the same two-part chain as a fresh 20s
+  // generation — and native 4K has no chain, so it is refused here
+  // (before any charge) exactly as in /api/generate.
+  if (Number(draft.duration) === 20 && resolution === '4K')
+    return res.status(400).json({ error: '20 seconds is not available in native 4K. Upgrade this draft to 768P or 2K instead — it is made in two parts and joined automatically.' });
+  const upgradeChain20 = Number(draft.duration) === 20;
   // Keep the draft's route family: an image-to-video draft upgrades
   // through the image-to-video endpoint when its source image still exists.
   let sourceImageDataUri = null;
@@ -6486,12 +6676,12 @@ app.post('/api/generations/:id/upgrade', auth, generateLimiter, async (req, res)
       const info = db.prepare(
         `INSERT INTO generations (user_id, prompt, aspect_ratio, duration, style, cost_credits,
            resolution, model, prompt_language, translated_prompt, mode, source_image_path,
-           kind, source_generation_id, stage)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'video', ?, 'final')`)
+           kind, source_generation_id, stage, chain_stage)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'video', ?, 'final', ?)`)
         .run(user.id, draft.prompt, draft.aspect_ratio, Number(draft.duration), draft.style,
              cost, resolution, model, draft.prompt_language, draft.translated_prompt,
              draft.mode || 'realistic', sourceImageDataUri ? draft.source_image_path : null,
-             draft.id);
+             draft.id, upgradeChain20 ? 'part1' : null);
       return Number(info.lastInsertRowid);
     });
   } catch (e) {
@@ -6501,16 +6691,19 @@ app.post('/api/generations/:id/upgrade', auth, generateLimiter, async (req, res)
   }
   const effectivePrompt = draft.translated_prompt || draft.prompt;
   const isNative4k = resolution === '4K' && model === CONFIG.model4k;
+  // A chained 20s upgrade submits part 1 as a normal 10s job (as in
+  // /api/generate); the chain finishes it on completion.
+  const upgradeSubmitDuration = upgradeChain20 ? 10 : Number(draft.duration);
   const falBody = sourceImageDataUri
     ? { prompt: `${effectivePrompt} — style: ${draft.style}`,
-        duration: Number(draft.duration), resolution,
+        duration: upgradeSubmitDuration, resolution,
         enable_safety_checker: true, image_url: sourceImageDataUri }
     : isNative4k
     ? { prompt: `${effectivePrompt} — style: ${draft.style}`,
         duration: String(draft.duration), aspect_ratio: draft.aspect_ratio,
         generate_audio: false, enable_safety_checker: true }
     : { prompt: `${effectivePrompt} — style: ${draft.style}`,
-        duration: Number(draft.duration), aspect_ratio: draft.aspect_ratio, resolution,
+        duration: upgradeSubmitDuration, aspect_ratio: draft.aspect_ratio, resolution,
         enable_safety_checker: true };
   lastFalBody = falBody;
   try {
@@ -7488,6 +7681,23 @@ app.use((err, req, res, next) => { // last-resort error handler
   console.error(err);
   res.status(500).json({ error: 'Something went wrong on the server.' });
 });
+
+// ---------- 20s chain boot recovery (migration v25) ---------------------
+// Jobs the chain had claimed ('extending') when the process stopped:
+// with part 1's URL on the row the chain can simply run again (its
+// settle is exactly-once), so resume those in the background; without
+// a URL nothing deliverable exists — fail safe to a full refund. Rows
+// still in 'part1' are untouched: their provider job may yet complete
+// and the next poll drives the chain from there.
+for (const stuck of db.prepare(
+  `SELECT * FROM generations WHERE chain_stage = 'extending'`).all()) {
+  if (stuck.video_url) {
+    ensureTwentyChain(stuck).catch(e =>
+      console.error(`20s chain boot resume failed for generation ${stuck.id}:`, e.message));
+  } else {
+    failAndRefund(stuck.id, 'The 20-second video could not be completed.');
+  }
+}
 
 app.listen(process.env.PORT || 8080,
   () => console.log(`My Video AI backend running on port ${process.env.PORT || 8080} (model: ${CONFIG.model})`));
