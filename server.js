@@ -36,7 +36,7 @@ import os from 'node:os';
 import { randomUUID, randomBytes, randomInt, createSign, createHash, timingSafeEqual } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { DatabaseSync } from 'node:sqlite'; // built into Node 22.5+/24 — no native build step
+import { DatabaseSync } from 'node:sqlite'; // built into Node 22.5+/24 — default DB driver (engine gate below can select libsql/Turso instead)
 import ffmpegStatic from 'ffmpeg-static'; // pinned binary for clip joining
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -632,9 +632,98 @@ const PACK_DEFAULTS = [
 ];
 const PACK_METHODS = ['easypaisa', 'jazzcash', 'bank', 'nayapay', 'other'];
 
-// ---------- Database with migrations (data survives restarts) ----------
-const db = new DatabaseSync(process.env.DB_PATH || 'myvideoai.db');
-db.exec('PRAGMA journal_mode = WAL');
+// ---------- Database with migrations ----------
+// Engine gate — three modes:
+//  1. node   (default): built-in node:sqlite on a local file. The legacy
+//     path; unchanged unless an operator opts in below.
+//  2. libsql (DB_ENGINE=libsql): the `libsql` driver on the SAME local
+//     file. Exists to prove driver compatibility (every query in this
+//     file runs unchanged) with no network dependency.
+//  3. turso  (TURSO_DATABASE_URL + TURSO_AUTH_TOKEN set): libsql embedded
+//     replica — the local file is a synced replica of the hosted primary,
+//     so accounts/credits/history survive hosts whose local disk is
+//     ephemeral (Render free tier wipes the file on every deploy/restart,
+//     which production hit repeatedly on 2026-10-27).
+// Safety rule: a partially-configured Turso env, or Turso env combined
+// with an explicit conflicting DB_ENGINE, is a FATAL boot error — the
+// server must never silently fall back to an ephemeral local file when
+// the operator asked for the hosted database.
+const DB_FILE = process.env.DB_PATH || 'myvideoai.db';
+const _tursoUrl = process.env.TURSO_DATABASE_URL || '';
+const _tursoToken = process.env.TURSO_AUTH_TOKEN || '';
+const _dbEngineEnv = (process.env.DB_ENGINE || '').trim().toLowerCase();
+function dbConfigFatal(msg) {
+  console.error(`FATAL database configuration: ${msg}`);
+  process.exit(1);
+}
+if ((_tursoUrl && !_tursoToken) || (!_tursoUrl && _tursoToken))
+  dbConfigFatal('TURSO_DATABASE_URL and TURSO_AUTH_TOKEN must be set together (exactly one was provided).');
+if (_tursoUrl && _dbEngineEnv && _dbEngineEnv !== 'libsql')
+  dbConfigFatal(`DB_ENGINE=${_dbEngineEnv} conflicts with TURSO_DATABASE_URL/TURSO_AUTH_TOKEN (Turso requires the libsql driver).`);
+if (_dbEngineEnv && !['libsql', 'node', 'sqlite'].includes(_dbEngineEnv))
+  dbConfigFatal(`unknown DB_ENGINE "${_dbEngineEnv}" (expected "libsql" or unset).`);
+const DB_MODE = _tursoUrl ? 'turso' : (_dbEngineEnv === 'libsql' ? 'libsql' : 'node');
+let db;
+if (DB_MODE === 'node') {
+  db = new DatabaseSync(DB_FILE);
+} else {
+  let LibsqlDatabase = null;
+  try { LibsqlDatabase = (await import('libsql')).default; }
+  catch (e) { dbConfigFatal(`DB mode "${DB_MODE}" selected but the "libsql" package could not be loaded: ${e.message}`); }
+  // Compatibility shim: libsql (0.5.x) attaches an enumerable `_metadata`
+  // property ({duration}) to rows returned by statement.get(), which
+  // node:sqlite does not. Left in place it would leak into API responses
+  // built directly from rows. The wrapper strips it so row shapes are
+  // identical across engines; every other call passes straight through.
+  const wrapLibsqlDb = (raw) => {
+    const clean = (row) => {
+      if (row && typeof row === 'object' && '_metadata' in row) delete row._metadata;
+      return row;
+    };
+    return {
+      prepare(sql) {
+        const st = raw.prepare(sql);
+        return {
+          run: (...a) => st.run(...a),
+          get: (...a) => clean(st.get(...a)),
+          all: (...a) => st.all(...a).map(clean),
+          iterate: (...a) => st.iterate(...a),
+        };
+      },
+      exec: (sql) => raw.exec(sql),
+      sync: () => raw.sync(),
+      close: () => raw.close(),
+    };
+  };
+  if (DB_MODE === 'turso') {
+    try {
+      db = wrapLibsqlDb(new LibsqlDatabase(DB_FILE, { syncUrl: _tursoUrl, authToken: _tursoToken, syncInterval: 60 }));
+      // Pull the hosted state BEFORE migrations/seeding/listen so a fresh
+      // ephemeral disk resumes from the primary instead of starting empty.
+      await db.sync();
+    } catch (e) {
+      console.error(`FATAL: could not open/sync the Turso embedded replica (${_tursoUrl}): ${e.message}`);
+      process.exit(1);
+    }
+    // Best-effort final push on shutdown so the last <syncInterval of
+    // writes are not lost when the host replaces the instance.
+    let _finalSyncStarted = false;
+    const _finalSync = async (sig) => {
+      if (_finalSyncStarted) { process.exit(0); }
+      _finalSyncStarted = true;
+      try { await Promise.race([db.sync(), new Promise(r => setTimeout(r, 5000))]); }
+      catch (e) { console.error(`Final Turso sync on ${sig} failed: ${e.message}`); }
+      process.exit(0);
+    };
+    process.on('SIGTERM', () => { _finalSync('SIGTERM'); });
+    process.on('SIGINT', () => { _finalSync('SIGINT'); });
+  } else {
+    db = wrapLibsqlDb(new LibsqlDatabase(DB_FILE));
+  }
+}
+console.log(`Database engine: ${DB_MODE} (file: ${DB_FILE})`);
+// The embedded replica manages its own journal; WAL is a local-file mode.
+if (DB_MODE !== 'turso') db.exec('PRAGMA journal_mode = WAL');
 // Minimal transaction helper (BEGIN IMMEDIATE so concurrent requests can't
 // double-spend the same credits)
 function tx(fn) {
