@@ -2641,6 +2641,7 @@
         <div class="dr-divider" role="separator"></div>
         <button type="button" class="dr-item" id="dr_itemBuy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v9M14.8 9.4c-.5-.7-1.5-1.1-2.8-1.1-1.6 0-2.8.8-2.8 2 0 2.7 5.6 1.5 5.6 3.9 0 1.2-1.2 2-2.8 2-1.2 0-2.3-.5-2.8-1.2"/></svg><span><span data-i18n="dr_buy">Buy Credits</span><span class="i18n-alt"> · کریڈٹس خریدیں</span></span></button>
         <button type="button" class="dr-item" id="dr_itemProfile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8.5" r="3.8"/><path d="M5 20c1.4-3.4 4-5 7-5s5.6 1.6 7 5"/></svg><span><span data-i18n="dr_profile">My Profile</span><span class="i18n-alt"> · میری پروفائل</span></span></button>
+        <button type="button" class="dr-item" id="dr_itemAdmin" style="display:none"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l7 3v5c0 4.6-3 8.4-7 10-4-1.6-7-5.4-7-10V6l7-3z"/><circle cx="12" cy="10.5" r="1.7"/><path d="M12 12.2V15"/></svg><span><span data-i18n="dr_admin">Admin Panel</span><span class="i18n-alt"> · ایڈمن پینل</span></span></button>
         <button type="button" class="dr-item" id="dr_itemPrivacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l7 3v5c0 4.6-3 8.4-7 10-4-1.6-7-5.4-7-10V6l7-3z"/><path d="m9.5 12 2 2 3.5-4"/></svg><span><span data-i18n="dr_privacy">Terms &amp; Privacy</span><span class="i18n-alt"> · شرائط اور پرائیویسی</span></span></button>
         <button type="button" class="dr-item" id="dr_itemLogout"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 4H6v16h8"/><path d="M10 12h11M17 8l4 4-4 4"/></svg><span><span data-i18n="dr_logout">Logout</span><span class="i18n-alt"> · لاگ آؤٹ</span></span></button>
       </nav>
@@ -2998,6 +2999,7 @@
           dr_buy: { en: "Buy Credits", ur: "کریڈٹس خریدیں" },
           dr_payments: { en: "Payments", ur: "ادائیگیاں" },
           dr_profile: { en: "My Profile", ur: "میری پروفائل" },
+          dr_admin: { en: "Admin Panel", ur: "ایڈمن پینل" },
           dr_settings: { en: "Settings", ur: "ترتیبات" },
           dr_help: { en: "Help & Support", ur: "مدد اور معاونت" },
           dr_privacy: { en: "Terms & Privacy", ur: "شرائط اور پرائیویسی" },
@@ -3860,6 +3862,8 @@
           $("#accountSignedIn").style.display = signed ? "block" : "none";
           $("#accountSub").textContent = signed ? "Loaded from GET /api/me." : "You are not signed in.";
           $("#balanceLine").classList.toggle("show", signed);
+          var adminItem = $("#dr_itemAdmin");
+          if (adminItem) adminItem.style.display = (signed && me && me.is_admin) ? "flex" : "none";
           if (signed && me && me.email) $("#avatarBtn").textContent = me.email.charAt(0).toUpperCase();
           fillGreeting();
         }
@@ -6984,6 +6988,7 @@
           var m = el('meEmail');
           scrollToEl(m ? m.closest('.card') : null, 200);
         });
+        act('dr_itemAdmin', function () { window.location.href = '/admin'; });
         act('dr_itemSettings', function () { go('settings'); });
         act('dr_itemHelp', function () { go('settings'); scrollToEl(el('feedbackCard'), 200); });
         act('dr_itemPrivacy', function () { go('privacy'); });
