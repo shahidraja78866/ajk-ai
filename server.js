@@ -598,10 +598,11 @@ async function translateViaMyMemory(text, fromCode) {
 // TRANSLATE_API_BASE is set (tests), only that endpoint is used.
 async function translatePrompt(text, fromCode) {
   if (CONFIG.translateBaseOverridden) return translateViaGtx(text, fromCode);
-  try { return await translateViaMyMemory(text, fromCode); }
+  try { const out = await translateViaMyMemory(text, fromCode); console.log('translate ok via mymemory'); return out; }
   catch (e1) {
-    try { return await translateViaGtx(text, fromCode); }
-    catch (e2) { throw new Error(`all translation providers failed (${e1.message}; ${e2.message})`); }
+    console.error(`translate mymemory failed: ${e1.message}`);
+    try { const out = await translateViaGtx(text, fromCode); console.log('translate ok via gtx'); return out; }
+    catch (e2) { console.error(`translate gtx failed: ${e2.message}`); throw new Error(`all translation providers failed (${e1.message}; ${e2.message})`); }
   }
 }
 
