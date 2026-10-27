@@ -136,6 +136,13 @@ const CONFIG = {
   // MyMemory's free quota is far higher when a contact email is provided;
   // without it, shared/datacenter IPs exhaust the anonymous quota quickly.
   translateEmail: (process.env.TRANSLATE_EMAIL || 'Shahidraja78866@gmail.com').trim(),
+  // Azure Translator (keyed, reliable from servers; free F0 tier covers
+  // 2M characters/month and every app language incl. Kashmiri). Activates
+  // only when the owner sets AZURE_TRANSLATOR_KEY (+ region) in the env;
+  // until then the free-provider chain below is used.
+  azureTranslatorKey: (process.env.AZURE_TRANSLATOR_KEY || '').trim(),
+  azureTranslatorRegion: (process.env.AZURE_TRANSLATOR_REGION || '').trim(),
+  azureTranslatorEndpoint: (process.env.AZURE_TRANSLATOR_ENDPOINT || 'https://api.cognitive.microsofttranslator.com').replace(/\/+$/, ''),
   // Manual payment destinations for credit-pack purchases, shown to buyers
   // on the Buy Credits page. Only the methods actually set in the
   // environment are exposed (via /api/config as payment_methods).
@@ -591,6 +598,28 @@ async function translateViaMyMemory(text, fromCode) {
   return out;
 }
 
+// Azure Translator (owner's own key; language codes match ours, incl.
+// "ks" for Kashmiri). The strategic fix for datacenter-IP blocking: keyed
+// APIs expect server traffic instead of refusing it.
+async function translateViaAzure(text, fromCode) {
+  const url = `${CONFIG.azureTranslatorEndpoint}/translate?api-version=3.0&from=${encodeURIComponent(fromCode)}&to=en`;
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Ocp-Apim-Subscription-Key': CONFIG.azureTranslatorKey,
+      ...(CONFIG.azureTranslatorRegion ? { 'Ocp-Apim-Subscription-Region': CONFIG.azureTranslatorRegion } : {}),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify([{ Text: text }]),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!r.ok) throw new Error(`azure translator returned ${r.status}`);
+  const data = await r.json();
+  const out = String(data?.[0]?.translations?.[0]?.text || '').trim();
+  if (!out) throw new Error('azure translator returned empty text');
+  return out;
+}
+
 // Provider chain (production): MyMemory first — the free Google "gtx" web
 // endpoint now refuses datacenter IPs (302 to a "sorry" page, verified live
 // 2026-10-27, which silently broke ALL non-English prompts) — with the gtx
@@ -598,12 +627,15 @@ async function translateViaMyMemory(text, fromCode) {
 // TRANSLATE_API_BASE is set (tests), only that endpoint is used.
 async function translatePrompt(text, fromCode) {
   if (CONFIG.translateBaseOverridden) return translateViaGtx(text, fromCode);
-  try { const out = await translateViaMyMemory(text, fromCode); console.log('translate ok via mymemory'); return out; }
-  catch (e1) {
-    console.error(`translate mymemory failed: ${e1.message}`);
-    try { const out = await translateViaGtx(text, fromCode); console.log('translate ok via gtx'); return out; }
-    catch (e2) { console.error(`translate gtx failed: ${e2.message}`); throw new Error(`all translation providers failed (${e1.message}; ${e2.message})`); }
+  const providers = [];
+  if (CONFIG.azureTranslatorKey) providers.push(['azure', translateViaAzure]);
+  providers.push(['mymemory', translateViaMyMemory], ['gtx', translateViaGtx]);
+  const failures = [];
+  for (const [name, fn] of providers) {
+    try { const out = await fn(text, fromCode); console.log(`translate ok via ${name}`); return out; }
+    catch (e) { console.error(`translate ${name} failed: ${e.message}`); failures.push(`${name}: ${e.message}`); }
   }
+  throw new Error(`all translation providers failed (${failures.join('; ')})`);
 }
 
 // Resolutions the model API accepts, cheapest → most expensive.
