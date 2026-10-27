@@ -102,8 +102,12 @@
 <script>
 (function () {
   var LS = "ajk_admin_token";
+  var APP_LS = "mvai.token"; // main app's session key (same origin) — adopted on load, see adoptSession()
   var token = "";
-  try { token = localStorage.getItem(LS) || ""; } catch (e) {}
+  function lsGet(k) { try { return localStorage.getItem(k) || ""; } catch (e) { return ""; } }
+  function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  function lsDel(k) { try { localStorage.removeItem(k); } catch (e) {} }
+  token = lsGet(LS);
   function $(id) { return document.getElementById(id); }
   function api(path, opts) {
     opts = opts || {};
@@ -330,12 +334,34 @@
       });
   });
   $("logoutBtn").addEventListener("click", function () {
-    token = ""; try { localStorage.removeItem(LS); } catch (e) {}
+    // One coherent session sign-out: clear the panel token AND the app token.
+    token = ""; lsDel(LS); lsDel(APP_LS);
     $("panel").classList.add("hidden"); $("loginCard").classList.remove("hidden");
   });
-  if (token) {
-    api("/api/admin/users").then(function (chk) { if (chk.ok) enter(); });
-  }
+  // Session adoption: before asking for a password, reuse an existing
+  // sign-in. Candidates in order: this panel's own token, then the main
+  // app's token (same origin — e.g. a Google sign-in, which has no app
+  // password to type here). Each candidate is validated with /api/me and
+  // the JWT is still verified server-side on every call; this only picks
+  // which stored token to try. First valid candidate decides:
+  // admin → enter; valid but not admin → explain; invalid → try next.
+  (function adoptSession() {
+    var candidates = [];
+    [lsGet(LS), lsGet(APP_LS)].forEach(function (t) { if (t && candidates.indexOf(t) === -1) candidates.push(t); });
+    (function tryNext(i) {
+      if (i >= candidates.length) { token = ""; return; }
+      token = candidates[i];
+      api("/api/me").then(function (r) {
+        if (r.ok && r.data && r.data.is_admin) { lsSet(LS, token); enter(); return; }
+        if (r.ok && r.data) {
+          token = "";
+          say("loginMsg", "You are signed in as " + r.data.email + ", which is not an admin account.", false);
+          return;
+        }
+        tryNext(i + 1);
+      });
+    })(0);
+  })();
 })();
 </script>
 </body>
