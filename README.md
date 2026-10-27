@@ -1655,7 +1655,7 @@ Not yet testable without your input:
 - ❌ the frontend build (in progress) against this live backend
 
 **Update (2026-10-23):** the suite has since grown — rescale ×10, credit
-packs (incl. NayaPay approve-exactly-once and the served QR image) and clip
+packs (incl. approve-exactly-once) and clip
 joining with real ffmpeg normalization are covered. Latest full run:
 **150/150 checks passed** (dummy fal key only; see `test.sh` header for the
 server env the battery expects).
@@ -2121,12 +2121,12 @@ price, active) in the Admin Panel or via `GET|PUT /api/admin/packs(/:id)`.
 
 **Flow (manual, no payment gateway):**
 1. The buyer picks a pack and a payment method — **easypaisa, JazzCash,
-   NayaPay, or bank transfer**. The destination number/details for each
+   or bank transfer**. The destination number/details for each
    method come from the server env (`PAYMENT_EASYPAISA`, `PAYMENT_JAZZCASH`,
-   `PAYMENT_NAYAPAY`, `PAYMENT_BANK`) and are exposed via
+   `PAYMENT_BANK`) and are exposed via
    `GET /api/config → payment_methods` (only the methods that are set). If
    none are set, the page shows "Payment details will appear here soon."
-   Selecting NayaPay also shows the owner's QR code (`/nayapay-qr.jpg`) so
+   Selecting easypaisa shows the owner's QR code (`/easypaisa-qr.jpg`) so
    buyers can scan to pay.
 2. The buyer pays manually, then submits the **transaction ID**
    (`POST /api/packs/:id/purchase`). This creates a **pending** purchase in
@@ -2140,7 +2140,7 @@ price, active) in the Admin Panel or via `GET|PUT /api/admin/packs(/:id)`.
 
 **Honest limitation:** this is manual verification, not a checkout. Live
 gateway checkout (automatic payment confirmation) needs the owner's own
-merchant accounts with easypaisa/JazzCash/NayaPay or a bank — those do not
+merchant accounts with easypaisa/JazzCash or a bank — those do not
 exist yet, so nothing here pretends to charge a card or wallet directly.
 (PayPal is not officially available in Pakistan.)
 
@@ -2244,7 +2244,6 @@ the privacy policy page is included in the web app.
 - `server.js` — auth, generate (idempotent, plan-routed, video modes + image-to-video + watermark post-processing), status polling, history, reports, config, plans/subscriptions/payments, credit packs, clip joining (ffmpeg-static), Google Play Billing verification + RTDN + voided-purchase clawback, PayFast gateway checkout + signed IPN, admin API, voice system (TTS providers, preview, lip-sync, voiceover)
 - `public/index.html` — the AJK AI web app (Studio with the Voice & Dialogue card, History with clip joining, Plans & pricing, Buy Credits with Google Play + gateway instant checkout when available, Settings, Privacy)
 - `public/admin.html` — the Admin Panel, served at `/admin` (includes credit-pack editing, pack-purchase approval, Play product IDs, credit-deficit display, billing/transactions)
-- `public/nayapay-qr.jpg` — the owner's NayaPay QR code, shown on the Buy Credits page when NayaPay is selected
 - `schema.sql` — schema reference (`server.js` applies migrations automatically on boot)
 - `test.sh` — the automated test battery (original + monetization + prompt-language + credit-pack + clip-join + Play Billing/gateway + video-mode/image-to-video/watermark/migration + voice-system + tester-feedback tests; see its header for the server env it needs)
 - `test-translate-stub.js` — local Google Translate stub used by `test.sh` (tests never call the real translate endpoint)

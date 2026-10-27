@@ -208,6 +208,20 @@
 # state replay / expiry / wrong-provider rejection; a tampered
 # PKCE verifier rejected at the stub; and the main server's
 # fail-closed side (flags false, start endpoints 503).
+# The Phase V tests (20-second videos via the automatic two-part
+# chain — owner request 2026-10-27) use a thirty-first instance
+# (port 18035, own DB) with the fal bases pointed at a stub
+# (port 18036): the 20s rate card in config (768P 480 / 2K 720 /
+# draft 280, no 4K 20), migration v25 (chain_stage/chain_note), the
+# speaking + native-4K 400s before charging, a stubbed chain SUCCESS
+# (one generation, duration 20, joined file served, part 1 submitted
+# as a normal 10s job + a 10s image-to-video part 2), a stubbed
+# chain FAILURE via the stub's FAILME image-to-video hook (part 1
+# delivered at 10s, exactly the 240 second half refunded, bilingual
+# chain_note in History), a 20s draft chain, a 2K chain on an Extra
+# Pro user, and the Auto Director clamp (a dialogue prompt that
+# routes to the speaking engine at 10s never does at 20s).
+# Exactly 8 generate-family calls on this instance (shared limiter).
 # e.g.  ADMIN_EMAIL=admin@example.com FAL_MODEL_4K=test-4k-model TEST_RECORD_FAL_BODY=1 TRANSLATE_API_BASE=http://127.0.0.1:18099 npm start
 # Run against a FRESH database (fixed test emails are registered each run).
 TEST_FAL_MODEL_4K=${TEST_FAL_MODEL_4K:-fal-ai/kling-video/o3/4k/text-to-video}
@@ -414,7 +428,6 @@ check "pack 500 credits = Rs 899" "500/899" "$(echo $PK | python3 -c 'import sys
 check "pack 1000 credits = Rs 1499" "1000/1499" "$(echo $PK | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["packs"] if x["credits"]==1000][0];print(str(p["credits"])+"/"+str(p["price_pkr"]))')"
 check "pack 2500 credits = Rs 3499" "2500/3499" "$(echo $PK | python3 -c 'import sys,json;d=json.load(sys.stdin);p=[x for x in d["packs"] if x["credits"]==2500][0];print(str(p["credits"])+"/"+str(p["price_pkr"]))')"
 check "config exposes payment_methods object" "dict" "$(curl -s $B/api/config | python3 -c 'import sys,json;print(type(json.load(sys.stdin)["payment_methods"]).__name__)')"
-check "NayaPay QR image is served (/nayapay-qr.jpg)" "200" "$(curl -s -o /dev/null -w '%{http_code}' $B/nayapay-qr.jpg)"
 PACK100=$(echo $PK | python3 -c 'import sys,json;d=json.load(sys.stdin);print([x for x in d["packs"] if x["credits"]==1000][0]["id"])')
 PACK50=$(echo $PK | python3 -c 'import sys,json;d=json.load(sys.stdin);print([x for x in d["packs"] if x["credits"]==500][0]["id"])')
 PACK250=$(echo $PK | python3 -c 'import sys,json;d=json.load(sys.stdin);print([x for x in d["packs"] if x["credits"]==2500][0]["id"])')
@@ -448,17 +461,17 @@ PUR2ID=$(echo $PUR2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["pu
 REJ=$(curl -s -X POST $B/api/admin/pack-purchases/$PUR2ID/reject -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{"note":"No matching payment found"}')
 check "admin reject ok" "rejected" "$(echo $REJ | python3 -c 'import sys,json;print(json.load(sys.stdin)["purchase"]["status"])')"
 check "rejected purchase granted nothing" "2000" "$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
-echo "--- credit packs: nayapay purchase -> approve grants exactly once ---"
-PUR3=$(curl -s -X POST $B/api/packs/$PACK50/purchase -H "Authorization: Bearer $KTOKEN" -H 'Content-Type: application/json' -d '{"method":"nayapay","transaction_ref":"NP-2026-445566"}')
-check "nayapay purchase created pending" "pending" "$(echo $PUR3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["purchase"]["status"])')"
-check "nayapay purchase method recorded" "nayapay" "$(echo $PUR3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["purchase"]["method"])')"
+echo "--- credit packs: bank purchase -> approve grants exactly once ---"
+PUR3=$(curl -s -X POST $B/api/packs/$PACK50/purchase -H "Authorization: Bearer $KTOKEN" -H 'Content-Type: application/json' -d '{"method":"bank","transaction_ref":"NP-2026-445566"}')
+check "bank purchase created pending" "pending" "$(echo $PUR3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["purchase"]["status"])')"
+check "bank purchase method recorded" "bank" "$(echo $PUR3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["purchase"]["method"])')"
 PUR3ID=$(echo $PUR3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["purchase"]["id"])')
-check "nayapay pending purchase grants nothing" "2000" "$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "bank pending purchase grants nothing" "2000" "$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 APPR3=$(curl -s -X POST $B/api/admin/pack-purchases/$PUR3ID/approve -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{}')
-check "nayapay approve ok" "True" "$(echo $APPR3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
-check "nayapay approve granted 500 into free bucket (2500 total)" "2500" "$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
-check "nayapay double approve is a conflict (409)" "409" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/admin/pack-purchases/$PUR3ID/approve -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{}')"
-check "nayapay double approve did NOT double-grant" "2500" "$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+check "bank approve ok" "True" "$(echo $APPR3 | python3 -c 'import sys,json;print(json.load(sys.stdin)["ok"])')"
+check "bank approve granted 500 into free bucket (2500 total)" "2500" "$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["free_credits"])')"
+check "bank double approve is a conflict (409)" "409" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/admin/pack-purchases/$PUR3ID/approve -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{}')"
+check "bank double approve did NOT double-grant" "2500" "$(curl -s $B/api/me -H "Authorization: Bearer $KTOKEN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
 PE2=$(curl -s -X PUT $B/api/admin/packs/$PACK250 -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' -d '{"price_pkr":3599}')
 check "admin pack price edit returns 3599" "3599" "$(echo $PE2 | python3 -c 'import sys,json;print(json.load(sys.stdin)["pack"]["price_pkr"])')"
 check "public packs API shows edited price" "3599" "$(curl -s $B/api/packs | python3 -c "import sys,json;d=json.load(sys.stdin);print([x for x in d['packs'] if x['id']==$PACK250][0]['price_pkr'])")"
@@ -2975,10 +2988,10 @@ check "phase O1 frontend: combined-string fallback hides once a language is appl
 check "phase O1 frontend: >= 120 elements carry data-i18n" "yes" "$(echo "$HOMEPAGEO1" | python3 -c 'import sys; s=sys.stdin.read(); print("yes" if s.count("data-i18n=") + s.count("data-i18n-ph=") >= 120 else "no")')"
 # The switcher/theme work is presentation only: the full pre-O1
 # element-ID set must still be present (additions only, ever).
-O1_OLD_IDS="accountSignInBtn accountSignedIn accountSignedOut accountSub adHomeNative adStudioBottom advancedCard advancedCardBody aiAutoToggle apiBaseInput appVersionLine aspectSeg authBtn authEmail authError authForm authModal authModeLogin authModeRegister authPass authSub authSubmit authTitle autoPlanCancelBtn autoPlanConfirmBtn autoPlanConflicts autoPlanCost autoPlanNotes autoPlanPanel autoPlanSummary avatarBtn balanceLine balanceNum buyError buyFromPlansBtn buyMethod buyPackSelect buyQr buyQrEp buyRef buySubmitBtn buySuccess cameraSeg cancelBtn charCount charCreateBtn charError charImage charImageStatus charList charListEmpty charMaxHint charName charVoice charVoiceLang charVoiceProvider charVoiceStyle charactersCard connBanner connStatus connText connTitle costNum creditsChip creditsNum creditsPlan currentPlanDetail currentPlanName deleteAccountBtn deleteConfirm deletePass deleteStatus draftCostHint draftHint durationSeg enhanceBtn facebookBtn feedbackAttach feedbackAttachLabel feedbackCard feedbackCategory feedbackCount feedbackDetachBtn feedbackMessage feedbackSendBtn forgotCancel forgotEmail forgotLink forgotPanel forgotSend forgotStatus formError genCharThumb genCharacter generateBtn generateIcon generateLabel googleBtnWrap googleFallbackBtn historyEmpty historyEmptyBtn historyEmptyText homeGreeting imageStatus jobList joinBar joinBtn joinCount joinMsg langLabAudio langLabCard langLabLink langLabList langLabStatus linkFacebookBtn linkGoogleBtn linkPhoneBox linkPhoneCode linkPhoneCodeRow linkPhoneNumber linkPhoneSendBtn linkPhoneStatus linkPhoneVerifyBtn lipsyncBtn lipsyncCharacter lipsyncNote meCredits meDailyCap meEmail meId meIdentities meModel mePlan mePlanCredits meSince modeGrid modelLine myPacksEmpty myPacksEmptyText myPacksList packGrid packMethods payList paymentsEmpty paymentsEmptyText phoneBack phoneBtn phoneCode phoneCodeRow phoneNumber phonePanel phoneResendNote phoneSendBtn phoneStatus phoneVerifyBtn planGrid planLine previewEmpty previewFrame previewProgress previewVideo progressFill progressNote prompt promptLang qualitySeg rbActions rbIcon rbMeta rbText rbTitle refreshHistoryBtn refreshMeBtn removeImageBtn reportBtn reportBtn2 reportBtn3 reportContext reportDetails reportError reportForm reportModal reportReason reportTitle resendLine resendVerifyBtn resetPanel resetPass resetStatus resetSubmit resultBox saveBaseBtn seedanceHint seedanceQualityBtn shotSeg signOutBtn signupCreditsLine soundCard soundCardBody soundCharCount soundControls soundError soundMode soundNotice soundOnlyAudio soundOnlyBtn soundOnlyDuration soundOnlyKind soundPrompt soundVolume soundVolumeLabel sourceImage stageList studioActionBar styleGrid templateCard templateGrid testBaseBtn toast verifyBack verifyPanel verifyStatus view-buy view-history view-plans view-privacy view-settings view-studio voiceCard voiceCardBody voiceCharCount voiceControls voiceError voiceGenSelect voiceLang voiceNotice voicePreviewAudio voicePreviewBtn voicePreviewCap voicePreviewStatus voiceProvider voiceScript voiceScriptMode voiceSpeed voiceStyle voiceVoice voiceoverBtn watermarkCard watermarkEnabled watermarkText"
+O1_OLD_IDS="accountSignInBtn accountSignedIn accountSignedOut accountSub adHomeNative adStudioBottom advancedCard advancedCardBody aiAutoToggle apiBaseInput appVersionLine aspectSeg authBtn authEmail authError authForm authModal authModeLogin authModeRegister authPass authSub authSubmit authTitle autoPlanCancelBtn autoPlanConfirmBtn autoPlanConflicts autoPlanCost autoPlanNotes autoPlanPanel autoPlanSummary avatarBtn balanceLine balanceNum buyError buyFromPlansBtn buyMethod buyPackSelect buyQrEp buyRef buySubmitBtn buySuccess cameraSeg cancelBtn charCount charCreateBtn charError charImage charImageStatus charList charListEmpty charMaxHint charName charVoice charVoiceLang charVoiceProvider charVoiceStyle charactersCard connBanner connStatus connText connTitle costNum creditsChip creditsNum creditsPlan currentPlanDetail currentPlanName deleteAccountBtn deleteConfirm deletePass deleteStatus draftCostHint draftHint durationSeg enhanceBtn facebookBtn feedbackAttach feedbackAttachLabel feedbackCard feedbackCategory feedbackCount feedbackDetachBtn feedbackMessage feedbackSendBtn forgotCancel forgotEmail forgotLink forgotPanel forgotSend forgotStatus formError genCharThumb genCharacter generateBtn generateIcon generateLabel googleBtnWrap googleFallbackBtn historyEmpty historyEmptyBtn historyEmptyText homeGreeting imageStatus jobList joinBar joinBtn joinCount joinMsg langLabAudio langLabCard langLabLink langLabList langLabStatus linkFacebookBtn linkGoogleBtn linkPhoneBox linkPhoneCode linkPhoneCodeRow linkPhoneNumber linkPhoneSendBtn linkPhoneStatus linkPhoneVerifyBtn lipsyncBtn lipsyncCharacter lipsyncNote meCredits meDailyCap meEmail meId meIdentities meModel mePlan mePlanCredits meSince modeGrid modelLine myPacksEmpty myPacksEmptyText myPacksList packGrid packMethods payList paymentsEmpty paymentsEmptyText phoneBack phoneBtn phoneCode phoneCodeRow phoneNumber phonePanel phoneResendNote phoneSendBtn phoneStatus phoneVerifyBtn planGrid planLine previewEmpty previewFrame previewProgress previewVideo progressFill progressNote prompt promptLang qualitySeg rbActions rbIcon rbMeta rbText rbTitle refreshHistoryBtn refreshMeBtn removeImageBtn reportBtn reportBtn2 reportBtn3 reportContext reportDetails reportError reportForm reportModal reportReason reportTitle resendLine resendVerifyBtn resetPanel resetPass resetStatus resetSubmit resultBox saveBaseBtn seedanceHint seedanceQualityBtn shotSeg signOutBtn signupCreditsLine soundCard soundCardBody soundCharCount soundControls soundError soundMode soundNotice soundOnlyAudio soundOnlyBtn soundOnlyDuration soundOnlyKind soundPrompt soundVolume soundVolumeLabel sourceImage stageList studioActionBar styleGrid templateCard templateGrid testBaseBtn toast verifyBack verifyPanel verifyStatus view-buy view-history view-plans view-privacy view-settings view-studio voiceCard voiceCardBody voiceCharCount voiceControls voiceError voiceGenSelect voiceLang voiceNotice voicePreviewAudio voicePreviewBtn voicePreviewCap voicePreviewStatus voiceProvider voiceScript voiceScriptMode voiceSpeed voiceStyle voiceVoice voiceoverBtn watermarkCard watermarkEnabled watermarkText"
 O1_MISSING=""
 for i in $O1_OLD_IDS; do echo "$HOMEPAGEO1" | grep -q "id=\"$i\"" || O1_MISSING="$O1_MISSING $i"; done
-check "phase O1 frontend: all 250 pre-O1 element ids still present" "" "$O1_MISSING"
+check "phase O1 frontend: all 249 pre-O1 element ids still present" "" "$O1_MISSING"
 
 echo "--- Phase O2: own-voice audio upload for lip-sync + models display (stub instance) ---"
 O2_STUB_PORT=18040
@@ -3289,6 +3302,89 @@ check "phase P frontend: TikTok + X login buttons ship with honest coming-soon l
 check "phase P frontend: redirect start navigation + sso exchange on boot ship" "yes" "$(echo "$HOMEPAGE30" | grep -q '/api/auth/tiktok/start' && echo "$HOMEPAGE30" | grep -q '/api/auth/twitter/start' && echo "$HOMEPAGE30" | grep -q 'handleSsoDeepLink' && echo "$HOMEPAGE30" | grep -q '/api/auth/sso/exchange' && echo yes || echo no)"
 check "phase P frontend: Settings TikTok/X link buttons + flow ship" "yes" "$(echo "$HOMEPAGE30" | grep -q 'id="linkTiktokBtn"' && echo "$HOMEPAGE30" | grep -q 'id="linkTwitterBtn"' && echo "$HOMEPAGE30" | grep -q 'startRedirectLink' && echo "$HOMEPAGE30" | grep -q '/link/start' && echo yes || echo no)"
 kill $SRV30_PID $PSTUB_PID 2>/dev/null
+
+echo "--- 20-second videos: two-part chain (Phase V, fal stub) ---"
+V_STUB_PORT=18036
+B31=http://127.0.0.1:18035
+rm -f /tmp/myvideoai-phaseV-test.db; rm -rf /tmp/vgen31 /tmp/vjoined31 /tmp/vvoice31; mkdir -p /tmp/vgen31 /tmp/vjoined31 /tmp/vvoice31
+FAL_STUB_PORT=$V_STUB_PORT node "$(dirname "$0")/test-fal-stub.js" > /tmp/fal-stub-phaseV.log 2>&1 &
+VSTUB_PID=$!
+for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:$V_STUB_PORT/__calls && break || sleep 0.25; done
+V_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-phaseV-test.db PORT=18035 FAL_KEY=dummy_test_key "$V_JWT_NAME=phaseV-instance-dummy-value" \
+  ADMIN_EMAIL=vadmin@example.com TEST_RECORD_FAL_BODY=1 \
+  FAL_API_BASE_URL=http://127.0.0.1:$V_STUB_PORT FAL_QUEUE_BASE_URL=http://127.0.0.1:$V_STUB_PORT \
+  FAL_POLL_INTERVAL_MS=100 \
+  GENERATED_DIR=/tmp/vgen31 JOINED_DIR=/tmp/vjoined31 VOICE_DIR=/tmp/vvoice31 \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-phaseV-test.log 2>&1 &
+SRV31_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B31/api/health && break || sleep 0.25; done
+AR31=$(curl -s -X POST $B31/api/auth/register -H 'Content-Type: application/json' -d '{"email":"vadmin@example.com","password":"password123"}')
+AT31=$(echo $AR31 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+FR31=$(curl -s -X POST $B31/api/auth/register -H 'Content-Type: application/json' -d '{"email":"vfree@example.com","password":"password123"}')
+FT31=$(echo $FR31 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+mkxp31() { # email -> token on the Extra Pro plan
+  local T=$(curl -s -X POST $B31/api/auth/register -H 'Content-Type: application/json' -d "{\"email\":\"$1\",\"password\":\"password123\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+  local ID=$(curl -s $B31/api/me -H "Authorization: Bearer $T" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+  curl -s -o /dev/null -X POST $B31/api/admin/users/$ID/activate -H "Authorization: Bearer $AT31" -H 'Content-Type: application/json' -d '{"plan_id":"extrapro","period":"monthly"}'
+  echo $T
+}
+XT31=$(mkxp31 vxp@example.com)
+poll31() { # jobId token -> echoes the final generation JSON
+  local st=""
+  for i in $(seq 1 80); do
+    st=$(curl -s $B31/api/generations/$1 -H "Authorization: Bearer $2")
+    local s=$(echo "$st" | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])' 2>/dev/null)
+    [[ "$s" == "completed" || "$s" == "failed" ]] && break || sleep 0.5
+  done
+  echo "$st"
+}
+check "config: 20s rate card (768P 480, 2K 720, no 4K 20, draft 280, H3 durations 5/10/20)" "480/720/none/280/5,10,20" "$(curl -s $B31/api/config | python3 -c 'import sys,json;c=json.load(sys.stdin);q=c["cost_by_quality"];h3=[m for m in c["models"] if m["id"]=="h3"][0];print(str(q["768P"]["20"])+"/"+str(q["2K"]["20"])+"/"+str(q["4K"].get("20","none"))+"/"+str(c["draft"]["cost_by_duration"]["20"])+"/"+",".join(str(d) for d in h3["durations"]))')"
+check "migration v25: generations chain_stage/chain_note columns applied" "ok" "$(node --input-type=module -e "
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync('/tmp/myvideoai-phaseV-test.db');
+const cols = db.prepare(\"SELECT name FROM pragma_table_info('generations') WHERE name IN ('chain_stage','chain_note')\").all().length;
+const mig = db.prepare('SELECT COUNT(*) AS c FROM schema_migrations WHERE version = 25').get().c;
+console.log(cols === 2 && Number(mig) === 1 ? 'ok' : 'bad');
+")"
+HOMEPAGE31=$(curl -s $B31/)
+check "phase V frontend: two-part honesty note + 20s duration set + chain_note render ship" "yes" "$(echo "$HOMEPAGE31" | grep -q 'id="duration20Note"' && echo "$HOMEPAGE31" | grep -q 'made in two parts and joined automatically' && echo "$HOMEPAGE31" | grep -q 'return \[5, 10, 20\];' && echo "$HOMEPAGE31" | grep -q 'g.chain_note' && echo yes || echo no)"
+# NOTE: exactly 8 generate-family calls on this instance (shared limiter).
+check "20s + speaking engine -> 400 before charging" "400/1000" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B31/api/generate -H "Authorization: Bearer $FT31" -H 'Content-Type: application/json' -d '{"prompt":"a reporter delivers the evening news from the studio","engine":"speaking","duration":20,"aspect_ratio":"16:9"}')/$(curl -s $B31/api/me -H "Authorization: Bearer $FT31" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+VGFAIL=$(curl -s -X POST $B31/api/generate -H "Authorization: Bearer $FT31" -H 'Content-Type: application/json' -d '{"prompt":"FAILME storm clouds gather over the harbour at night","duration":20,"aspect_ratio":"16:9"}')
+check "20s gen (768P): charged the full 480 up front" "480/520" "$(echo $VGFAIL | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+VGFAILID=$(echo $VGFAIL | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+VGFAILP=$(poll31 $VGFAILID $FT31)
+check "20s chain failure: part 1 delivered at 10s, stage done, bilingual refund note" "completed/10/done/yes" "$(echo $VGFAILP | python3 -c 'import sys,json;g=json.load(sys.stdin);n=g.get("chain_note") or "";print(g["status"]+"/"+str(g["duration"])+"/"+str(g.get("chain_stage"))+"/"+("yes" if ("240 credits were refunded" in n and "دوسرا حصہ" in n) else "no"))')"
+check "20s chain failure: the delivered video is part 1 itself (the stub clip)" "yes" "$(echo $VGFAILP | python3 -c 'import sys,json;print("yes" if json.load(sys.stdin)["video_url"].endswith("/media/clip.mp4") else "no")')"
+check "20s chain failure: exactly the second half refunded (balance 760)" "760" "$(curl -s $B31/api/me -H "Authorization: Bearer $FT31" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+VHIST=$(curl -s $B31/api/history -H "Authorization: Bearer $FT31")
+check "20s chain failure: History carries the refund note on the row" "yes" "$(echo $VHIST | python3 -c 'import sys,json;g=[x for x in json.load(sys.stdin)["generations"] if x["id"]=='$VGFAILID'][0];print("yes" if g.get("chain_note") and "240" in g["chain_note"] else "no")')"
+VGOK=$(curl -s -X POST $B31/api/generate -H "Authorization: Bearer $FT31" -H 'Content-Type: application/json' -d '{"prompt":"a paper boat sails down a rainy street","duration":20,"aspect_ratio":"16:9"}')
+check "20s gen #2 (768P): charged 480" "480/280" "$(echo $VGOK | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+VGOKID=$(echo $VGOK | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+VGOKP=$(poll31 $VGOKID $FT31)
+check "20s chain success: ONE generation completed at duration 20 with the joined file" "completed/20/joined/done/None" "$(echo $VGOKP | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+str(g["duration"])+"/"+("joined" if "/files/joined/" in (g["video_url"] or "") else "other")+"/"+str(g.get("chain_stage"))+"/"+str(g.get("chain_note")))')"
+VGOKURL=$(echo $VGOKP | python3 -c 'import sys,json;print(json.load(sys.stdin)["video_url"])')
+check "20s chain success: the joined file is served" "200" "$(curl -s -o /dev/null -w '%{http_code}' $B31$VGOKURL)"
+CALLS31=$(curl -s http://127.0.0.1:$V_STUB_PORT/__calls)
+check "20s chain: part 1 submitted as a normal 10s job; part 2 is a 10s i2v at 768P" "10/10/768P" "$(echo $CALLS31 | python3 -c 'import sys,json;cs=json.load(sys.stdin)["calls"];t=[c for c in cs if c["path"]=="/minimax/h3/text-to-video" and "paper boat" in str(c["body"].get("prompt",""))];i=[c for c in cs if "image-to-video" in c["path"] and "paper boat" in str(c["body"].get("prompt",""))];print(str(t[-1]["body"]["duration"])+"/"+str(i[-1]["body"]["duration"])+"/"+str(i[-1]["body"]["resolution"]))')"
+VGDRAFT=$(curl -s -X POST $B31/api/generate -H "Authorization: Bearer $FT31" -H 'Content-Type: application/json' -d '{"prompt":"a kite dances over the village rooftops","duration":20,"quality":"draft","aspect_ratio":"16:9"}')
+check "20s draft: charged 280" "280/0" "$(echo $VGDRAFT | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+VGDRAFTID=$(echo $VGDRAFT | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+VGDRAFTP=$(poll31 $VGDRAFTID $FT31)
+check "20s draft chain: completed at duration 20 with the joined file" "completed/20/joined" "$(echo $VGDRAFTP | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+str(g["duration"])+"/"+("joined" if "/files/joined/" in (g["video_url"] or "") else "other"))')"
+VPLAN10=$(curl -s -X POST $B31/api/generate/plan -H "Authorization: Bearer $XT31" -H 'Content-Type: application/json' -d '{"prompt":"a man stands in his shop and says: \"Welcome in, everything is fresh today\"","mode":"realistic","style":"realistic","duration":10}')
+check "auto plan control: the same dialogue at 10s DOES route to the speaking engine" "omni_speaking/True" "$(echo $VPLAN10 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(p["engine"]["route"]+"/"+str(p["apply"]["speaking_engine"]))')"
+VPLAN20=$(curl -s -X POST $B31/api/generate/plan -H "Authorization: Bearer $XT31" -H 'Content-Type: application/json' -d '{"prompt":"a man stands in his shop and says: \"Welcome in, everything is fresh today\"","mode":"realistic","style":"realistic","duration":20}')
+check "auto plan at 20s: never routes to the speaking engine (manual-only duration)" "not-omni/False" "$(echo $VPLAN20 | python3 -c 'import sys,json;p=json.load(sys.stdin)["plan"];print(("omni" if p["engine"]["route"]=="omni_speaking" else "not-omni")+"/"+str(p["apply"]["speaking_engine"]))')"
+check "20s on the native-4K route -> 400 before charging" "400/7000" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B31/api/generate -H "Authorization: Bearer $XT31" -H 'Content-Type: application/json' -d '{"prompt":"a city skyline at dusk","duration":20,"aspect_ratio":"16:9"}')/$(curl -s $B31/api/me -H "Authorization: Bearer $XT31" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+VG2K=$(curl -s -X POST $B31/api/generate -H "Authorization: Bearer $XT31" -H 'Content-Type: application/json' -d '{"prompt":"a lighthouse beam sweeps across the bay","duration":20,"resolution":"2K","aspect_ratio":"16:9"}')
+check "20s gen (2K on Extra Pro): charged 720" "720/6280" "$(echo $VG2K | python3 -c 'import sys,json;g=json.load(sys.stdin);print(str(g["cost_credits"])+"/"+str(g["credits_left"]))')"
+VG2KID=$(echo $VG2K | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+VG2KP=$(poll31 $VG2KID $XT31)
+check "20s chain success at 2K: completed at duration 20 with the joined file" "completed/20/joined" "$(echo $VG2KP | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+str(g["duration"])+"/"+("joined" if "/files/joined/" in (g["video_url"] or "") else "other"))')"
+kill $SRV31_PID $VSTUB_PID 2>/dev/null
 
 echo "--- rate limit: burst until 429 ---"
 FOUND429="no"

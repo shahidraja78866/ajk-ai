@@ -137,7 +137,6 @@ const CONFIG = {
     ...((process.env.PAYMENT_EASYPAISA || '').trim() ? { easypaisa: process.env.PAYMENT_EASYPAISA.trim() } : {}),
     ...((process.env.PAYMENT_JAZZCASH || '').trim() ? { jazzcash: process.env.PAYMENT_JAZZCASH.trim() } : {}),
     ...((process.env.PAYMENT_BANK || '').trim() ? { bank: process.env.PAYMENT_BANK.trim() } : {}),
-    ...((process.env.PAYMENT_NAYAPAY || '').trim() ? { nayapay: process.env.PAYMENT_NAYAPAY.trim() } : {}),
   },
   // Where joined videos are written and served from (/files/joined/...).
   // NOTE: local disk — on ephemeral hosting (Render free tier) these files
@@ -630,7 +629,7 @@ const PACK_DEFAULTS = [
   { credits: 1000, price_pkr: 1499, sort_order: 2, play_product_id: 'credits_1000' },
   { credits: 2500, price_pkr: 3499, sort_order: 3, play_product_id: 'credits_2500' },
 ];
-const PACK_METHODS = ['easypaisa', 'jazzcash', 'bank', 'nayapay', 'other'];
+const PACK_METHODS = ['easypaisa', 'jazzcash', 'bank', 'other'];
 
 // ---------- Database with migrations ----------
 // Engine gate — three modes:
