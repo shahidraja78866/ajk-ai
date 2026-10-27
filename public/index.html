@@ -1782,7 +1782,7 @@
       <section class="view" id="view-buy">
         <div class="page-head">
           <h1 data-i18n="buy_credits_h1">Buy credits</h1>
-          <p>One-time credit packs — they never expire and are added on top of any plan credits. Pay by easypaisa, JazzCash, NayaPay or bank transfer, then submit the transaction ID from your payment. Credits are added as soon as the payment is verified (usually within a few hours).</p>
+          <p>One-time credit packs — they never expire and are added on top of any plan credits. Pay by easypaisa, JazzCash or bank transfer, then submit the transaction ID from your payment. Credits are added as soon as the payment is verified (usually within a few hours).</p>
           <p><button type="button" class="btn small" data-goto="settings" data-i18n="models_link">See what each model costs · ہر ماڈل کی قیمت دیکھیں</button></p>
         </div>
         <div class="card">
@@ -1798,16 +1798,12 @@
           <div id="packMethods">
             <p style="color:var(--muted);">Payment details will appear here soon.</p>
           </div>
-          <div class="buy-qr" id="buyQr" hidden>
-            <img src="/nayapay-qr.jpg" alt="NayaPay QR code — pay rajashahidiqbal@nayapay (Shahid Iqbal)" />
-            <p class="sub">Scan this QR with your NayaPay app to pay <strong>rajashahidiqbal@nayapay</strong> (Shahid Iqbal).</p>
-          </div>
           <div class="buy-qr" id="buyQrEp" hidden>
             <img src="/easypaisa-qr.jpg" alt="Easypaisa QR code — pay Shahid Iqbal via RAAST" />
             <p class="sub">Scan this QR with your easypaisa app (RAAST) to pay <strong>Shahid Iqbal</strong>.</p>
           </div>
           <h2 style="margin-top:22px;" data-i18n="tell_txn">3 · Tell us the transaction ID</h2>
-          <p class="sub">After paying, enter the transaction ID from your easypaisa / JazzCash / NayaPay / bank receipt so we can verify it.</p>
+          <p class="sub">After paying, enter the transaction ID from your easypaisa / JazzCash / bank receipt so we can verify it.</p>
           <div class="field-label"><span data-i18n="pack_label">Pack</span></div>
           <select id="buyPackSelect"></select>
           <div class="field-label"><span data-i18n="payment_method">Payment method</span></div>
@@ -1815,7 +1811,6 @@
             <option value="easypaisa">easypaisa</option>
             <option value="jazzcash">JazzCash</option>
             <option value="bank">Bank transfer</option>
-            <option value="nayapay">NayaPay</option>
             <option value="other">Other</option>
           </select>
           <div class="field-label"><span data-i18n="transaction_id">Transaction ID</span></div>
@@ -5641,7 +5636,7 @@
         });
 
         /* ---------- credit packs (buy view) ---------- */
-        var METHOD_LABELS = { easypaisa: "easypaisa", jazzcash: "JazzCash", bank: "Bank transfer", nayapay: "NayaPay", other: "Other" };
+        var METHOD_LABELS = { easypaisa: "easypaisa", jazzcash: "JazzCash", bank: "Bank transfer", other: "Other" };
         function packChipClass(status) {
           status = String(status || "").toLowerCase();
           if (status === "approved") return "chip completed";
@@ -5667,7 +5662,6 @@
           box.appendChild(dl);
         }
         function updateBuyQr() {
-          $("#buyQr").hidden = $("#buyMethod").value !== "nayapay";
           $("#buyQrEp").hidden = $("#buyMethod").value !== "easypaisa";
         }
         $("#buyMethod").addEventListener("change", updateBuyQr);
