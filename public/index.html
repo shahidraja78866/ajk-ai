@@ -665,6 +665,43 @@
         .studio-actionbar{ bottom:calc(64px + env(safe-area-inset-bottom)); padding:10px 12px; }
         .kv{ grid-template-columns:105px 1fr; }
       }
+      /* ---------- Phase W: compact mobile create (owner directive
+         2026-10-27, from tester feedback) — the model picker (incl.
+         Speaking) and the quality picker become ONE slim swipeable
+         chip row each instead of tall wrapping tiles, the mode cards
+         shrink to a side-by-side pair, and nothing may ever pan
+         sideways or need zooming on a phone. Presentation only:
+         every id, handler and gate is unchanged. */
+      html, body{ overflow-x:clip; }
+      @media (max-width:720px){
+        #modelPicker, #qualitySeg{
+          flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none;
+          -webkit-overflow-scrolling:touch;
+        }
+        #modelPicker::-webkit-scrollbar, #qualitySeg::-webkit-scrollbar{ display:none; }
+        #modelPicker button, #qualitySeg button{
+          flex:0 0 auto; padding:8px 12px; font-size:13.5px; white-space:nowrap;
+        }
+        #modelPicker button small, #qualitySeg button small{
+          display:inline; font-size:10.5px; margin-inline-start:5px;
+        }
+        .mode-grid{ grid-template-columns:1fr 1fr; }
+        .mode-compact .mode-card{ padding:10px; }
+        .mode-compact .mode-card span{ display:none; }
+        #advancedCardBody .field-label{ margin:12px 0 6px; }
+        .dr-drawer{ max-height:100dvh; }
+        .dr-foot{ padding-bottom:calc(8px + env(safe-area-inset-bottom)); }
+        .dr-foot .dr-item{ color:var(--text); }
+      }
+      @media (max-width:640px){
+        .topbar{ gap:8px; padding:8px 10px; }
+        .topbar-right{ gap:6px; min-width:0; }
+        .credits-chip{ padding:5px 9px; font-size:12px; white-space:nowrap; }
+      }
+      @media (max-width:420px){
+        .brand .brand-sub{ display:none; }
+        .brand{ font-size:15px; }
+      }
       /* ---------- studio: Flow-style composer (Phase F) ----------
          The create surface is composer-first: a quiet template rail,
          one prompt card, one row of quick chips. (Phase K later
