@@ -239,10 +239,12 @@
       usersCache = r.data.users;
       var planOpts = (window.__plans || []).map(function (p) {
         return "<option value='" + esc(p.id) + "'>" + esc(p.name) + "</option>"; }).join("");
-      var html = "<tr><th>ID</th><th>Email</th><th>Credits (free + plan)</th><th>Plan</th><th>Status</th><th>Period ends</th><th>Admin</th><th>Actions</th></tr>";
+      var METHOD_LABELS = { password: "Email", google: "Google", facebook: "Facebook", tiktok: "TikTok", twitter: "X", phone: "Phone" };
+      var html = "<tr><th>ID</th><th>Email</th><th>Sign-in</th><th>Credits (free + plan)</th><th>Plan</th><th>Status</th><th>Period ends</th><th>Admin</th><th>Actions</th></tr>";
       usersCache.forEach(function (u) {
         var s = u.subscription;
-        html += "<tr data-user='" + u.id + "'><td>" + u.id + "</td><td>" + esc(u.email) + "</td>"
+        var methods = (u.sign_in_methods || []).map(function (p) { return METHOD_LABELS[p] || p; }).join(" + ") || "–";
+        html += "<tr data-user='" + u.id + "'><td>" + u.id + "</td><td>" + esc(u.email) + "</td><td>" + esc(methods) + "</td>"
           + "<td>" + u.credits + " (" + (u.free_credits || 0) + " + " + (u.plan_credits || 0) + ")"
           + (u.credit_deficit ? "<br><small style='color:var(--red);'>credit deficit: " + u.credit_deficit + " (unrecovered refund clawback)</small>" : "") + "</td>"
           + "<td>" + (s ? esc(s.plan_name) : "Free") + "</td>"
