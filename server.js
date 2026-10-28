@@ -7506,7 +7506,16 @@ app.get('/api/admin/users', auth, requireAdmin, (req, res) => {
   const users = db.prepare('SELECT id, email, credits, free_credits, plan_credits, credit_deficit, is_admin, created_at FROM users ORDER BY id').all();
   const subs = db.prepare('SELECT * FROM subscriptions WHERE id IN (SELECT MAX(id) FROM subscriptions GROUP BY user_id)').all();
   const byUser = new Map(subs.map(s => [s.user_id, s]));
-  res.json({ users: users.map(u => ({ ...u, subscription: subscriptionView(byUser.get(u.id) || null) })) });
+  // Sign-in methods per user from the identities table (the single source
+  // of truth: 'password' for email accounts, plus one row per linked
+  // OAuth provider) — lets the owner see e.g. who joined with Google.
+  const idents = db.prepare('SELECT user_id, provider FROM user_identities ORDER BY provider').all();
+  const methodsByUser = new Map();
+  for (const row of idents) {
+    if (!methodsByUser.has(row.user_id)) methodsByUser.set(row.user_id, []);
+    methodsByUser.get(row.user_id).push(row.provider);
+  }
+  res.json({ users: users.map(u => ({ ...u, sign_in_methods: methodsByUser.get(u.id) || [], subscription: subscriptionView(byUser.get(u.id) || null) })) });
 });
 
 app.get('/api/admin/plans', auth, requireAdmin, (req, res) => {
