@@ -143,6 +143,16 @@ const CONFIG = {
   azureTranslatorKey: (process.env.AZURE_TRANSLATOR_KEY || '').trim(),
   azureTranslatorRegion: (process.env.AZURE_TRANSLATOR_REGION || '').trim(),
   azureTranslatorEndpoint: (process.env.AZURE_TRANSLATOR_ENDPOINT || 'https://api.cognitive.microsofttranslator.com').replace(/\/+$/, ''),
+  // AI prompt writer (owner decision 2026-10-29): expands a rough idea
+  // into a full video prompt with Google's Gemini API on the owner's
+  // free AI Studio key. Activates only when GEMINI_API_KEY is set;
+  // until then the endpoint fails closed and the app keeps the canned
+  // "Add detail" behaviour.
+  geminiApiKey: (process.env.GEMINI_API_KEY || '').trim(),
+  promptAiModel: (process.env.PROMPT_AI_MODEL || 'gemini-3.8-flash').trim(),
+  promptAiBase: (process.env.PROMPT_AI_API_BASE || 'https://generativelanguage.googleapis.com').replace(/\/+$/, ''),
+  promptWriteDailyCap: Number(process.env.PROMPT_WRITE_DAILY_CAP || 20),
+  promptWriteGlobalDailyCap: Number(process.env.PROMPT_WRITE_GLOBAL_DAILY_CAP || 1000),
   // Manual payment destinations for credit-pack purchases, shown to buyers
   // on the Buy Credits page. Only the methods actually set in the
   // environment are exposed (via /api/config as payment_methods).
@@ -1292,6 +1302,12 @@ const MIGRATIONS = [
   { version: 25, up: `
     ALTER TABLE generations ADD COLUMN chain_stage TEXT;
     ALTER TABLE generations ADD COLUMN chain_note TEXT;` },
+  { version: 26, up: `
+    CREATE TABLE IF NOT EXISTS prompt_writes (
+      id INTEGER PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );` },
 ];
 {
   const applied = new Set(db.prepare('SELECT version FROM schema_migrations').all().map(r => r.version));
@@ -1575,6 +1591,13 @@ const finishLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 30,
 const feedbackLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 10,
   keyGenerator: (req) => String(req.user?.id || req.ip),
   message: { error: 'Rate limit: max 10 feedback reports per hour.' } });
+
+// AI prompt writer (2026-10-29): free for users, with real per-user and
+// global daily caps enforced in the endpoint via the prompt_writes
+// table; this limiter only stops burst abuse.
+const promptWriteLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 60,
+  keyGenerator: (req) => String(req.user?.id || req.ip),
+  message: { error: 'Rate limit: too many prompt-writing requests — please slow down.' } });
 
 // ---------- Modern auth (Phase N): adapters, tokens, identities ----------
 // Verification / password-reset emails send through the mailer adapter
@@ -2194,6 +2217,10 @@ app.get('/api/config', (req, res) => res.json({
   // is configured. Both stay false until the owner's accounts exist.
   play_billing_configured: playBillingConfigured(),
   gateway_configured: gatewayConfigured(),
+  // AI prompt writer (2026-10-29): flag + cap only, never the key. The
+  // app turns the canned "Add detail" button into the real AI writer
+  // only when this is configured.
+  prompt_ai: { configured: !!CONFIG.geminiApiKey, daily_cap: CONFIG.promptWriteDailyCap },
   // Voice system (Phase B): which TTS providers are configured (booleans
   // only, never keys), the voice catalog for the CONFIGURED providers,
   // and the locked credit costs of the voice add-ons. When no provider is
@@ -3724,6 +3751,72 @@ function canonicalizeAutoPlan(fresh, echo, { character = null, hasSourceImage = 
 // ---------- AI Auto Director: free plan endpoint ---------------------------
 // Same validation family as /api/generate (auth + the generate rate-limit
 // family), but it NEVER charges and NEVER creates a generation row.
+// ---------- AI prompt writer (owner decision 2026-10-29) -----------------
+// POST /api/prompt/write { idea, mode? } -> { prompt }
+// Expands a rough one-line idea (Urdu / English / any language) into a
+// full English video prompt via Gemini on the owner's free AI Studio
+// key. Free for users; per-user (20/day) and global (1000/day) caps
+// protect the free quota. Fails closed (503) until GEMINI_API_KEY set.
+const PROMPT_WRITER_SYSTEM =
+  'You are the prompt writer inside an AI text-to-video app. The user gives a rough idea in any language (often Urdu or English). ' +
+  'Reply with ONE detailed English video-generation prompt only: no explanations, no quotes, no markdown, no preamble. ' +
+  'Include the main subject and appearance, the action, the setting and environment, camera movement, lighting, mood and visual style. ' +
+  "Keep people's names and place names exactly as the user wrote them. Aim for 60-110 words. " +
+  'Default to photorealistic live action unless the idea itself asks for cartoon or animation.';
+async function writePromptWithGemini(idea, mode) {
+  const url = `${CONFIG.promptAiBase}/v1beta/models/${encodeURIComponent(CONFIG.promptAiModel)}:generateContent`;
+  const userText = (mode === 'cartoon')
+    ? `Visual style: cheerful 3D cartoon animation.\n\nUser idea: ${idea}`
+    : `Visual style: photorealistic live action.\n\nUser idea: ${idea}`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20000);
+  try {
+    const r = await fetch(url, {
+      method: 'POST', signal: ctrl.signal,
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': CONFIG.geminiApiKey },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: PROMPT_WRITER_SYSTEM }] },
+        contents: [{ parts: [{ text: userText }] }],
+        generationConfig: { temperature: 0.8, maxOutputTokens: 400 },
+      }),
+    });
+    if (!r.ok) throw new Error(`gemini prompt writer returned ${r.status}`);
+    const j = await r.json();
+    const text = ((((j.candidates || [])[0] || {}).content || {}).parts || [])
+      .map(p => p.text || '').join('').trim();
+    if (text.length < 20) throw new Error('gemini prompt writer returned an empty/too-short prompt');
+    return text.slice(0, 1200);
+  } finally { clearTimeout(timer); }
+}
+
+app.post('/api/prompt/write', auth, promptWriteLimiter, async (req, res) => {
+  if (!CONFIG.geminiApiKey)
+    return res.status(503).json({ error: 'prompt_ai_not_configured', message: 'AI prompt writing is not switched on yet.' });
+  const b = req.body || {};
+  const idea = String(b.idea ?? '').trim();
+  if (idea.length < 3 || idea.length > 500)
+    return res.status(400).json({ error: 'Please write a short idea first (3-500 characters).' });
+  if (moderated(idea))
+    return res.status(400).json({ error: 'This idea was blocked by content moderation. Please rephrase it.' });
+  const mode = String(b.mode || '').toLowerCase() === 'cartoon' ? 'cartoon' : 'realistic';
+  const mine = db.prepare(
+    `SELECT COUNT(*) AS c FROM prompt_writes WHERE user_id = ? AND date(created_at) = date('now')`).get(req.user.id).c;
+  if (Number(mine) >= CONFIG.promptWriteDailyCap)
+    return res.status(429).json({ error: `Daily AI prompt limit reached (${CONFIG.promptWriteDailyCap} per day). It resets tomorrow.` });
+  const globalCount = db.prepare(
+    `SELECT COUNT(*) AS c FROM prompt_writes WHERE date(created_at) = date('now')`).get().c;
+  if (Number(globalCount) >= CONFIG.promptWriteGlobalDailyCap)
+    return res.status(429).json({ error: 'AI prompt writing is busy right now — please try again later.' });
+  try {
+    const prompt = await writePromptWithGemini(idea, mode);
+    db.prepare('INSERT INTO prompt_writes (user_id) VALUES (?)').run(req.user.id);
+    return res.json({ prompt });
+  } catch (e) {
+    console.error('prompt write failed:', e.message);
+    return res.status(502).json({ error: 'The AI prompt writer could not answer just now. Please try again in a moment.' });
+  }
+});
+
 app.post('/api/generate/plan', auth, generateLimiter, async (req, res) => {
   const b = req.body || {};
   const prompt = b.prompt;

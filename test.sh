@@ -2349,6 +2349,52 @@ check "credits chip fix: failure toast tells the user to tap the chip" "yes" "$(
 check "credits chip fix: chip tap re-runs loadMe, buy view still opens on success" "yes" "$(echo "$HOMEPAGE22" | grep -q 'loadMe().then(function (ok)' && echo yes || echo no)"
 kill $SRV22_PID 2>/dev/null
 
+echo "--- AI prompt writer (2026-10-29): fail-closed + Gemini stub instance ---"
+# (a) No GEMINI_API_KEY -> /api/config prompt_ai.configured=false and the
+#     endpoint fails closed with 503 (the app keeps the canned button).
+B27=http://127.0.0.1:18066
+rm -f /tmp/myvideoai-promptai-off-test.db
+PW_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-promptai-off-test.db PORT=18066 FAL_KEY=dummy_test_key "$PW_JWT_NAME=promptai-instance-dummy-value" \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-promptai-off-test.log 2>&1 &
+SRV27_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B27/api/health && break || sleep 0.25; done
+check "prompt ai: config flag false without key" "False" "$(curl -s $B27/api/config | python3 -c 'import sys,json;print(json.load(sys.stdin)["prompt_ai"]["configured"])')"
+UR27=$(curl -s -X POST $B27/api/auth/register -H 'Content-Type: application/json' -d '{"email":"pwuser@example.com","password":"password123"}')
+UT27=$(echo $UR27 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+PW_OFF=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B27/api/prompt/write -H "Authorization: Bearer $UT27" -H 'Content-Type: application/json' -d '{"idea":"a cat in my garden"}')
+check "prompt ai: unconfigured write -> 503" "503" "$PW_OFF"
+kill $SRV27_PID 2>/dev/null
+# (b) With a key + the Gemini stub: happy path, validation, upstream
+#     failure, unauth, and the per-user daily cap.
+GEMINI_STUB_PORT=18197
+node "$(dirname "$0")/test-gemini-stub.js" > /tmp/myvideoai-gemini-stub.log 2>&1 &
+GSTUB_PID=$!
+B28=http://127.0.0.1:18068
+rm -f /tmp/myvideoai-promptai-on-test.db
+env DB_PATH=/tmp/myvideoai-promptai-on-test.db PORT=18068 FAL_KEY=dummy_test_key "$PW_JWT_NAME=promptai-instance-dummy-value" \
+  GEMINI_API_KEY=test-gemini-key PROMPT_AI_API_BASE=http://127.0.0.1:$GEMINI_STUB_PORT PROMPT_WRITE_DAILY_CAP=3 \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-promptai-on-test.log 2>&1 &
+SRV28_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B28/api/health && break || sleep 0.25; done
+check "prompt ai: config flag true with key" "True" "$(curl -s $B28/api/config | python3 -c 'import sys,json;print(json.load(sys.stdin)["prompt_ai"]["configured"])')"
+UR28=$(curl -s -X POST $B28/api/auth/register -H 'Content-Type: application/json' -d '{"email":"pwon@example.com","password":"password123"}')
+UT28=$(echo $UR28 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+PW_UNAUTH=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/prompt/write -H 'Content-Type: application/json' -d '{"idea":"a cat in my garden"}')
+check "prompt ai: unauthenticated -> 401" "401" "$PW_UNAUTH"
+PW_OK=$(curl -s -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"میرے گاؤں میں بارش ہو رہی ہے"}')
+check "prompt ai: urdu idea expanded by the writer" "yes" "$(echo $PW_OK | python3 -c 'import sys,json;p=json.load(sys.stdin).get("prompt","");print("yes" if p.startswith("EXPANDED PROMPT:") and "بارش" in p else "no")')"
+PW_SHORT=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"ab"}')
+check "prompt ai: 2-char idea -> 400" "400" "$PW_SHORT"
+PW_FAIL=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"FAILME please"}')
+check "prompt ai: upstream failure -> 502" "502" "$PW_FAIL"
+# daily cap is 3 on this instance: two more good writes pass, the 4th is 429
+curl -s -o /dev/null -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"a red kite over the beach"}'
+curl -s -o /dev/null -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"a train crossing a bridge"}'
+PW_CAP=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"one idea too many today"}')
+check "prompt ai: 4th write over daily cap 3 -> 429" "429" "$PW_CAP"
+kill $SRV28_PID $GSTUB_PID 2>/dev/null
+
 echo "--- Phase J: Seedance 2.5 premium engine (stub instance) ---"
 SD_STUB_PORT=18059
 B23=http://127.0.0.1:18058
