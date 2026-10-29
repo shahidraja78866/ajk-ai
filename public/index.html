@@ -230,6 +230,14 @@
       select#promptLang:focus{ outline:2px solid var(--amber); outline-offset:1px; border-color:transparent; }
       .lang-hint{ color:var(--muted); font-size:12.5px; margin:6px 0 0; }
       .prompt-tools{ display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+      .voice-bar{ display:flex; align-items:center; gap:10px; margin-top:10px; flex-wrap:wrap; }
+      .voice-bar[hidden]{ display:none; }
+      .voice-btn{ display:inline-flex; align-items:center; gap:8px; padding:10px 18px; border-radius:999px; border:1px solid transparent; background:var(--accent-grad); color:#fff; font:inherit; font-weight:600; cursor:pointer; }
+      .voice-btn svg{ width:18px; height:18px; }
+      .voice-btn.listening, .tool-btn.listening{ background:#dc2626; color:#fff; border-color:transparent; animation:voicePulse 1.2s ease-out infinite; }
+      @keyframes voicePulse{ 0%{ box-shadow:0 0 0 0 rgba(220,38,38,.45);} 100%{ box-shadow:0 0 0 14px rgba(220,38,38,0);} }
+      .voice-status{ font-size:13px; opacity:.85; }
+      .tool-btn[hidden]{ display:none; }
       .tool-btn{
         background:none; border:1px solid var(--line); color:var(--muted);
         border-radius:999px; padding:6px 12px; font-size:12.5px; font-weight:500;
@@ -1469,6 +1477,14 @@
               <div class="field-label"><span data-i18n="prompt_label">Prompt</span><span class="count"><span id="charCount">0</span> / 500</span></div>
               <textarea id="prompt" maxlength="500" data-i18n-ph="prompt_ph" placeholder="Describe your imagination…"></textarea>
 
+              <div class="voice-bar" id="voiceBar" hidden>
+                <button type="button" class="voice-btn js-voice-btn" id="voiceBtn">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2.5" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>
+                  <span data-i18n="voice_create">Speak to create</span>
+                </button>
+                <span class="voice-status" id="voiceStatus" role="status"></span>
+              </div>
+
 
             <div class="auto-panel studio-auto-panel" id="autoPlanPanel" hidden>
               <h3>AI Auto نے یہ سمجھا</h3>
@@ -2178,6 +2194,10 @@
             </div>
 
               <div class="prompt-tools">
+                <button type="button" class="tool-btn js-voice-btn" id="voiceBtnTools" hidden>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2.5" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg>
+                  <span data-i18n="voice_create">Speak to create</span>
+                </button>
                 <button type="button" class="tool-btn" id="enhanceBtn">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg>
                   <span data-i18n="enhance_prompt">Add detail</span>
@@ -2895,6 +2915,15 @@
           prompt_ph: { en: "Describe your imagination…", ur: "اپنے تخیل کی وضاحت کریں…" },
           enhance_prompt: { en: "Add detail", ur: "تفصیل شامل کریں" },
           prompt_ai_write: { en: "AI: write my prompt", ur: "AI سے پرامپٹ لکھوائیں" },
+          voice_create: { en: "Speak to create", ur: "بول کر بنائیں" },
+          voice_listening: { en: "Listening… speak now", ur: "سن رہا ہوں… بولیے" },
+          voice_writing: { en: "AI is writing your prompt…", ur: "AI پرامپٹ لکھ رہا ہے…" },
+          voice_ready: { en: "Your prompt is ready — check it, then press Generate.", ur: "پرامپٹ تیار ہے — دیکھ کر Generate دبائیں۔" },
+          voice_typed: { en: "Your words are in the prompt box.", ur: "آپ کی بات پرامپٹ خانے میں لکھ دی گئی ہے۔" },
+          voice_nohear: { en: "I couldn't hear that — please try again.", ur: "آواز سمجھ نہیں آئی — دوبارہ کوشش کریں۔" },
+          voice_mic_denied: { en: "Microphone permission is needed for voice typing.", ur: "آواز لکھنے کے لیے مائیک کی اجازت درکار ہے۔" },
+          voice_failed: { en: "Voice typing failed — please type instead.", ur: "آواز سے لکھنا نہیں ہو سکا — لکھ کر آزمائیں۔" },
+          voice_signin: { en: "Sign in so AI can write the full prompt from your words.", ur: "سائن اِن کریں تاکہ AI آپ کی بات سے مکمل پرامپٹ لکھ سکے۔" },
           format_label: { en: "Format", ur: "فارمیٹ" },
           length_label: { en: "Length", ur: "دورانیہ" },
           auto_label: { en: "Auto", ur: "خودکار" },
@@ -4616,6 +4645,90 @@
           promptEl.dispatchEvent(new Event("input"));
           toast("Prompt enhanced with lighting and camera detail.");
         });
+        /* ---------- Voice create (2026-10-29) ----------
+           Speak in Urdu (or English) → the words land in the prompt box
+           → the AI prompt writer (when configured) turns them into a
+           full written prompt automatically. The buttons exist ONLY
+           where the browser supports speech recognition (Chrome /
+           Android); anywhere else they stay hidden — never a dead
+           button. Generation is untouched: the user still reviews the
+           prompt and presses Generate, so a mis-heard word can never
+           spend credits on its own. */
+        var VoiceSR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        var voiceBtns = $$(".js-voice-btn");
+        if (VoiceSR && voiceBtns.length) {
+          var voiceBarEl = $("#voiceBar");
+          if (voiceBarEl) voiceBarEl.hidden = false;
+          voiceBtns.forEach(function (b) { b.hidden = false; });
+          var recog = null, voiceListening = false;
+          function voiceStatus(msg) { var s = $("#voiceStatus"); if (s) s.textContent = msg || ""; }
+          function voiceState(on) {
+            voiceListening = on;
+            voiceBtns.forEach(function (b) { b.classList.toggle("listening", on); });
+            voiceStatus(on ? t("voice_listening") : "");
+          }
+          function voiceWritePrompt(idea) {
+            if (!token) { toast(t("voice_signin")); return; }
+            if (!(cfg && cfg.prompt_ai && cfg.prompt_ai.configured)) { toast(t("voice_typed")); return; }
+            toast(t("voice_writing"));
+            var modeCard = document.querySelector(".mode-card.sel");
+            var selMode = modeCard ? modeCard.getAttribute("data-mode") : "realistic";
+            api("/api/prompt/write", { method: "POST", body: { idea: idea, mode: selMode } }).then(function (res) {
+              if (!res.ok) { showError(errText(res, "AI prompt writing failed")); return; }
+              if (res.data && res.data.prompt) {
+                promptEl.value = res.data.prompt;
+                promptEl.dispatchEvent(new Event("input"));
+                toast(t("voice_ready"));
+                promptEl.focus();
+              }
+            });
+          }
+          function voiceStart() {
+            if (voiceListening) { try { recog.stop(); } catch (e) {} return; }
+            hideError();
+            recog = new VoiceSR();
+            recog.lang = uiLang === "en" ? "en-US" : "ur-PK";
+            recog.interimResults = true;
+            recog.continuous = false;
+            recog.maxAlternatives = 1;
+            var base = promptEl.value.trim();
+            var finalText = "";
+            recog.onresult = function (ev) {
+              var interim = "";
+              for (var i = ev.resultIndex; i < ev.results.length; i++) {
+                var r = ev.results[i];
+                if (r.isFinal) finalText += r[0].transcript;
+                else interim += r[0].transcript;
+              }
+              promptEl.value = ((base ? base + " " : "") + finalText + interim).slice(0, 500);
+              promptEl.dispatchEvent(new Event("input"));
+            };
+            recog.onerror = function (ev) {
+              voiceState(false);
+              if (ev.error === "not-allowed" || ev.error === "service-not-allowed") showError(t("voice_mic_denied"));
+              else if (ev.error === "no-speech") { if (!finalText) showError(t("voice_nohear")); }
+              else if (ev.error !== "aborted") showError(t("voice_failed"));
+            };
+            recog.onend = function () {
+              voiceState(false);
+              var heard = finalText.trim();
+              if (heard) {
+                var full = ((base ? base + " " : "") + heard).slice(0, 500);
+                promptEl.value = full;
+                promptEl.dispatchEvent(new Event("input"));
+                voiceWritePrompt(full);
+              }
+            };
+            try {
+              recog.start();
+              voiceState(true);
+            } catch (e) {
+              showError(t("voice_failed"));
+            }
+          }
+          voiceBtns.forEach(function (b) { b.addEventListener("click", voiceStart); });
+        }
+
         function showError(msg) { var e = $("#formError"); e.textContent = msg; e.classList.add("show"); }
         function hideError() { $("#formError").classList.remove("show"); }
 
