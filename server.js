@@ -1562,7 +1562,7 @@ app.use(cors({ origin: FRONTEND_ORIGIN || true }));
 // whose base64 payloads need their own larger parsers (mounted on the
 // routes; the global parser is skipped for those exact paths).
 const jsonParser = express.json({ limit: '100kb' });
-app.use((req, res, next) => (req.path === '/api/uploads/image' || req.path === '/api/uploads/audio') ? next() : jsonParser(req, res, next));
+app.use((req, res, next) => (req.path === '/api/uploads/image' || req.path === '/api/uploads/audio' || req.path === '/api/prompt/image') ? next() : jsonParser(req, res, next));
 // Payment gateways post their IPN/webhook callbacks as form data.
 app.use(express.urlencoded({ extended: false, limit: '100kb' }));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300 }));
@@ -4023,7 +4023,7 @@ async function writeImagePromptWithGemini(mime, data, note) {
   throw lastErr;
 }
 
-app.post('/api/prompt/image', auth, promptWriteLimiter, async (req, res) => {
+app.post('/api/prompt/image', express.json({ limit: '8mb' }), auth, promptWriteLimiter, async (req, res) => {
   if (!CONFIG.geminiApiKey)
     return res.status(503).json({ error: 'prompt_ai_not_configured', message: 'AI prompt writing is not switched on yet.' });
   const b = req.body || {};

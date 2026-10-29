@@ -2408,6 +2408,8 @@ IP_OK=$(curl -s -X POST $B28/api/prompt/image -H "Authorization: Bearer $UT28C" 
 check "prompt image: photo + note -> vision-written prompt" "yes" "$(echo $IP_OK | python3 -c 'import sys,json;p=json.load(sys.stdin).get("prompt","");print("yes" if p.startswith("IMAGE PROMPT:") and 80<=len(p)<=480 else "no")')"
 IP_FAIL=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/prompt/image -H "Authorization: Bearer $UT28C" -H 'Content-Type: application/json' -d '{"image_base64":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==","note":"FAILME please"}')
 check "prompt image: upstream failure -> 502" "502" "$IP_FAIL"
+IP_BIG=$(python3 -c 'import json,sys; sys.stdout.write(json.dumps({"image_base64":"data:image/jpeg;base64,"+"A"*160000,"note":"a big photo"}))' | curl -s -X POST $B28/api/prompt/image -H "Authorization: Bearer $UT28C" -H 'Content-Type: application/json' --data @-)
+check "prompt image: real-size photo body (>100kb) accepted, not a parser 500" "yes" "$(echo $IP_BIG | python3 -c 'import sys,json;p=json.load(sys.stdin).get("prompt","");print("yes" if p.startswith("IMAGE PROMPT:") else "no")')"
 # daily cap is 3 on this instance: two more good writes pass, the 4th is 429
 curl -s -o /dev/null -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"a red kite over the beach"}'
 curl -s -o /dev/null -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"a train crossing a bridge"}'
