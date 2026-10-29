@@ -247,6 +247,15 @@
       .story-item-head strong{ font-size:13px; }
       .story-load{ padding:6px 12px; border-radius:999px; border:1px solid transparent; background:var(--accent-grad); color:#fff; font:inherit; font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap; }
       .story-item p{ margin:0; font-size:14px; line-height:1.55; opacity:.92; }
+      .story-chip{ font-size:12px; padding:3px 10px; border-radius:999px; border:1px solid var(--faint); white-space:nowrap; }
+      .story-chip.done{ background:#14532d; color:#bbf7d0; border-color:transparent; }
+      .story-chip.making{ background:#713f12; color:#fde68a; border-color:transparent; }
+      .story-chip.failed{ background:#7f1d1d; color:#fecaca; border-color:transparent; }
+      .story-progress{ font-size:13px; opacity:.85; margin:10px 0 6px; }
+      .story-makeall{ display:inline-block; margin-top:4px; padding:11px 18px; border-radius:999px; border:1px solid transparent; background:var(--accent-grad); color:#fff; font:inherit; font-weight:700; cursor:pointer; }
+      .story-joined{ font-weight:700; margin:10px 0 6px; }
+      .story-final-btn{ display:inline-block; padding:10px 16px; border-radius:999px; background:var(--accent-grad); color:#fff; font-weight:700; text-decoration:none; }
+      .story-rejoin{ margin-inline-start:8px; padding:9px 14px; border-radius:999px; background:transparent; border:1px solid var(--faint); color:inherit; font:inherit; font-size:13px; cursor:pointer; }
       .voice-status{ font-size:13px; opacity:.85; }
       .voice-status.writing{ font-weight:700; opacity:1; }
       #prompt.writing{ border-color:#8b5cf6; box-shadow:0 0 0 3px rgba(139,92,246,.35); }
@@ -1509,6 +1518,8 @@
                 </div>
                 <p class="story-hint" data-i18n="story_hint">Load a clip into the box, press Generate for it, then load the next one. Join the finished clips from My Videos.</p>
                 <div id="storyList"></div>
+                <div id="storyActions"></div>
+                <div id="storyFinal"></div>
               </div>
 
 
@@ -2968,6 +2979,19 @@
           story_failed: { en: "AI couldn't split the story just now — please try again in a moment.", ur: "AI ابھی کہانی نہیں توڑ سکا — تھوڑی دیر بعد دوبارہ کوشش کریں۔" },
           story_need_idea: { en: "Write or speak a story idea first.", ur: "پہلے کہانی کا خیال لکھیں یا بولیں۔" },
           story_loaded: { en: "Clip loaded — now press Generate.", ur: "کلپ لاد دیا گیا ہے — اب Generate دبائیں۔" },
+          story_st_ready: { en: "Prompt ready", ur: "پرامپٹ تیار" },
+          story_st_making: { en: "Making…", ur: "بن رہا ہے…" },
+          story_st_done: { en: "Done", ur: "مکمل" },
+          story_st_failed: { en: "Failed — retry", ur: "ناکام — دوبارہ بنائیں" },
+          story_progress_of: { en: "clips ready", ur: "کلپس تیار" },
+          story_make_all: { en: "Make all clips automatically", ur: "تمام کلپس خودکار بنائیں" },
+          story_make_confirm: { en: "Total cost {n} credits — tap again to confirm", ur: "کل لاگت {n} کریڈٹ — تصدیق کے لیے دوبارہ دبائیں" },
+          story_auto_note: { en: "Keep this page open — clips are made one by one, then joined automatically.", ur: "یہ صفحہ کھلا رکھیں — کلپس ایک ایک کر کے بنیں گے اور آخر میں خود جُڑ جائیں گے۔" },
+          story_joining: { en: "Joining all clips into one video…", ur: "تمام کلپس ایک ویڈیو میں جُڑ رہے ہیں…" },
+          story_join_now: { en: "Join all clips into one video", ur: "تمام کلپس ایک ویڈیو میں جوڑیں" },
+          story_joined: { en: "Your full story video is ready!", ur: "آپ کی مکمل کہانی ویڈیو تیار ہے!" },
+          story_watch: { en: "Watch / download the full video", ur: "مکمل ویڈیو دیکھیں / ڈاؤن لوڈ کریں" },
+          story_rejoin: { en: "Re-join clips", ur: "کلپس دوبارہ جوڑیں" },
           format_label: { en: "Format", ur: "فارمیٹ" },
           length_label: { en: "Length", ur: "دورانیہ" },
           auto_label: { en: "Auto", ur: "خودکار" },
@@ -4865,22 +4889,54 @@
             return null;
           });
         }
+        var LS_STORY_SET = "ajk.storySet.v1";
+        var LS_STORY_PENDING = "ajk.storyPending.v1";
+        var storyJoining = false, storyAuto = false, storyAutoConfirmUntil = 0, storyPrevAuto = null;
+        function storyGetSet() {
+          try { var s = JSON.parse(lsGet(LS_STORY_SET) || "null"); return (s && s.clips && s.clips.length) ? s : null; }
+          catch (e) { return null; }
+        }
+        function storySaveSet(s) { try { lsSet(LS_STORY_SET, JSON.stringify(s)); } catch (e) {} }
+        function storyGetPending() {
+          try { return JSON.parse(lsGet(LS_STORY_PENDING) || "null"); } catch (e) { return null; }
+        }
+        function storyForceDuration10() {
+          $$("#durationSeg button").forEach(function (b) { if (b.textContent.trim().indexOf("10 ") === 0) b.click(); });
+        }
         function renderStoryClips(clips) {
-          var panel = $("#storyPanel"), list = $("#storyList");
+          var s = {
+            id: Date.now(), clips: clips.slice(),
+            genIds: clips.map(function () { return null; }),
+            statuses: clips.map(function () { return "ready"; }),
+            joinedId: null, joinedUrl: null
+          };
+          storySaveSet(s);
+          storyAuto = false;
+          renderStoryPanel();
+        }
+        function renderStoryPanel() {
+          var s = storyGetSet();
+          var panel = $("#storyPanel"), list = $("#storyList"), act = $("#storyActions"), fin = $("#storyFinal");
           if (!panel || !list) return;
+          if (!s) { panel.hidden = true; return; }
           list.innerHTML = "";
-          clips.forEach(function (c, i) {
+          s.clips.forEach(function (c, i) {
             var item = document.createElement("div");
             item.className = "story-item";
             var head = document.createElement("div");
             head.className = "story-item-head";
             var label = document.createElement("strong");
             label.textContent = t("story_clip") + " " + (i + 1) + " · 10s";
+            var chip = document.createElement("span");
+            chip.className = "story-chip " + s.statuses[i];
+            chip.textContent = t("story_st_" + s.statuses[i]);
             var load = document.createElement("button");
             load.type = "button";
             load.className = "story-load";
             load.textContent = t("story_load");
             load.addEventListener("click", function () {
+              lsSet(LS_STORY_PENDING, JSON.stringify({ setId: s.id, index: i }));
+              storyForceDuration10();
               promptEl.value = c;
               promptEl.dispatchEvent(new Event("input"));
               if (window.ajkGo) window.ajkGo("studio");
@@ -4888,6 +4944,7 @@
               toast(t("story_loaded"));
             });
             head.appendChild(label);
+            head.appendChild(chip);
             head.appendChild(load);
             var p = document.createElement("p");
             p.textContent = c;
@@ -4895,7 +4952,190 @@
             item.appendChild(p);
             list.appendChild(item);
           });
+          if (act) {
+            act.innerHTML = "";
+            var remaining = s.statuses.filter(function (x) { return x !== "done"; }).length;
+            var doneCount = s.clips.length - remaining;
+            if (storyJoining) {
+              var jp = document.createElement("p");
+              jp.className = "story-progress";
+              jp.textContent = t("story_joining");
+              act.appendChild(jp);
+            } else if (remaining > 0) {
+              var info = document.createElement("p");
+              info.className = "story-progress";
+              info.textContent = doneCount + " / " + s.clips.length + " " + t("story_progress_of");
+              act.appendChild(info);
+              var mk = document.createElement("button");
+              mk.type = "button";
+              mk.className = "story-makeall";
+              mk.textContent = (Date.now() < storyAutoConfirmUntil) ? storyMakeAllLabel(s) : t("story_make_all");
+              mk.addEventListener("click", function () { storyMakeAllTap(); });
+              act.appendChild(mk);
+              var note = document.createElement("p");
+              note.className = "story-hint";
+              note.textContent = t("story_auto_note");
+              act.appendChild(note);
+            } else if (!s.joinedId) {
+              var jb = document.createElement("button");
+              jb.type = "button";
+              jb.className = "story-makeall";
+              jb.textContent = t("story_join_now");
+              jb.addEventListener("click", function () { storyDoJoin(); });
+              act.appendChild(jb);
+            }
+          }
+          if (fin) {
+            fin.innerHTML = "";
+            if (s.joinedUrl) {
+              var ok = document.createElement("p");
+              ok.className = "story-joined";
+              ok.textContent = t("story_joined");
+              var a = document.createElement("a");
+              a.className = "story-final-btn";
+              a.href = resolveUrl(s.joinedUrl);
+              a.target = "_blank";
+              a.rel = "noopener";
+              a.textContent = t("story_watch");
+              var rj = document.createElement("button");
+              rj.type = "button";
+              rj.className = "story-rejoin";
+              rj.textContent = t("story_rejoin");
+              rj.addEventListener("click", function () { storyDoJoin(); });
+              fin.appendChild(ok);
+              fin.appendChild(a);
+              fin.appendChild(rj);
+            }
+          }
           panel.hidden = false;
+        }
+        function storyMakeAllLabel(s) {
+          var remaining = s.statuses.filter(function (x) { return x !== "done"; }).length;
+          var per = 0;
+          try { per = costFor(10) || 0; } catch (e) { per = 0; }
+          return t("story_make_confirm").replace("{n}", String(per * remaining));
+        }
+        function storyMakeAllTap() {
+          if (storyAuto) return;
+          if (Date.now() < storyAutoConfirmUntil) {
+            storyAutoConfirmUntil = 0;
+            storyAuto = true;
+            storyPrevAuto = state.auto;
+            state.auto = false;
+            var tg = $("#aiAutoToggle");
+            if (tg) tg.checked = false;
+            renderStoryPanel();
+            storyAutoNext();
+          } else {
+            storyForceDuration10();
+            storyAutoConfirmUntil = Date.now() + 6000;
+            renderStoryPanel();
+            setTimeout(function () { if (!storyAuto) renderStoryPanel(); }, 6500);
+          }
+        }
+        function storyAutoStop() {
+          storyAuto = false;
+          if (storyPrevAuto !== null) {
+            state.auto = storyPrevAuto;
+            var tg = $("#aiAutoToggle");
+            if (tg) tg.checked = storyPrevAuto;
+            storyPrevAuto = null;
+          }
+        }
+        function storyAutoNext() {
+          if (!storyAuto) return;
+          var s = storyGetSet();
+          if (!s) { storyAutoStop(); return; }
+          var idx = -1;
+          for (var i = 0; i < s.statuses.length; i++) {
+            if (s.statuses[i] !== "done" && s.statuses[i] !== "making") { idx = i; break; }
+          }
+          if (idx === -1) {
+            storyAutoStop();
+            storyMaybeAutoJoin();
+            return;
+          }
+          lsSet(LS_STORY_PENDING, JSON.stringify({ setId: s.id, index: idx }));
+          storyForceDuration10();
+          promptEl.value = s.clips[idx];
+          promptEl.dispatchEvent(new Event("input"));
+          if (window.ajkGo) window.ajkGo("studio");
+          $("#generateBtn").click();
+          setTimeout(function () {
+            if (!storyAuto) return;
+            var s2 = storyGetSet();
+            if (!s2) return;
+            if (s2.statuses.indexOf("making") === -1 && !state.generating) {
+              storyAutoStop();
+              renderStoryPanel();
+            }
+          }, 15000);
+        }
+        function storyOnJobSubmitted(jobId) {
+          var p = storyGetPending();
+          if (!p) return;
+          var s = storyGetSet();
+          if (!s || s.id !== p.setId) return;
+          if (p.index < 0 || p.index >= s.clips.length) return;
+          s.genIds[p.index] = jobId;
+          s.statuses[p.index] = "making";
+          s.joinedId = null;
+          s.joinedUrl = null;
+          storySaveSet(s);
+          lsSet(LS_STORY_PENDING, "");
+          renderStoryPanel();
+        }
+        function storyOnJobCompleted(g) {
+          var s = storyGetSet();
+          if (!s) return;
+          var i = s.genIds.indexOf(g.id);
+          if (i < 0) return;
+          s.statuses[i] = "done";
+          storySaveSet(s);
+          renderStoryPanel();
+          if (storyAuto) storyAutoNext();
+          else storyMaybeAutoJoin();
+        }
+        function storyOnJobFailed(g) {
+          var s = storyGetSet();
+          if (!s) return;
+          var i = s.genIds.indexOf(g.id);
+          if (i < 0) return;
+          if (s.statuses[i] === "making") {
+            s.statuses[i] = "failed";
+            storySaveSet(s);
+          }
+          if (storyAuto) storyAutoStop();
+          renderStoryPanel();
+        }
+        function storyMaybeAutoJoin() {
+          var s = storyGetSet();
+          if (!s || storyJoining || s.joinedId) return;
+          if (!s.statuses.every(function (x) { return x === "done"; })) return;
+          storyDoJoin();
+        }
+        function storyDoJoin() {
+          var s = storyGetSet();
+          if (!s || storyJoining) return;
+          if (!token) return;
+          storyJoining = true;
+          renderStoryPanel();
+          api("/api/generations/join", { method: "POST", body: { ids: s.genIds.slice() } }).then(function (res) {
+            storyJoining = false;
+            var s2 = storyGetSet();
+            if (s2 && res.ok && res.data && res.data.generation) {
+              s2.joinedId = res.data.generation.id;
+              s2.joinedUrl = res.data.generation.video_url || null;
+              storySaveSet(s2);
+              toast(t("story_joined"));
+              loadHistory();
+            }
+            renderStoryPanel();
+          });
+        }
+        if (storyGetSet()) {
+          renderStoryPanel();
+          if (token) setTimeout(function () { storyMaybeAutoJoin(); }, 4000);
         }
         function storyStart() {
           var v = promptEl.value.trim();
@@ -5112,6 +5352,7 @@
                 return;
               }
               state.currentJobId = res.data.id;
+              storyOnJobSubmitted(res.data.id);
               state.lastStudioJob = { id: res.data.id, prompt: prompt };
               if (res.data.credits_left !== undefined) setCredits(res.data.credits_left);
               setStage("submit", "done");
@@ -5330,6 +5571,7 @@
               actions.innerHTML = "";
               addVideoActions(actions, g);
               loadHistory();
+              storyOnJobCompleted(g);
               return;
             }
             if (status === "failed") {
@@ -5345,6 +5587,7 @@
               actions2.appendChild(rp);
               loadMe();
               loadHistory();
+              storyOnJobFailed(g);
               return;
             }
             state.pollCount++;
