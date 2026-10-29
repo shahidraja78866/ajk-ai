@@ -37,6 +37,12 @@ http.createServer((req, res) => {
       res.writeHead(500);
       return res.end('stub gemini failure');
     }
+    if (raw.includes('inline_data')) {
+      // Image-prompt mode: reply with one canned image-to-video prompt.
+      const imgOut = 'IMAGE PROMPT: the uploaded photo comes alive — the main subject turns gently toward the camera and smiles as a soft breeze moves through the scene, slow cinematic push-in, warm natural light and lifelike motion throughout the shot.';
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ candidates: [{ content: { parts: [{ text: imgOut }] } }] }));
+    }
     if (fullText.includes('10-second clips')) {
       // Story mode: reply with a JSON array of three scene prompts.
       const clips = [

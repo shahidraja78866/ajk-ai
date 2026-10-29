@@ -3962,6 +3962,101 @@ app.post('/api/prompt/story', auth, promptWriteLimiter, async (req, res) => {
   }
 });
 
+// ---------- AI image prompt (owner spec point 4, 2026-10-29) ----------
+// POST /api/prompt/image { image_base64, note? } -> { prompt }
+// The customer uploads a photo and (optionally) says what should move;
+// Gemini vision looks at the photo itself and writes the full English
+// image-to-video prompt. Same free key, same prompt_writes caps, fails
+// closed when unconfigured. The image is used for this one call only —
+// it is never stored by this endpoint.
+const IMAGE_PROMPT_SYSTEM =
+  'You are the prompt writer inside an AI image-to-video app. Look at the attached image: it is the opening frame of the video. ' +
+  'Reply with ONE detailed English image-to-video prompt only: no explanations, no quotes, no markdown, no preamble. ' +
+  'Describe the subject and scene exactly as seen in the image, then the natural motion and action that should happen, camera movement, lighting, mood and visual style. ' +
+  'Aim for 45-80 words and end with a full stop.';
+async function callGeminiImageOnce(model, mime, data, note) {
+  const url = `${CONFIG.promptAiBase}/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 30000);
+  try {
+    const r = await fetch(url, {
+      method: 'POST', signal: ctrl.signal,
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': CONFIG.geminiApiKey },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: IMAGE_PROMPT_SYSTEM }] },
+        contents: [{ parts: [
+          { text: note ? `The user asks for this motion/content: ${note}` : 'Animate this image in the most natural way for what it shows.' },
+          { inline_data: { mime_type: mime, data } },
+        ] }],
+        generationConfig: { temperature: 0.7, maxOutputTokens: 1024 },
+      }),
+    });
+    if (!r.ok) {
+      const err = new Error(`gemini image writer (${model}) returned ${r.status}`);
+      err.status = r.status;
+      throw err;
+    }
+    const j = await r.json();
+    let text = ((((j.candidates || [])[0] || {}).content || {}).parts || [])
+      .filter(p => !p.thought)
+      .map(p => p.text || '').join('').trim();
+    const nl = text.indexOf('\n');
+    if (nl > 0 && nl < 60 && /[:：]\s*(\*\*)?\s*$/.test(text.slice(0, nl)))
+      text = text.slice(nl + 1).trim();
+    if (text.length < 80 || !/[.!?…]["']?$/.test(text))
+      throw new Error('gemini image writer returned a truncated prompt');
+    return trimPromptTo480(text);
+  } finally { clearTimeout(timer); }
+}
+async function writeImagePromptWithGemini(mime, data, note) {
+  let lastErr;
+  for (const model of PROMPT_AI_MODELS) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try { return await callGeminiImageOnce(model, mime, data, note); }
+      catch (e) {
+        lastErr = e;
+        if (e.status && e.status >= 400 && e.status < 500 && e.status !== 429) break;
+        if (attempt === 0) await new Promise(r => setTimeout(r, 1500));
+      }
+    }
+  }
+  throw lastErr;
+}
+
+app.post('/api/prompt/image', auth, promptWriteLimiter, async (req, res) => {
+  if (!CONFIG.geminiApiKey)
+    return res.status(503).json({ error: 'prompt_ai_not_configured', message: 'AI prompt writing is not switched on yet.' });
+  const b = req.body || {};
+  let raw64 = String(b.image_base64 ?? '');
+  let mime = String(b.content_type || '').toLowerCase();
+  const dm = raw64.match(/^data:(image\/(?:png|jpeg|webp));base64,([\s\S]+)$/);
+  if (dm) { mime = dm[1]; raw64 = dm[2]; }
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(mime))
+    return res.status(400).json({ error: 'Please attach a PNG, JPEG or WebP image.' });
+  const data = raw64.replace(/\s+/g, '');
+  if (!data || data.length > 7500000 || !/^[A-Za-z0-9+/=]+$/.test(data))
+    return res.status(400).json({ error: 'That image could not be read — please try another one.' });
+  const note = String(b.note ?? '').trim().slice(0, 300);
+  if (note && moderated(note))
+    return res.status(400).json({ error: 'This request was blocked by content moderation. Please rephrase it.' });
+  const mine = db.prepare(
+    `SELECT COUNT(*) AS c FROM prompt_writes WHERE user_id = ? AND date(created_at) = date('now')`).get(req.user.id).c;
+  if (Number(mine) >= CONFIG.promptWriteDailyCap)
+    return res.status(429).json({ error: `Daily AI prompt limit reached (${CONFIG.promptWriteDailyCap} per day). It resets tomorrow.` });
+  const globalCount = db.prepare(
+    `SELECT COUNT(*) AS c FROM prompt_writes WHERE date(created_at) = date('now')`).get().c;
+  if (Number(globalCount) >= CONFIG.promptWriteGlobalDailyCap)
+    return res.status(429).json({ error: 'AI prompt writing is busy right now — please try again later.' });
+  try {
+    const prompt = await writeImagePromptWithGemini(mime, data, note);
+    db.prepare('INSERT INTO prompt_writes (user_id) VALUES (?)').run(req.user.id);
+    return res.json({ prompt });
+  } catch (e) {
+    console.error('image prompt write failed:', e.message);
+    return res.status(502).json({ error: 'The AI could not look at this image just now. Please try again in a moment.' });
+  }
+});
+
 app.post('/api/generate/plan', auth, generateLimiter, async (req, res) => {
   const b = req.body || {};
   const prompt = b.prompt;
