@@ -2924,6 +2924,9 @@
           voice_mic_denied: { en: "Microphone permission is needed for voice typing.", ur: "آواز لکھنے کے لیے مائیک کی اجازت درکار ہے۔" },
           voice_failed: { en: "Voice typing failed — please type instead.", ur: "آواز سے لکھنا نہیں ہو سکا — لکھ کر آزمائیں۔" },
           voice_signin: { en: "Sign in so AI can write the full prompt from your words.", ur: "سائن اِن کریں تاکہ AI آپ کی بات سے مکمل پرامپٹ لکھ سکے۔" },
+          voice_busy_retry: { en: "AI is busy — trying once more…", ur: "AI ابھی مصروف ہے — ایک بار پھر کوشش ہو رہی ہے…" },
+          voice_write_failed: { en: "AI couldn't write it just now — your words are safe in the box. Tap the AI button to try again.", ur: "AI ابھی لکھ نہیں سکا — آپ کی بات خانے میں محفوظ ہے۔ AI والا بٹن دبا کر دوبارہ کوشش کریں۔" },
+          voice_written: { en: "AI wrote the full prompt below.", ur: "AI نے مکمل پرامپٹ لکھ دیا ہے۔" },
           format_label: { en: "Format", ur: "فارمیٹ" },
           length_label: { en: "Length", ur: "دورانیہ" },
           auto_label: { en: "Auto", ur: "خودکار" },
@@ -4611,6 +4614,23 @@
           ", dramatic clouds, slow cinematic pan, atmospheric haze, film look"
         ];
         var enhanceIdx = 0;
+        /* Shared AI prompt-writer call (2026-10-29): resolves to the
+           written prompt, or null on failure. On a busy/upstream failure
+           (502/503/network) it waits and retries ONCE by itself — the
+           free Gemini tier is briefly busy at times, and the user should
+           not have to notice or tap again. */
+        function aiWritePrompt(idea, attempt) {
+          var modeCard = document.querySelector(".mode-card.sel");
+          var selMode = modeCard ? modeCard.getAttribute("data-mode") : "realistic";
+          return api("/api/prompt/write", { method: "POST", body: { idea: idea, mode: selMode } }).then(function (res) {
+            if (res.ok && res.data && res.data.prompt) return res.data.prompt;
+            if (!attempt && (res.status === 502 || res.status === 503 || res.network)) {
+              toast(t("voice_busy_retry"));
+              return new Promise(function (resolve) { setTimeout(resolve, 4000); }).then(function () { return aiWritePrompt(idea, 1); });
+            }
+            return null;
+          });
+        }
         $("#enhanceBtn").addEventListener("click", function () {
           var v = promptEl.value.trim();
           // AI prompt writer (2026-10-29): when configured server-side,
@@ -4623,17 +4643,13 @@
             if (aiBtn.disabled) return;
             aiBtn.disabled = true;
             toast("AI is writing your prompt…");
-            var modeCard = document.querySelector(".mode-card.sel");
-            var selMode = modeCard ? modeCard.getAttribute("data-mode") : "realistic";
-            api("/api/prompt/write", { method: "POST", body: { idea: v, mode: selMode } }).then(function (res) {
+            aiWritePrompt(v).then(function (p) {
               aiBtn.disabled = false;
-              if (!res.ok) { showError(errText(res, "AI prompt writing failed")); return; }
-              if (res.data && res.data.prompt) {
-                promptEl.value = res.data.prompt;
-                promptEl.dispatchEvent(new Event("input"));
-                toast("AI wrote your prompt — edit it if you like, then press Generate.");
-                promptEl.focus();
-              }
+              if (!p) { showError(t("voice_write_failed")); return; }
+              promptEl.value = p;
+              promptEl.dispatchEvent(new Event("input"));
+              toast("AI wrote your prompt — edit it if you like, then press Generate.");
+              promptEl.focus();
             });
             return;
           }
@@ -4667,49 +4683,46 @@
             voiceBtns.forEach(function (b) { b.classList.toggle("listening", on); });
             voiceStatus(on ? t("voice_listening") : "");
           }
+          var voiceWriting = false;
           function voiceWritePrompt(idea) {
-            if (!token) { toast(t("voice_signin")); return; }
+            if (!token) { toast(t("voice_signin")); voiceStatus(t("voice_signin")); return; }
             if (!(cfg && cfg.prompt_ai && cfg.prompt_ai.configured)) { toast(t("voice_typed")); return; }
+            voiceWriting = true;
             toast(t("voice_writing"));
-            var modeCard = document.querySelector(".mode-card.sel");
-            var selMode = modeCard ? modeCard.getAttribute("data-mode") : "realistic";
-            api("/api/prompt/write", { method: "POST", body: { idea: idea, mode: selMode } }).then(function (res) {
-              if (!res.ok) { showError(errText(res, "AI prompt writing failed")); return; }
-              if (res.data && res.data.prompt) {
-                promptEl.value = res.data.prompt;
-                promptEl.dispatchEvent(new Event("input"));
-                toast(t("voice_ready"));
-                promptEl.focus();
-              }
+            voiceStatus(t("voice_writing"));
+            aiWritePrompt(idea).then(function (p) {
+              voiceWriting = false;
+              if (!p) { voiceStatus(t("voice_write_failed")); showError(t("voice_write_failed")); return; }
+              promptEl.value = p;
+              promptEl.dispatchEvent(new Event("input"));
+              voiceStatus(t("voice_written"));
+              toast(t("voice_ready"));
+              promptEl.focus();
             });
           }
           function voiceStart() {
+            if (voiceWriting) return;
             if (voiceListening) { try { recog.stop(); } catch (e) {} return; }
             hideError();
             recog = new VoiceSR();
-            recog.lang = uiLang === "en" ? "en-US" : "ur-PK";
+            // Recognition language is ALWAYS Urdu (Pakistan): our users
+            // speak Urdu even when the interface is in English — the
+            // owner's own phone test (2026-10-29) had an en-US recognizer
+            // return his Urdu speech in Roman script. The AI writer
+            // accepts any language, so Urdu recognition is the safe
+            // default for this audience.
+            recog.lang = "ur-PK";
             recog.interimResults = true;
             recog.continuous = false;
             recog.maxAlternatives = 1;
             var base = promptEl.value.trim();
             var finalText = "";
-            recog.onresult = function (ev) {
-              var interim = "";
-              for (var i = ev.resultIndex; i < ev.results.length; i++) {
-                var r = ev.results[i];
-                if (r.isFinal) finalText += r[0].transcript;
-                else interim += r[0].transcript;
-              }
-              promptEl.value = ((base ? base + " " : "") + finalText + interim).slice(0, 500);
-              promptEl.dispatchEvent(new Event("input"));
-            };
-            recog.onerror = function (ev) {
-              voiceState(false);
-              if (ev.error === "not-allowed" || ev.error === "service-not-allowed") showError(t("voice_mic_denied"));
-              else if (ev.error === "no-speech") { if (!finalText) showError(t("voice_nohear")); }
-              else if (ev.error !== "aborted") showError(t("voice_failed"));
-            };
-            recog.onend = function () {
+            var dead = false, finalized = false;
+            function finalize() {
+              if (finalized) return;
+              finalized = true;
+              dead = true;
+              try { recog.stop(); } catch (e) {}
               voiceState(false);
               var heard = finalText.trim();
               if (heard) {
@@ -4718,6 +4731,35 @@
                 promptEl.dispatchEvent(new Event("input"));
                 voiceWritePrompt(full);
               }
+            }
+            recog.onresult = function (ev) {
+              if (dead) return;
+              var interim = "", gotFinal = false;
+              for (var i = ev.resultIndex; i < ev.results.length; i++) {
+                var r = ev.results[i];
+                if (r.isFinal) { finalText += r[0].transcript; gotFinal = true; }
+                else interim += r[0].transcript;
+              }
+              promptEl.value = ((base ? base + " " : "") + finalText + interim).slice(0, 500);
+              promptEl.dispatchEvent(new Event("input"));
+              // Stop the moment one complete utterance lands (owner's
+              // phone test, 2026-10-29): while recognition kept
+              // listening, his next words overwrote the AI-written
+              // prompt in the box. Finalize now; ignore later events.
+              if (gotFinal) finalize();
+            };
+            recog.onerror = function (ev) {
+              if (dead) return;
+              dead = true;
+              voiceState(false);
+              if (ev.error === "not-allowed" || ev.error === "service-not-allowed") showError(t("voice_mic_denied"));
+              else if (ev.error === "no-speech") { if (!finalText) showError(t("voice_nohear")); }
+              else if (ev.error !== "aborted") showError(t("voice_failed"));
+            };
+            recog.onend = function () {
+              if (!finalized && finalText) { finalize(); return; }
+              dead = true;
+              voiceState(false);
             };
             try {
               recog.start();
