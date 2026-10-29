@@ -3779,7 +3779,10 @@ async function callGeminiWriterOnce(model, userText) {
       body: JSON.stringify({
         system_instruction: { parts: [{ text: PROMPT_WRITER_SYSTEM }] },
         contents: [{ parts: [{ text: userText }] }],
-        generationConfig: { temperature: 0.8, maxOutputTokens: 400 },
+        // 1024, not 400: on Gemini 3.x Flash the budget also covers the
+        // model's internal reasoning, and a 400 cap truncated the actual
+        // prompt mid-sentence in the first production tests (2026-10-29).
+        generationConfig: { temperature: 0.8, maxOutputTokens: 1024 },
       }),
     });
     if (!r.ok) {
@@ -3788,9 +3791,20 @@ async function callGeminiWriterOnce(model, userText) {
       throw err;
     }
     const j = await r.json();
-    const text = ((((j.candidates || [])[0] || {}).content || {}).parts || [])
+    let text = ((((j.candidates || [])[0] || {}).content || {}).parts || [])
+      .filter(p => !p.thought)
       .map(p => p.text || '').join('').trim();
-    if (text.length < 20) throw new Error('gemini prompt writer returned an empty/too-short prompt');
+    // Drop a leading label line ("**Video Prompt:**" and friends) if the
+    // model adds one despite the system instruction.
+    const nl = text.indexOf('\n');
+    if (nl > 0 && nl < 60 && /[:：]\s*(\*\*)?\s*$/.test(text.slice(0, nl)))
+      text = text.slice(nl + 1).trim();
+    // A real written prompt is a full paragraph (the system prompt asks
+    // for 60-110 words) ending in terminal punctuation; anything shorter
+    // or cut off mid-sentence is a truncated answer — treat it as a
+    // failure so the retry/fallback chain runs.
+    if (text.length < 120 || !/[.!?…]["']?$/.test(text))
+      throw new Error('gemini prompt writer returned a truncated prompt');
     return text.slice(0, 1200);
   } finally { clearTimeout(timer); }
 }

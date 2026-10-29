@@ -36,6 +36,13 @@ http.createServer((req, res) => {
       res.writeHead(500);
       return res.end('stub gemini failure');
     }
+    if (idea.includes('TRUNC')) {
+      // A cut-off fragment: long enough to pass a naive length check,
+      // but no terminal punctuation — the writer must reject and retry,
+      // and with the stub always truncating, the endpoint must end 502.
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'A cinematic photorealistic close-up shot of an elderly man' }] } }] }));
+    }
     if (!served503) {
       served503 = true;
       res.writeHead(503);

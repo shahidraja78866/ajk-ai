@@ -2388,6 +2388,8 @@ PW_SHORT=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/prompt/write 
 check "prompt ai: 2-char idea -> 400" "400" "$PW_SHORT"
 PW_FAIL=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"FAILME please"}')
 check "prompt ai: upstream failure -> 502" "502" "$PW_FAIL"
+PW_TRUNC=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"TRUNC this one please"}')
+check "prompt ai: truncated upstream answer -> 502 (never served to users)" "502" "$PW_TRUNC"
 # daily cap is 3 on this instance: two more good writes pass, the 4th is 429
 curl -s -o /dev/null -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"a red kite over the beach"}'
 curl -s -o /dev/null -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"a train crossing a bridge"}'
