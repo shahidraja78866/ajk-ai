@@ -7,12 +7,15 @@
 //     -> Gemini-shaped body whose text reads "EXPANDED PROMPT: <idea> …"
 //        (<idea> = the text after "User idea:" in the request)
 //   An idea containing "FAILME" gets an HTTP 500 (writer-failure test).
+//   The very FIRST non-FAILME request gets a one-time HTTP 503, so the
+//   happy-path test also proves the writer's retry/fallback recovers.
 //
 // Run:  node test-gemini-stub.js   (port: GEMINI_STUB_PORT, default 18197 —
 // outside the 180xx block, which the rest of the suite has fully claimed)
 import http from 'node:http';
 
 const port = Number(process.env.GEMINI_STUB_PORT || 18197);
+let served503 = false;
 
 http.createServer((req, res) => {
   const u = new URL(req.url, 'http://127.0.0.1');
@@ -32,6 +35,11 @@ http.createServer((req, res) => {
     if (idea.includes('FAILME')) {
       res.writeHead(500);
       return res.end('stub gemini failure');
+    }
+    if (!served503) {
+      served503 = true;
+      res.writeHead(503);
+      return res.end('stub transient overload');
     }
     const out = `EXPANDED PROMPT: ${idea} — a richly detailed cinematic scene, soft natural light, smooth tracking camera, lifelike motion and atmosphere throughout the shot.`;
     res.writeHead(200, { 'Content-Type': 'application/json' });

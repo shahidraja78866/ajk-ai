@@ -3763,13 +3763,15 @@ const PROMPT_WRITER_SYSTEM =
   'Include the main subject and appearance, the action, the setting and environment, camera movement, lighting, mood and visual style. ' +
   "Keep people's names and place names exactly as the user wrote them. Aim for 60-110 words. " +
   'Default to photorealistic live action unless the idea itself asks for cartoon or animation.';
-async function writePromptWithGemini(idea, mode) {
-  const url = `${CONFIG.promptAiBase}/v1beta/models/${encodeURIComponent(CONFIG.promptAiModel)}:generateContent`;
-  const userText = (mode === 'cartoon')
-    ? `Visual style: cheerful 3D cartoon animation.\n\nUser idea: ${idea}`
-    : `Visual style: photorealistic live action.\n\nUser idea: ${idea}`;
+// The free tier answers 503 ("model overloaded") fairly often on the
+// newest Flash model, so the writer walks a small model chain with one
+// retry per model before giving up (live evidence 2026-10-29: first
+// production calls hit a >20s stall and then a 503).
+const PROMPT_AI_MODELS = [...new Set([CONFIG.promptAiModel, 'gemini-3.6-flash'])];
+async function callGeminiWriterOnce(model, userText) {
+  const url = `${CONFIG.promptAiBase}/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 20000);
+  const timer = setTimeout(() => ctrl.abort(), 25000);
   try {
     const r = await fetch(url, {
       method: 'POST', signal: ctrl.signal,
@@ -3780,13 +3782,35 @@ async function writePromptWithGemini(idea, mode) {
         generationConfig: { temperature: 0.8, maxOutputTokens: 400 },
       }),
     });
-    if (!r.ok) throw new Error(`gemini prompt writer returned ${r.status}`);
+    if (!r.ok) {
+      const err = new Error(`gemini prompt writer (${model}) returned ${r.status}`);
+      err.status = r.status;
+      throw err;
+    }
     const j = await r.json();
     const text = ((((j.candidates || [])[0] || {}).content || {}).parts || [])
       .map(p => p.text || '').join('').trim();
     if (text.length < 20) throw new Error('gemini prompt writer returned an empty/too-short prompt');
     return text.slice(0, 1200);
   } finally { clearTimeout(timer); }
+}
+async function writePromptWithGemini(idea, mode) {
+  const userText = (mode === 'cartoon')
+    ? `Visual style: cheerful 3D cartoon animation.\n\nUser idea: ${idea}`
+    : `Visual style: photorealistic live action.\n\nUser idea: ${idea}`;
+  let lastErr;
+  for (const model of PROMPT_AI_MODELS) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try { return await callGeminiWriterOnce(model, userText); }
+      catch (e) {
+        lastErr = e;
+        // A 4xx (except 429) will not heal on the same model — move on.
+        if (e.status && e.status >= 400 && e.status < 500 && e.status !== 429) break;
+        if (attempt === 0) await new Promise(r => setTimeout(r, 1500));
+      }
+    }
+  }
+  throw lastErr;
 }
 
 app.post('/api/prompt/write', auth, promptWriteLimiter, async (req, res) => {
