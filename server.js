@@ -3761,7 +3761,7 @@ const PROMPT_WRITER_SYSTEM =
   'You are the prompt writer inside an AI text-to-video app. The user gives a rough idea in any language (often Urdu or English). ' +
   'Reply with ONE detailed English video-generation prompt only: no explanations, no quotes, no markdown, no preamble. ' +
   'Include the main subject and appearance, the action, the setting and environment, camera movement, lighting, mood and visual style. ' +
-  "Keep people's names and place names exactly as the user wrote them. Aim for 60-110 words. " +
+  "Keep people's names and place names exactly as the user wrote them. Aim for 45-80 words. " +
   'Default to photorealistic live action unless the idea itself asks for cartoon or animation.';
 // The free tier answers 503 ("model overloaded") fairly often on the
 // newest Flash model, so the writer walks a small model chain with one
@@ -3805,7 +3805,16 @@ async function callGeminiWriterOnce(model, userText) {
     // failure so the retry/fallback chain runs.
     if (text.length < 120 || !/[.!?…]["']?$/.test(text))
       throw new Error('gemini prompt writer returned a truncated prompt');
-    return text.slice(0, 1200);
+    // The prompt box (and generation) caps prompts at 500 characters:
+    // trim an over-long answer at a sentence boundary so the user never
+    // sees a "637 / 500" counter or a mid-sentence cut (owner's phone
+    // test, 2026-10-29).
+    if (text.length > 480) {
+      const cut = text.slice(0, 480);
+      const end = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+      text = end > 120 ? cut.slice(0, end + 1) : cut.trim();
+    }
+    return text;
   } finally { clearTimeout(timer); }
 }
 async function writePromptWithGemini(idea, mode) {

@@ -2390,6 +2390,9 @@ PW_FAIL=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/prompt/write -
 check "prompt ai: upstream failure -> 502" "502" "$PW_FAIL"
 PW_TRUNC=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"TRUNC this one please"}')
 check "prompt ai: truncated upstream answer -> 502 (never served to users)" "502" "$PW_TRUNC"
+UT28B=$(curl -s -X POST $B28/api/auth/register -H 'Content-Type: application/json' -d '{"email":"pwlong@example.com","password":"password123"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+PW_LONG=$(curl -s -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28B" -H 'Content-Type: application/json' -d '{"idea":"LONGPROMPT please"}' | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const p=(JSON.parse(s).prompt||'');console.log(p.length<=480 && p.endsWith('.') ? 'ok:'+p.length : 'bad:'+p.length)}catch(e){console.log('bad:parse')}})")
+check "prompt ai: over-long answer trimmed to <=480 at a sentence end" "ok" "$(echo "$PW_LONG" | cut -d: -f1)"
 # daily cap is 3 on this instance: two more good writes pass, the 4th is 429
 curl -s -o /dev/null -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"a red kite over the beach"}'
 curl -s -o /dev/null -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"a train crossing a bridge"}'

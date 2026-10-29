@@ -36,6 +36,13 @@ http.createServer((req, res) => {
       res.writeHead(500);
       return res.end('stub gemini failure');
     }
+    if (idea.includes('LONGPROMPT')) {
+      // A valid but over-long answer (~700 chars, complete sentences):
+      // the writer must trim it to <=480 chars at a sentence boundary.
+      const long = 'First sentence of a very detailed cinematic scene with rich light and motion. Second sentence adds characters, costumes and the busy street around them. Third sentence describes the camera gliding forward through warm evening haze. Fourth sentence brings in sound, weather and small background details everywhere. Fifth sentence continues with more atmosphere, gestures and expressions. Sixth sentence is pure extra padding to push this answer far beyond the limit. Seventh sentence keeps going so the raw text is well over seven hundred characters long in total. Eighth and final sentence closes the scene.';
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ candidates: [{ content: { parts: [{ text: long }] } }] }));
+    }
     if (idea.includes('TRUNC')) {
       // A cut-off fragment: long enough to pass a naive length check,
       // but no terminal punctuation — the writer must reject and retry,
