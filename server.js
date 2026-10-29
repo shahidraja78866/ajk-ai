@@ -3768,6 +3768,16 @@ const PROMPT_WRITER_SYSTEM =
 // retry per model before giving up (live evidence 2026-10-29: first
 // production calls hit a >20s stall and then a 503).
 const PROMPT_AI_MODELS = [...new Set([CONFIG.promptAiModel, 'gemini-3.6-flash'])];
+// The prompt box (and generation) caps prompts at 500 characters: trim
+// an over-long answer at a sentence boundary so the user never sees a
+// "637 / 500" counter or a mid-sentence cut (owner's phone test,
+// 2026-10-29). Shared by the single-prompt writer and the story writer.
+function trimPromptTo480(text) {
+  if (text.length <= 480) return text;
+  const cut = text.slice(0, 480);
+  const end = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+  return end > 120 ? cut.slice(0, end + 1) : cut.trim();
+}
 async function callGeminiWriterOnce(model, userText) {
   const url = `${CONFIG.promptAiBase}/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   const ctrl = new AbortController();
@@ -3805,16 +3815,7 @@ async function callGeminiWriterOnce(model, userText) {
     // failure so the retry/fallback chain runs.
     if (text.length < 120 || !/[.!?…]["']?$/.test(text))
       throw new Error('gemini prompt writer returned a truncated prompt');
-    // The prompt box (and generation) caps prompts at 500 characters:
-    // trim an over-long answer at a sentence boundary so the user never
-    // sees a "637 / 500" counter or a mid-sentence cut (owner's phone
-    // test, 2026-10-29).
-    if (text.length > 480) {
-      const cut = text.slice(0, 480);
-      const end = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
-      text = end > 120 ? cut.slice(0, end + 1) : cut.trim();
-    }
-    return text;
+    return trimPromptTo480(text);
   } finally { clearTimeout(timer); }
 }
 async function writePromptWithGemini(idea, mode) {
@@ -3861,6 +3862,103 @@ app.post('/api/prompt/write', auth, promptWriteLimiter, async (req, res) => {
   } catch (e) {
     console.error('prompt write failed:', e.message);
     return res.status(502).json({ error: 'The AI prompt writer could not answer just now. Please try again in a moment.' });
+  }
+});
+
+// ---------- AI story clips (owner directive 2026-10-29) ----------------
+// POST /api/prompt/story { idea, mode? } -> { clips: [prompt, ...] }
+// Breaks an idea/story into a sequence of self-contained prompts, ONE
+// per 10-second clip (3-6 clips), with the same characters and setting
+// described identically in every clip so the joined story stays
+// consistent. Free for users; shares the prompt_writes daily caps with
+// the single-prompt writer (one row per call, however many clips).
+const STORY_WRITER_SYSTEM =
+  'You are the story writer inside an AI text-to-video app. The user gives a story idea in any language (often Urdu or English). ' +
+  'Break the story into a sequence of scenes, ONE scene per 10-second video clip, between 3 and 6 clips. ' +
+  'Reply with ONLY a JSON array of strings: no explanations, no markdown, no code fences. ' +
+  'Each string is ONE complete English video-generation prompt for that clip: the main subject and appearance (described IDENTICALLY in every clip so the story stays consistent), the action in this scene, the setting, camera movement, lighting, mood and visual style. ' +
+  "Keep people's names and place names exactly as the user wrote them. Each scene prompt must be 40-70 words and must work on its own. " +
+  'Together the scenes must tell the whole story in order: beginning, middle, and end. ' +
+  'Default to photorealistic live action unless the idea itself asks for cartoon or animation.';
+async function callGeminiStoryOnce(model, userText) {
+  const url = `${CONFIG.promptAiBase}/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 40000);
+  try {
+    const r = await fetch(url, {
+      method: 'POST', signal: ctrl.signal,
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': CONFIG.geminiApiKey },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: STORY_WRITER_SYSTEM }] },
+        contents: [{ parts: [{ text: userText }] }],
+        generationConfig: { temperature: 0.8, maxOutputTokens: 2048 },
+      }),
+    });
+    if (!r.ok) {
+      const err = new Error(`gemini story writer (${model}) returned ${r.status}`);
+      err.status = r.status;
+      throw err;
+    }
+    const j = await r.json();
+    let text = ((((j.candidates || [])[0] || {}).content || {}).parts || [])
+      .filter(p => !p.thought)
+      .map(p => p.text || '').join('').trim();
+    text = text.replace(/```(?:json)?/gi, '').trim();
+    const start = text.indexOf('[');
+    const stop = text.lastIndexOf(']');
+    if (start < 0 || stop <= start) throw new Error('gemini story writer returned no JSON array');
+    let arr;
+    try { arr = JSON.parse(text.slice(start, stop + 1)); }
+    catch { throw new Error('gemini story writer returned unparseable JSON'); }
+    if (!Array.isArray(arr)) throw new Error('gemini story writer returned a non-array');
+    const clips = arr.map(x => trimPromptTo480(String(x || '').trim())).filter(x => x.length >= 40);
+    if (clips.length < 2) throw new Error('gemini story writer returned too few usable clips');
+    return clips.slice(0, 6);
+  } finally { clearTimeout(timer); }
+}
+async function writeStoryWithGemini(idea, mode) {
+  const userText = (mode === 'cartoon')
+    ? `Visual style: cheerful 3D cartoon animation.\n\nBreak this story into 10-second clips.\n\nUser idea: ${idea}`
+    : `Visual style: photorealistic live action.\n\nBreak this story into 10-second clips.\n\nUser idea: ${idea}`;
+  let lastErr;
+  for (const model of PROMPT_AI_MODELS) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try { return await callGeminiStoryOnce(model, userText); }
+      catch (e) {
+        lastErr = e;
+        if (e.status && e.status >= 400 && e.status < 500 && e.status !== 429) break;
+        if (attempt === 0) await new Promise(r => setTimeout(r, 1500));
+      }
+    }
+  }
+  throw lastErr;
+}
+
+app.post('/api/prompt/story', auth, promptWriteLimiter, async (req, res) => {
+  if (!CONFIG.geminiApiKey)
+    return res.status(503).json({ error: 'prompt_ai_not_configured', message: 'AI story writing is not switched on yet.' });
+  const b = req.body || {};
+  const idea = String(b.idea ?? '').trim();
+  if (idea.length < 3 || idea.length > 1000)
+    return res.status(400).json({ error: 'Please write a short story idea first (3-1000 characters).' });
+  if (moderated(idea))
+    return res.status(400).json({ error: 'This idea was blocked by content moderation. Please rephrase it.' });
+  const mode = String(b.mode || '').toLowerCase() === 'cartoon' ? 'cartoon' : 'realistic';
+  const mine = db.prepare(
+    `SELECT COUNT(*) AS c FROM prompt_writes WHERE user_id = ? AND date(created_at) = date('now')`).get(req.user.id).c;
+  if (Number(mine) >= CONFIG.promptWriteDailyCap)
+    return res.status(429).json({ error: `Daily AI prompt limit reached (${CONFIG.promptWriteDailyCap} per day). It resets tomorrow.` });
+  const globalCount = db.prepare(
+    `SELECT COUNT(*) AS c FROM prompt_writes WHERE date(created_at) = date('now')`).get().c;
+  if (Number(globalCount) >= CONFIG.promptWriteGlobalDailyCap)
+    return res.status(429).json({ error: 'AI story writing is busy right now — please try again later.' });
+  try {
+    const clips = await writeStoryWithGemini(idea, mode);
+    db.prepare('INSERT INTO prompt_writes (user_id) VALUES (?)').run(req.user.id);
+    return res.json({ clips });
+  } catch (e) {
+    console.error('story write failed:', e.message);
+    return res.status(502).json({ error: 'The AI story writer could not answer just now. Please try again in a moment.' });
   }
 });
 

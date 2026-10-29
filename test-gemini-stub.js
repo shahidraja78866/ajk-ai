@@ -27,14 +27,25 @@ http.createServer((req, res) => {
   req.on('data', (c) => { raw += c; });
   req.on('end', () => {
     let idea = '';
+    let fullText = '';
     try {
       const j = JSON.parse(raw);
-      const text = j?.contents?.[0]?.parts?.[0]?.text || '';
-      idea = text.split('User idea:').pop().trim();
+      fullText = j?.contents?.[0]?.parts?.[0]?.text || '';
+      idea = fullText.split('User idea:').pop().trim();
     } catch { /* fall through with empty idea */ }
     if (idea.includes('FAILME')) {
       res.writeHead(500);
       return res.end('stub gemini failure');
+    }
+    if (fullText.includes('10-second clips')) {
+      // Story mode: reply with a JSON array of three scene prompts.
+      const clips = [
+        `Scene one begins the story: ${idea} — the hero appears in warm morning light, wide establishing shot, gentle camera push-in, hopeful mood throughout.`,
+        `Scene two continues the story: ${idea} — the same hero faces a challenge at midday, tracking shot through the busy street, tense and dramatic mood.`,
+        `Scene three ends the story: ${idea} — the same hero smiles at sunset as everything resolves, slow crane shot, golden light and a peaceful final mood.`,
+      ];
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(clips) }] } }] }));
     }
     if (idea.includes('LONGPROMPT')) {
       // A valid but over-long answer (~700 chars, complete sentences):

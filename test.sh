@@ -2393,6 +2393,12 @@ check "prompt ai: truncated upstream answer -> 502 (never served to users)" "502
 UT28B=$(curl -s -X POST $B28/api/auth/register -H 'Content-Type: application/json' -d '{"email":"pwlong@example.com","password":"password123"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 PW_LONG=$(curl -s -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28B" -H 'Content-Type: application/json' -d '{"idea":"LONGPROMPT please"}' | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const p=(JSON.parse(s).prompt||'');console.log(p.length<=480 && p.endsWith('.') ? 'ok:'+p.length : 'bad:'+p.length)}catch(e){console.log('bad:parse')}})")
 check "prompt ai: over-long answer trimmed to <=480 at a sentence end" "ok" "$(echo "$PW_LONG" | cut -d: -f1)"
+ST_UNAUTH=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/prompt/story -H 'Content-Type: application/json' -d '{"idea":"a boy and a lost kite"}')
+check "prompt story: unauthenticated -> 401" "401" "$ST_UNAUTH"
+ST_OK=$(curl -s -X POST $B28/api/prompt/story -H "Authorization: Bearer $UT28B" -H 'Content-Type: application/json' -d '{"idea":"a boy and a lost kite"}')
+check "prompt story: idea broken into >=3 clips of <=480 chars" "yes" "$(echo $ST_OK | python3 -c 'import sys,json;c=json.load(sys.stdin).get("clips",[]);print("yes" if len(c)>=3 and all(40<=len(x)<=480 for x in c) else "no")')"
+ST_FAIL=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/prompt/story -H "Authorization: Bearer $UT28B" -H 'Content-Type: application/json' -d '{"idea":"FAILME story please"}')
+check "prompt story: upstream failure -> 502" "502" "$ST_FAIL"
 # daily cap is 3 on this instance: two more good writes pass, the 4th is 429
 curl -s -o /dev/null -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"a red kite over the beach"}'
 curl -s -o /dev/null -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"a train crossing a bridge"}'
