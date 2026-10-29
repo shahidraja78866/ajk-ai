@@ -237,6 +237,8 @@
       .voice-btn.listening, .tool-btn.listening{ background:#dc2626; color:#fff; border-color:transparent; animation:voicePulse 1.2s ease-out infinite; }
       @keyframes voicePulse{ 0%{ box-shadow:0 0 0 0 rgba(220,38,38,.45);} 100%{ box-shadow:0 0 0 14px rgba(220,38,38,0);} }
       .voice-status{ font-size:13px; opacity:.85; }
+      .voice-status.writing{ font-weight:700; opacity:1; }
+      #prompt.writing{ border-color:#8b5cf6; box-shadow:0 0 0 3px rgba(139,92,246,.35); }
       .tool-btn[hidden]{ display:none; }
       .tool-btn{
         background:none; border:1px solid var(--line); color:var(--muted);
@@ -2927,6 +2929,7 @@
           voice_busy_retry: { en: "AI is busy — trying once more…", ur: "AI ابھی مصروف ہے — ایک بار پھر کوشش ہو رہی ہے…" },
           voice_write_failed: { en: "AI couldn't write it just now — your words are safe in the box. Tap the AI button to try again.", ur: "AI ابھی لکھ نہیں سکا — آپ کی بات خانے میں محفوظ ہے۔ AI والا بٹن دبا کر دوبارہ کوشش کریں۔" },
           voice_written: { en: "AI wrote the full prompt below.", ur: "AI نے مکمل پرامپٹ لکھ دیا ہے۔" },
+          voice_slow: { en: "Still writing — the free AI can take a few more seconds. Please wait…", ur: "ابھی لکھ رہا ہے — مفت نظام میں چند سیکنڈ اور لگ سکتے ہیں۔ تھوڑا انتظار کریں…" },
           format_label: { en: "Format", ur: "فارمیٹ" },
           length_label: { en: "Length", ur: "دورانیہ" },
           auto_label: { en: "Auto", ur: "خودکار" },
@@ -4619,6 +4622,33 @@
            (502/503/network) it waits and retries ONCE by itself — the
            free Gemini tier is briefly busy at times, and the user should
            not have to notice or tap again. */
+        /* Writing-state UI (2026-10-29): the free AI takes ~10 seconds
+           to write a prompt. A fading toast alone made users think
+           nothing was happening (owner's phone tests), so while a write
+           is in flight the prompt box glows and a bold status line stays
+           under it until the write settles; after 8s the status switches
+           to a "still writing, please wait" message. */
+        var writeSlowTimer = null;
+        function writeUiStart() {
+          promptEl.classList.add("writing");
+          var s = $("#voiceStatus");
+          if (s) { s.textContent = t("voice_writing"); s.classList.add("writing"); }
+          clearTimeout(writeSlowTimer);
+          writeSlowTimer = setTimeout(function () {
+            var s2 = $("#voiceStatus");
+            if (s2 && promptEl.classList.contains("writing")) s2.textContent = t("voice_slow");
+          }, 8000);
+        }
+        function writeUiEnd() {
+          clearTimeout(writeSlowTimer);
+          promptEl.classList.remove("writing");
+          var s = $("#voiceStatus");
+          if (s) s.classList.remove("writing");
+        }
+        function writeStatusText(msg) {
+          var s = $("#voiceStatus");
+          if (s) s.textContent = msg;
+        }
         function aiWritePrompt(idea, attempt) {
           var modeCard = document.querySelector(".mode-card.sel");
           var selMode = modeCard ? modeCard.getAttribute("data-mode") : "realistic";
@@ -4643,11 +4673,14 @@
             if (aiBtn.disabled) return;
             aiBtn.disabled = true;
             toast("AI is writing your prompt…");
+            writeUiStart();
             aiWritePrompt(v).then(function (p) {
+              writeUiEnd();
               aiBtn.disabled = false;
-              if (!p) { showError(t("voice_write_failed")); return; }
+              if (!p) { writeStatusText(t("voice_write_failed")); showError(t("voice_write_failed")); return; }
               promptEl.value = p;
               promptEl.dispatchEvent(new Event("input"));
+              writeStatusText(t("voice_written"));
               toast("AI wrote your prompt — edit it if you like, then press Generate.");
               promptEl.focus();
             });
@@ -4686,11 +4719,12 @@
           var voiceWriting = false;
           function voiceWritePrompt(idea) {
             if (!token) { toast(t("voice_signin")); voiceStatus(t("voice_signin")); return; }
-            if (!(cfg && cfg.prompt_ai && cfg.prompt_ai.configured)) { toast(t("voice_typed")); return; }
+            if (!(cfg && cfg.prompt_ai && cfg.prompt_ai.configured)) { toast(t("voice_typed")); voiceStatus(t("voice_typed")); return; }
             voiceWriting = true;
             toast(t("voice_writing"));
-            voiceStatus(t("voice_writing"));
+            writeUiStart();
             aiWritePrompt(idea).then(function (p) {
+              writeUiEnd();
               voiceWriting = false;
               if (!p) { voiceStatus(t("voice_write_failed")); showError(t("voice_write_failed")); return; }
               promptEl.value = p;
