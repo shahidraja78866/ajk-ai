@@ -2894,6 +2894,7 @@
           prompt_label: { en: "Prompt", ur: "پرامپٹ" },
           prompt_ph: { en: "Describe your imagination…", ur: "اپنے تخیل کی وضاحت کریں…" },
           enhance_prompt: { en: "Add detail", ur: "تفصیل شامل کریں" },
+          prompt_ai_write: { en: "AI: write my prompt", ur: "AI سے پرامپٹ لکھوائیں" },
           format_label: { en: "Format", ur: "فارمیٹ" },
           length_label: { en: "Length", ur: "دورانیہ" },
           auto_label: { en: "Auto", ur: "خودکار" },
@@ -3909,6 +3910,16 @@
             if (res.ok && res.data) {
               cfg = res.data;
               renderControls(cfg);
+              // AI prompt writer (2026-10-29): when the server has it
+              // configured, the canned "Add detail" button becomes the
+              // real AI writer (its click handler branches on cfg).
+              if (cfg.prompt_ai && cfg.prompt_ai.configured) {
+                var eSpan = $("#enhanceBtn [data-i18n]");
+                if (eSpan) {
+                  eSpan.setAttribute("data-i18n", "prompt_ai_write");
+                  if (typeof applyLanguage === "function") applyLanguage(uiLang);
+                }
+              }
               if (cfg.app_version !== undefined && cfg.app_version !== null) {
                 $("#appVersionLine").textContent = "AJK AI · Version " + cfg.app_version;
               }
@@ -4573,6 +4584,30 @@
         var enhanceIdx = 0;
         $("#enhanceBtn").addEventListener("click", function () {
           var v = promptEl.value.trim();
+          // AI prompt writer (2026-10-29): when configured server-side,
+          // this button sends the rough idea to the AI writer and drops
+          // the full written prompt back into the box for editing.
+          if (cfg && cfg.prompt_ai && cfg.prompt_ai.configured) {
+            if (!v) { showError("Write a short idea first — AI will write the full prompt from it."); promptEl.focus(); return; }
+            hideError();
+            var aiBtn = $("#enhanceBtn");
+            if (aiBtn.disabled) return;
+            aiBtn.disabled = true;
+            toast("AI is writing your prompt…");
+            var modeCard = document.querySelector(".mode-card.sel");
+            var selMode = modeCard ? modeCard.getAttribute("data-mode") : "realistic";
+            api("/api/prompt/write", { method: "POST", body: { idea: v, mode: selMode } }).then(function (res) {
+              aiBtn.disabled = false;
+              if (!res.ok) { showError(errText(res, "AI prompt writing failed")); return; }
+              if (res.data && res.data.prompt) {
+                promptEl.value = res.data.prompt;
+                promptEl.dispatchEvent(new Event("input"));
+                toast("AI wrote your prompt — edit it if you like, then press Generate.");
+                promptEl.focus();
+              }
+            });
+            return;
+          }
           if (!v) { showError("Write a short prompt first, then enhance it."); promptEl.focus(); return; }
           hideError();
           if (v.length > 440) { toast("Prompt is nearly full — no room to enhance."); return; }
