@@ -153,6 +153,10 @@ const CONFIG = {
   promptAiBase: (process.env.PROMPT_AI_API_BASE || 'https://generativelanguage.googleapis.com').replace(/\/+$/, ''),
   promptWriteDailyCap: Number(process.env.PROMPT_WRITE_DAILY_CAP || 20),
   promptWriteGlobalDailyCap: Number(process.env.PROMPT_WRITE_GLOBAL_DAILY_CAP || 1000),
+  // Owner directive 2026-11-04: the first promptWriteDailyCap AI prompts
+  // per user per day are free; every prompt after that costs this many
+  // credits (charged only on success, never on an upstream failure).
+  promptWriteExtraCredits: Number(process.env.PROMPT_WRITE_EXTRA_CREDITS || 3),
   // Manual payment destinations for credit-pack purchases, shown to buyers
   // on the Buy Credits page. Only the methods actually set in the
   // environment are exposed (via /api/config as payment_methods).
@@ -1308,6 +1312,8 @@ const MIGRATIONS = [
       user_id INTEGER NOT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );` },
+  { version: 27, up: `
+    ALTER TABLE prompt_writes ADD COLUMN credits_charged INTEGER NOT NULL DEFAULT 0;` },
 ];
 {
   const applied = new Set(db.prepare('SELECT version FROM schema_migrations').all().map(r => r.version));
@@ -2220,7 +2226,7 @@ app.get('/api/config', (req, res) => res.json({
   // AI prompt writer (2026-10-29): flag + cap only, never the key. The
   // app turns the canned "Add detail" button into the real AI writer
   // only when this is configured.
-  prompt_ai: { configured: !!CONFIG.geminiApiKey, daily_cap: CONFIG.promptWriteDailyCap },
+  prompt_ai: { configured: !!CONFIG.geminiApiKey, daily_cap: CONFIG.promptWriteDailyCap, extra_cost: CONFIG.promptWriteExtraCredits },
   // Voice system (Phase B): which TTS providers are configured (booleans
   // only, never keys), the voice catalog for the CONFIGURED providers,
   // and the locked credit costs of the voice add-ons. When no provider is
@@ -3844,7 +3850,39 @@ function promptUsageFor(userId) {
   const used = Number(db.prepare(
     `SELECT COUNT(*) AS c FROM prompt_writes WHERE user_id = ? AND date(created_at) = date('now')`).get(userId).c);
   const cap = CONFIG.promptWriteDailyCap;
-  return { used, cap, remaining: Math.max(0, cap - used) };
+  return { used, cap, remaining: Math.max(0, cap - used), extra_cost: CONFIG.promptWriteExtraCredits };
+}
+
+// Shared gate for the three AI prompt endpoints (write / story / image).
+// The first promptWriteDailyCap writes of the day are free; beyond that,
+// each write costs promptWriteExtraCredits credits (owner directive
+// 2026-11-04). Returns { extraCost } — the amount to settle AFTER a
+// successful write — or sends the error response and returns null.
+// A failed upstream write is never charged and never counted.
+function promptWriteGate(req, res, busyMessage) {
+  const globalCount = Number(db.prepare(
+    `SELECT COUNT(*) AS c FROM prompt_writes WHERE date(created_at) = date('now')`).get().c);
+  if (globalCount >= CONFIG.promptWriteGlobalDailyCap) {
+    res.status(429).json({ error: busyMessage });
+    return null;
+  }
+  const mine = Number(db.prepare(
+    `SELECT COUNT(*) AS c FROM prompt_writes WHERE user_id = ? AND date(created_at) = date('now')`).get(req.user.id).c);
+  if (mine < CONFIG.promptWriteDailyCap) return { extraCost: 0 };
+  const extraCost = CONFIG.promptWriteExtraCredits;
+  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  if (!u || creditBuckets(u).total < extraCost) {
+    res.status(429).json({ error: `Daily free AI prompt limit reached (${CONFIG.promptWriteDailyCap} per day). Extra prompts cost ${extraCost} credits each — your credit balance is too low. The free limit resets tomorrow.` });
+    return null;
+  }
+  return { extraCost };
+}
+function settlePromptWrite(userId, extraCost) {
+  if (extraCost > 0) {
+    const u = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+    if (u) spendBuckets(u, extraCost);
+  }
+  db.prepare('INSERT INTO prompt_writes (user_id, credits_charged) VALUES (?, ?)').run(userId, extraCost);
 }
 
 app.get('/api/prompt/usage', auth, (req, res) => {
@@ -3861,18 +3899,12 @@ app.post('/api/prompt/write', auth, promptWriteLimiter, async (req, res) => {
   if (moderated(idea))
     return res.status(400).json({ error: 'This idea was blocked by content moderation. Please rephrase it.' });
   const mode = String(b.mode || '').toLowerCase() === 'cartoon' ? 'cartoon' : 'realistic';
-  const mine = db.prepare(
-    `SELECT COUNT(*) AS c FROM prompt_writes WHERE user_id = ? AND date(created_at) = date('now')`).get(req.user.id).c;
-  if (Number(mine) >= CONFIG.promptWriteDailyCap)
-    return res.status(429).json({ error: `Daily AI prompt limit reached (${CONFIG.promptWriteDailyCap} per day). It resets tomorrow.` });
-  const globalCount = db.prepare(
-    `SELECT COUNT(*) AS c FROM prompt_writes WHERE date(created_at) = date('now')`).get().c;
-  if (Number(globalCount) >= CONFIG.promptWriteGlobalDailyCap)
-    return res.status(429).json({ error: 'AI prompt writing is busy right now — please try again later.' });
+  const gate = promptWriteGate(req, res, 'AI prompt writing is busy right now — please try again later.');
+  if (!gate) return;
   try {
     const prompt = await writePromptWithGemini(idea, mode);
-    db.prepare('INSERT INTO prompt_writes (user_id) VALUES (?)').run(req.user.id);
-    return res.json({ prompt, usage: promptUsageFor(req.user.id) });
+    settlePromptWrite(req.user.id, gate.extraCost);
+    return res.json({ prompt, usage: promptUsageFor(req.user.id), credits_charged: gate.extraCost });
   } catch (e) {
     console.error('prompt write failed:', e.message);
     return res.status(502).json({ error: 'The AI prompt writer could not answer just now. Please try again in a moment.' });
@@ -3884,8 +3916,9 @@ app.post('/api/prompt/write', auth, promptWriteLimiter, async (req, res) => {
 // Breaks an idea/story into a sequence of self-contained prompts, ONE
 // per 10-second clip (3-6 clips), with the same characters and setting
 // described identically in every clip so the joined story stays
-// consistent. Free for users; shares the prompt_writes daily caps with
-// the single-prompt writer (one row per call, however many clips).
+// consistent. Shares the prompt_writes daily allowance with the
+// single-prompt writer (one row per call, however many clips): the
+// first daily-cap writes are free, later ones cost extra credits.
 const STORY_WRITER_SYSTEM =
   'You are the story writer inside an AI text-to-video app. The user gives a story idea in any language (often Urdu or English). ' +
   'Break the story into a sequence of scenes, ONE scene per 10-second video clip, between 3 and 6 clips. ' +
@@ -3958,18 +3991,12 @@ app.post('/api/prompt/story', auth, promptWriteLimiter, async (req, res) => {
   if (moderated(idea))
     return res.status(400).json({ error: 'This idea was blocked by content moderation. Please rephrase it.' });
   const mode = String(b.mode || '').toLowerCase() === 'cartoon' ? 'cartoon' : 'realistic';
-  const mine = db.prepare(
-    `SELECT COUNT(*) AS c FROM prompt_writes WHERE user_id = ? AND date(created_at) = date('now')`).get(req.user.id).c;
-  if (Number(mine) >= CONFIG.promptWriteDailyCap)
-    return res.status(429).json({ error: `Daily AI prompt limit reached (${CONFIG.promptWriteDailyCap} per day). It resets tomorrow.` });
-  const globalCount = db.prepare(
-    `SELECT COUNT(*) AS c FROM prompt_writes WHERE date(created_at) = date('now')`).get().c;
-  if (Number(globalCount) >= CONFIG.promptWriteGlobalDailyCap)
-    return res.status(429).json({ error: 'AI story writing is busy right now — please try again later.' });
+  const gate = promptWriteGate(req, res, 'AI story writing is busy right now — please try again later.');
+  if (!gate) return;
   try {
     const clips = await writeStoryWithGemini(idea, mode);
-    db.prepare('INSERT INTO prompt_writes (user_id) VALUES (?)').run(req.user.id);
-    return res.json({ clips, usage: promptUsageFor(req.user.id) });
+    settlePromptWrite(req.user.id, gate.extraCost);
+    return res.json({ clips, usage: promptUsageFor(req.user.id), credits_charged: gate.extraCost });
   } catch (e) {
     console.error('story write failed:', e.message);
     return res.status(502).json({ error: 'The AI story writer could not answer just now. Please try again in a moment.' });
@@ -4053,18 +4080,12 @@ app.post('/api/prompt/image', express.json({ limit: '8mb' }), auth, promptWriteL
   const note = String(b.note ?? '').trim().slice(0, 300);
   if (note && moderated(note))
     return res.status(400).json({ error: 'This request was blocked by content moderation. Please rephrase it.' });
-  const mine = db.prepare(
-    `SELECT COUNT(*) AS c FROM prompt_writes WHERE user_id = ? AND date(created_at) = date('now')`).get(req.user.id).c;
-  if (Number(mine) >= CONFIG.promptWriteDailyCap)
-    return res.status(429).json({ error: `Daily AI prompt limit reached (${CONFIG.promptWriteDailyCap} per day). It resets tomorrow.` });
-  const globalCount = db.prepare(
-    `SELECT COUNT(*) AS c FROM prompt_writes WHERE date(created_at) = date('now')`).get().c;
-  if (Number(globalCount) >= CONFIG.promptWriteGlobalDailyCap)
-    return res.status(429).json({ error: 'AI prompt writing is busy right now — please try again later.' });
+  const gate = promptWriteGate(req, res, 'AI prompt writing is busy right now — please try again later.');
+  if (!gate) return;
   try {
     const prompt = await writeImagePromptWithGemini(mime, data, note);
-    db.prepare('INSERT INTO prompt_writes (user_id) VALUES (?)').run(req.user.id);
-    return res.json({ prompt, usage: promptUsageFor(req.user.id) });
+    settlePromptWrite(req.user.id, gate.extraCost);
+    return res.json({ prompt, usage: promptUsageFor(req.user.id), credits_charged: gate.extraCost });
   } catch (e) {
     console.error('image prompt write failed:', e.message);
     return res.status(502).json({ error: 'The AI could not look at this image just now. Please try again in a moment.' });

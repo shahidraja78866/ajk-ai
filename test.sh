@@ -2373,7 +2373,7 @@ GSTUB_PID=$!
 B28=http://127.0.0.1:18068
 rm -f /tmp/myvideoai-promptai-on-test.db
 env DB_PATH=/tmp/myvideoai-promptai-on-test.db PORT=18068 FAL_KEY=dummy_test_key "$PW_JWT_NAME=promptai-instance-dummy-value" \
-  GEMINI_API_KEY=test-gemini-key PROMPT_AI_API_BASE=http://127.0.0.1:$GEMINI_STUB_PORT PROMPT_WRITE_DAILY_CAP=3 \
+  GEMINI_API_KEY=test-gemini-key PROMPT_AI_API_BASE=http://127.0.0.1:$GEMINI_STUB_PORT PROMPT_WRITE_DAILY_CAP=3 PROMPT_WRITE_EXTRA_CREDITS=3 \
   node "$(dirname "$0")/server.js" > /tmp/myvideoai-promptai-on-test.log 2>&1 &
 SRV28_PID=$!
 for i in $(seq 1 40); do curl -s -o /dev/null $B28/api/health && break || sleep 0.25; done
@@ -2415,13 +2415,35 @@ IP_FAIL=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/prompt/image -
 check "prompt image: upstream failure -> 502" "502" "$IP_FAIL"
 IP_BIG=$(python3 -c 'import json,sys; sys.stdout.write(json.dumps({"image_base64":"data:image/jpeg;base64,"+"A"*160000,"note":"a big photo"}))' | curl -s -X POST $B28/api/prompt/image -H "Authorization: Bearer $UT28C" -H 'Content-Type: application/json' --data @-)
 check "prompt image: real-size photo body (>100kb) accepted, not a parser 500" "yes" "$(echo $IP_BIG | python3 -c 'import sys,json;p=json.load(sys.stdin).get("prompt","");print("yes" if p.startswith("IMAGE PROMPT:") else "no")')"
-# daily cap is 3 on this instance: two more good writes pass, the 4th is 429
+# daily FREE cap is 3 on this instance: two more good writes pass free (total 3)
 curl -s -o /dev/null -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"a red kite over the beach"}'
 curl -s -o /dev/null -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"a train crossing a bridge"}'
-PW_CAP=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"one idea too many today"}')
-check "prompt ai: 4th write over daily cap 3 -> 429" "429" "$PW_CAP"
 PU_LEFT0=$(curl -s $B28/api/prompt/usage -H "Authorization: Bearer $UT28")
-check "prompt usage: 0 left after the daily cap is reached" "yes" "$(echo $PU_LEFT0 | python3 -c 'import sys,json;d=json.load(sys.stdin);print("yes" if d.get("used")==3 and d.get("remaining")==0 else "no")')"
+check "prompt usage: 0 free left after the daily free cap is reached" "yes" "$(echo $PU_LEFT0 | python3 -c 'import sys,json;d=json.load(sys.stdin);print("yes" if d.get("used")==3 and d.get("remaining")==0 and d.get("extra_cost")==3 else "no")')"
+# beyond the free cap, a write costs 3 credits (owner directive 2026-11-04)
+PW_PAID=$(curl -s -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"one more idea today"}')
+check "prompt ai: write beyond free cap succeeds as a paid write (3 credits)" "yes" "$(echo $PW_PAID | python3 -c 'import sys,json;d=json.load(sys.stdin);print("yes" if d.get("credits_charged")==3 and d.get("usage",{}).get("used")==4 else "no")')"
+check "prompt ai: paid write deducted exactly 3 credits (1000 -> 997)" "997" "$(curl -s $B28/api/me -H "Authorization: Bearer $UT28" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+PW_PAID_FAIL=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"FAILME beyond the cap"}')
+check "prompt ai: failed paid write -> 502 and no charge" "502" "$PW_PAID_FAIL"
+check "prompt ai: balance unchanged after the failed paid write" "997" "$(curl -s $B28/api/me -H "Authorization: Bearer $UT28" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+# insufficient balance beyond the free cap -> 429 with the price in the message
+B29=http://127.0.0.1:18101
+rm -f /tmp/myvideoai-promptpaid-test.db
+env DB_PATH=/tmp/myvideoai-promptpaid-test.db PORT=18101 FAL_KEY=dummy_test_key "$PW_JWT_NAME=promptpaid-instance-dummy-value" \
+  GEMINI_API_KEY=promptpaid-dummy-key PROMPT_AI_API_BASE=http://127.0.0.1:18197 PROMPT_WRITE_DAILY_CAP=1 PROMPT_WRITE_EXTRA_CREDITS=3 SIGNUP_CREDITS=2 \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-promptpaid-test.log 2>&1 &
+SRV29_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B29/api/health && break || sleep 0.25; done
+UT29=$(curl -s -X POST $B29/api/auth/register -H 'Content-Type: application/json' -d '{"email":"pwpoor@example.com","password":"password123"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+PW29_FREE=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B29/api/prompt/write -H "Authorization: Bearer $UT29" -H 'Content-Type: application/json' -d '{"idea":"a cat in my garden"}')
+check "prompt paid: the one free write passes on the poor instance" "200" "$PW29_FREE"
+PW29_POOR=$(curl -s -X POST $B29/api/prompt/write -H "Authorization: Bearer $UT29" -H 'Content-Type: application/json' -d '{"idea":"another idea please"}')
+PW29_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B29/api/prompt/write -H "Authorization: Bearer $UT29" -H 'Content-Type: application/json' -d '{"idea":"another idea please"}')
+check "prompt paid: balance 2 < cost 3 beyond free cap -> 429" "429" "$PW29_CODE"
+check "prompt paid: 429 message names the extra-prompt price" "yes" "$(echo $PW29_POOR | python3 -c 'import sys,json;e=json.load(sys.stdin).get("error","");print("yes" if "Extra prompts cost 3 credits" in e else "no")')"
+check "prompt paid: poor user balance untouched (still 2)" "2" "$(curl -s $B29/api/me -H "Authorization: Bearer $UT29" | python3 -c 'import sys,json;print(json.load(sys.stdin)["credits"])')"
+kill $SRV29_PID 2>/dev/null
 kill $SRV28_PID $GSTUB_PID 2>/dev/null
 
 echo "--- Phase J: Seedance 2.5 premium engine (stub instance) ---"
