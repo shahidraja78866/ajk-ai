@@ -2975,6 +2975,8 @@
           enhance_prompt: { en: "Add detail", ur: "تفصیل شامل کریں" },
           prompt_ai_write: { en: "AI: write my prompt", ur: "AI سے پرامپٹ لکھوائیں" },
           prompt_usage_left: { en: "Free AI prompts: {left} left today (limit {cap} a day) — no video credits used", ur: "مفت AI پرومپٹ: آج {left} باقی (روزانہ حد {cap}) — ویڈیو کریڈٹ نہیں کٹتے" },
+          prompt_usage_paid: { en: "Today's {cap} free AI prompts are used — extra prompts cost {cost} credits each", ur: "آج کے {cap} مفت AI پرومپٹ ختم — اضافی پرومپٹ پر {cost} کریڈٹ لگیں گے" },
+          prompt_paid_note: { en: "{cost} credits charged — today's free AI prompts are used up", ur: "{cost} کریڈٹ کٹے — آج کے مفت AI پرومپٹ ختم ہو گئے تھے" },
           voice_create: { en: "Speak to create", ur: "بول کر بنائیں" },
           voice_listening: { en: "Listening… speak now", ur: "سن رہا ہوں… بولیے" },
           voice_writing: { en: "AI is writing your prompt…", ur: "AI پرامپٹ لکھ رہا ہے…" },
@@ -4758,7 +4760,12 @@
           $$(".promptUsageLine").forEach(function (el) {
             if (!u) { el.hidden = true; return; }
             el.hidden = false;
-            el.textContent = t("prompt_usage_left").replace("{left}", u.remaining).replace("{cap}", u.cap);
+            if (u.remaining > 0) {
+              el.textContent = t("prompt_usage_left").replace("{left}", u.remaining).replace("{cap}", u.cap);
+            } else {
+              var cost = (typeof u.extra_cost === "number") ? u.extra_cost : ((cfg && cfg.prompt_ai && cfg.prompt_ai.extra_cost) || 3);
+              el.textContent = t("prompt_usage_paid").replace("{cap}", u.cap).replace("{cost}", cost);
+            }
           });
         }
         function applyPromptUsage(u) {
@@ -4774,7 +4781,7 @@
           var modeCard = document.querySelector(".mode-card.sel");
           var selMode = modeCard ? modeCard.getAttribute("data-mode") : "realistic";
           return api("/api/prompt/write", { method: "POST", body: { idea: idea, mode: selMode } }).then(function (res) {
-            if (res.ok && res.data && res.data.prompt) { applyPromptUsage(res.data.usage); return res.data.prompt; }
+            if (res.ok && res.data && res.data.prompt) { applyPromptUsage(res.data.usage); if (res.data.credits_charged) toast(t("prompt_paid_note").replace("{cost}", res.data.credits_charged)); return res.data.prompt; }
             if (!attempt && (res.status === 502 || res.status === 503 || res.network)) {
               toast(t("voice_busy_retry"));
               return new Promise(function (resolve) { setTimeout(resolve, 4000); }).then(function () { return aiWritePrompt(idea, 1); });
@@ -4982,6 +4989,7 @@
             writeUiEnd();
             if (res.ok && res.data && res.data.prompt) {
               applyPromptUsage(res.data.usage);
+              if (res.data.credits_charged) toast(t("prompt_paid_note").replace("{cost}", res.data.credits_charged));
               promptEl.value = res.data.prompt;
               promptEl.dispatchEvent(new Event("input"));
               writeStatusText(t("voice_written"));
@@ -5004,7 +5012,7 @@
           var modeCard = document.querySelector(".mode-card.sel");
           var selMode = modeCard ? modeCard.getAttribute("data-mode") : "realistic";
           return api("/api/prompt/story", { method: "POST", body: { idea: idea, mode: selMode } }).then(function (res) {
-            if (res.ok && res.data && res.data.clips && res.data.clips.length) { applyPromptUsage(res.data.usage); return res.data.clips; }
+            if (res.ok && res.data && res.data.clips && res.data.clips.length) { applyPromptUsage(res.data.usage); if (res.data.credits_charged) toast(t("prompt_paid_note").replace("{cost}", res.data.credits_charged)); return res.data.clips; }
             if (!attempt && (res.status === 502 || res.status === 503 || res.network)) {
               toast(t("voice_busy_retry"));
               return new Promise(function (resolve) { setTimeout(resolve, 4000); }).then(function () { return storyApi(idea, 1); });
