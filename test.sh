@@ -2384,6 +2384,11 @@ PW_UNAUTH=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/prompt/write
 check "prompt ai: unauthenticated -> 401" "401" "$PW_UNAUTH"
 PW_OK=$(curl -s -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"میرے گاؤں میں بارش ہو رہی ہے"}')
 check "prompt ai: urdu idea expanded by the writer" "yes" "$(echo $PW_OK | python3 -c 'import sys,json;p=json.load(sys.stdin).get("prompt","");print("yes" if p.startswith("EXPANDED PROMPT:") and "بارش" in p else "no")')"
+check "prompt ai: write response carries usage (used 1 of cap 3, 2 left)" "yes" "$(echo $PW_OK | python3 -c 'import sys,json;u=json.load(sys.stdin).get("usage",{});print("yes" if u.get("used")==1 and u.get("cap")==3 and u.get("remaining")==2 else "no")')"
+PU_UNAUTH=$(curl -s -o /dev/null -w '%{http_code}' $B28/api/prompt/usage)
+check "prompt usage: unauthenticated -> 401" "401" "$PU_UNAUTH"
+PU_OK=$(curl -s $B28/api/prompt/usage -H "Authorization: Bearer $UT28")
+check "prompt usage: endpoint reports used/cap/remaining for today" "yes" "$(echo $PU_OK | python3 -c 'import sys,json;d=json.load(sys.stdin);print("yes" if d.get("configured")==True and d.get("used")==1 and d.get("cap")==3 and d.get("remaining")==2 else "no")')"
 PW_SHORT=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"ab"}')
 check "prompt ai: 2-char idea -> 400" "400" "$PW_SHORT"
 PW_FAIL=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"FAILME please"}')
@@ -2415,6 +2420,8 @@ curl -s -o /dev/null -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT
 curl -s -o /dev/null -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"a train crossing a bridge"}'
 PW_CAP=$(curl -s -o /dev/null -w '%{http_code}' -X POST $B28/api/prompt/write -H "Authorization: Bearer $UT28" -H 'Content-Type: application/json' -d '{"idea":"one idea too many today"}')
 check "prompt ai: 4th write over daily cap 3 -> 429" "429" "$PW_CAP"
+PU_LEFT0=$(curl -s $B28/api/prompt/usage -H "Authorization: Bearer $UT28")
+check "prompt usage: 0 left after the daily cap is reached" "yes" "$(echo $PU_LEFT0 | python3 -c 'import sys,json;d=json.load(sys.stdin);print("yes" if d.get("used")==3 and d.get("remaining")==0 else "no")')"
 kill $SRV28_PID $GSTUB_PID 2>/dev/null
 
 echo "--- Phase J: Seedance 2.5 premium engine (stub instance) ---"

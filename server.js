@@ -3837,6 +3837,20 @@ async function writePromptWithGemini(idea, mode) {
   throw lastErr;
 }
 
+// Per-user AI prompt usage for today — the customer-facing daily limit
+// (owner directive 2026-11-04: the 20/day free-prompt limit must be
+// clearly visible to the customer, not only revealed when it is hit).
+function promptUsageFor(userId) {
+  const used = Number(db.prepare(
+    `SELECT COUNT(*) AS c FROM prompt_writes WHERE user_id = ? AND date(created_at) = date('now')`).get(userId).c);
+  const cap = CONFIG.promptWriteDailyCap;
+  return { used, cap, remaining: Math.max(0, cap - used) };
+}
+
+app.get('/api/prompt/usage', auth, (req, res) => {
+  return res.json({ configured: !!CONFIG.geminiApiKey, ...promptUsageFor(req.user.id) });
+});
+
 app.post('/api/prompt/write', auth, promptWriteLimiter, async (req, res) => {
   if (!CONFIG.geminiApiKey)
     return res.status(503).json({ error: 'prompt_ai_not_configured', message: 'AI prompt writing is not switched on yet.' });
@@ -3858,7 +3872,7 @@ app.post('/api/prompt/write', auth, promptWriteLimiter, async (req, res) => {
   try {
     const prompt = await writePromptWithGemini(idea, mode);
     db.prepare('INSERT INTO prompt_writes (user_id) VALUES (?)').run(req.user.id);
-    return res.json({ prompt });
+    return res.json({ prompt, usage: promptUsageFor(req.user.id) });
   } catch (e) {
     console.error('prompt write failed:', e.message);
     return res.status(502).json({ error: 'The AI prompt writer could not answer just now. Please try again in a moment.' });
@@ -3955,7 +3969,7 @@ app.post('/api/prompt/story', auth, promptWriteLimiter, async (req, res) => {
   try {
     const clips = await writeStoryWithGemini(idea, mode);
     db.prepare('INSERT INTO prompt_writes (user_id) VALUES (?)').run(req.user.id);
-    return res.json({ clips });
+    return res.json({ clips, usage: promptUsageFor(req.user.id) });
   } catch (e) {
     console.error('story write failed:', e.message);
     return res.status(502).json({ error: 'The AI story writer could not answer just now. Please try again in a moment.' });
@@ -4050,7 +4064,7 @@ app.post('/api/prompt/image', express.json({ limit: '8mb' }), auth, promptWriteL
   try {
     const prompt = await writeImagePromptWithGemini(mime, data, note);
     db.prepare('INSERT INTO prompt_writes (user_id) VALUES (?)').run(req.user.id);
-    return res.json({ prompt });
+    return res.json({ prompt, usage: promptUsageFor(req.user.id) });
   } catch (e) {
     console.error('image prompt write failed:', e.message);
     return res.status(502).json({ error: 'The AI could not look at this image just now. Please try again in a moment.' });
