@@ -261,6 +261,8 @@
       .voice-langs button.sel{ background:var(--accent-grad); color:#fff; border-color:transparent; }
       .voice-status{ font-size:13px; opacity:.85; }
       .voice-status.writing{ font-weight:700; opacity:1; }
+      .prompt-usage{ font-size:12.5px; opacity:.75; margin-top:6px; }
+      .prompt-usage[hidden]{ display:none; }
       #prompt.writing{ border-color:#8b5cf6; box-shadow:0 0 0 3px rgba(139,92,246,.35); }
       .tool-btn[hidden]{ display:none; }
       .tool-btn{
@@ -1523,6 +1525,8 @@
                 <span class="voice-status" id="voiceStatus" role="status"></span>
               </div>
 
+              <div class="prompt-usage promptUsageLine" hidden></div>
+
               <div class="story-panel" id="storyPanel" hidden>
                 <div class="story-head">
                   <strong data-i18n="story_title">Your story in 10-second clips</strong>
@@ -2260,6 +2264,7 @@
                 <button type="button" class="tool-btn" data-example="A paper boat sailing down a rainy city street at night, neon reflections on wet pavement, tracking shot">Try: paper boat</button>
                 <button type="button" class="tool-btn" data-example="Fresh bread being sliced on a wooden table in a sunlit bakery, steam rising, close-up, warm tones">Try: bakery</button>
               </div>
+              <div class="prompt-usage promptUsageLine" hidden></div>
 
               <div class="field-label"><span data-i18n="video_mode">Video mode</span></div>
               <div class="mode-grid mode-compact" id="modeGrid" role="group" aria-label="Video mode">
@@ -2969,6 +2974,7 @@
           prompt_ph: { en: "Describe your imagination…", ur: "اپنے تخیل کی وضاحت کریں…" },
           enhance_prompt: { en: "Add detail", ur: "تفصیل شامل کریں" },
           prompt_ai_write: { en: "AI: write my prompt", ur: "AI سے پرامپٹ لکھوائیں" },
+          prompt_usage_left: { en: "Free AI prompts: {left} left today (limit {cap} a day) — no video credits used", ur: "مفت AI پرومپٹ: آج {left} باقی (روزانہ حد {cap}) — ویڈیو کریڈٹ نہیں کٹتے" },
           voice_create: { en: "Speak to create", ur: "بول کر بنائیں" },
           voice_listening: { en: "Listening… speak now", ur: "سن رہا ہوں… بولیے" },
           voice_writing: { en: "AI is writing your prompt…", ur: "AI پرامپٹ لکھ رہا ہے…" },
@@ -3293,6 +3299,7 @@
           if (typeof setAuthMode === "function" && typeof authMode !== "undefined") setAuthMode(authMode);
           if (typeof renderLangLab === "function" && typeof cfg !== "undefined" && cfg) renderLangLab();
           if (typeof renderModels === "function" && typeof cfg !== "undefined" && cfg) renderModels();
+          if (typeof renderPromptUsage === "function") renderPromptUsage();
         }
         function applyTheme(theme) {
           uiTheme = theme === "light" ? "light" : "dark";
@@ -4102,6 +4109,7 @@
         }
         function setSignedInUI() {
           var signed = !!token;
+          if (typeof refreshPromptUsage === "function") refreshPromptUsage();
           $("#authBtn").style.display = signed ? "none" : "inline-flex";
           $("#avatarBtn").classList.toggle("show", signed);
           $("#creditsChip").classList.toggle("show", signed);
@@ -4737,11 +4745,36 @@
           var s = $("#voiceStatus");
           if (s) s.textContent = msg;
         }
+        /* ---------- AI prompt daily-limit display (2026-11-04) ----------
+           The free AI prompt writer has a per-user daily cap; the owner
+           requires that limit to be VISIBLE to the customer, not only
+           revealed by an error after it is reached. The server reports
+           {used, cap, remaining} on /api/prompt/usage and on every
+           successful write/story/image response; we render it under
+           both prompt tool rows and keep it fresh. */
+        var lastPromptUsage = null;
+        function renderPromptUsage() {
+          var u = lastPromptUsage;
+          $$(".promptUsageLine").forEach(function (el) {
+            if (!u) { el.hidden = true; return; }
+            el.hidden = false;
+            el.textContent = t("prompt_usage_left").replace("{left}", u.remaining).replace("{cap}", u.cap);
+          });
+        }
+        function applyPromptUsage(u) {
+          if (u && typeof u.remaining === "number" && typeof u.cap === "number") { lastPromptUsage = u; renderPromptUsage(); }
+        }
+        function refreshPromptUsage() {
+          if (!token || !(cfg && cfg.prompt_ai && cfg.prompt_ai.configured)) { lastPromptUsage = null; renderPromptUsage(); return; }
+          api("/api/prompt/usage").then(function (res) {
+            if (res.ok && res.data) applyPromptUsage(res.data);
+          });
+        }
         function aiWritePrompt(idea, attempt) {
           var modeCard = document.querySelector(".mode-card.sel");
           var selMode = modeCard ? modeCard.getAttribute("data-mode") : "realistic";
           return api("/api/prompt/write", { method: "POST", body: { idea: idea, mode: selMode } }).then(function (res) {
-            if (res.ok && res.data && res.data.prompt) return res.data.prompt;
+            if (res.ok && res.data && res.data.prompt) { applyPromptUsage(res.data.usage); return res.data.prompt; }
             if (!attempt && (res.status === 502 || res.status === 503 || res.network)) {
               toast(t("voice_busy_retry"));
               return new Promise(function (resolve) { setTimeout(resolve, 4000); }).then(function () { return aiWritePrompt(idea, 1); });
@@ -4948,6 +4981,7 @@
           api("/api/prompt/image", { method: "POST", body: { image_base64: state.imageDataUrl, note: promptEl.value.trim() } }).then(function (res) {
             writeUiEnd();
             if (res.ok && res.data && res.data.prompt) {
+              applyPromptUsage(res.data.usage);
               promptEl.value = res.data.prompt;
               promptEl.dispatchEvent(new Event("input"));
               writeStatusText(t("voice_written"));
@@ -4970,7 +5004,7 @@
           var modeCard = document.querySelector(".mode-card.sel");
           var selMode = modeCard ? modeCard.getAttribute("data-mode") : "realistic";
           return api("/api/prompt/story", { method: "POST", body: { idea: idea, mode: selMode } }).then(function (res) {
-            if (res.ok && res.data && res.data.clips && res.data.clips.length) return res.data.clips;
+            if (res.ok && res.data && res.data.clips && res.data.clips.length) { applyPromptUsage(res.data.usage); return res.data.clips; }
             if (!attempt && (res.status === 502 || res.status === 503 || res.network)) {
               toast(t("voice_busy_retry"));
               return new Promise(function (resolve) { setTimeout(resolve, 4000); }).then(function () { return storyApi(idea, 1); });
