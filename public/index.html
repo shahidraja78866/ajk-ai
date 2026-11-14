@@ -6380,6 +6380,24 @@
           keys.forEach(function (k) {
             var dt = document.createElement("dt"); dt.textContent = METHOD_LABELS[k] || k;
             var dd = document.createElement("dd"); dd.className = "mono"; dd.textContent = methods[k];
+            if (k === "bank") {
+              var raw = String(methods[k] || "");
+              var mIban = raw.match(/[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}/);
+              var mParen = raw.match(/\(([^)]*)\)/);
+              if (mIban && mParen) {
+                var parts = mParen[1].split(/[،,]/).map(function (s) { return s.trim(); }).filter(Boolean);
+                var accTitle = parts[0] || "";
+                var bankName = parts.length > 1 ? parts[parts.length - 1] : "";
+                dd.textContent = ""; dd.className = "";
+                function bankLine(txt, cls) { var d = document.createElement("div"); if (cls) d.className = cls; d.textContent = txt; return d; }
+                if (bankName) dd.appendChild(bankLine("Bank: " + bankName));
+                if (accTitle) dd.appendChild(bankLine("Account Title: " + accTitle));
+                dd.appendChild(bankLine("IBAN: " + mIban[0], "mono"));
+                var hint = bankLine("Send via Raast / IBFT from any bank app, Easypaisa or JazzCash.", "");
+                hint.style.cssText = "color:var(--muted);font-size:12px;margin-top:2px;";
+                dd.appendChild(hint);
+              }
+            }
             dl.appendChild(dt); dl.appendChild(dd);
           });
           box.appendChild(dl);
