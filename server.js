@@ -101,6 +101,13 @@ const CONFIG = {
   // Because the price matches the standard rate card exactly, character
   // generations are charged the standard rate with NO surcharge.
   modelRef: (process.env.FAL_MODEL_REF || 'minimax/h3/reference-to-video').trim(),
+  // Speed upgrade (owner directive, 2026-11-15): optional FAST-LANE model
+  // for plain text-to-video Draft jobs — Draft is the quick-preview
+  // product, so it is the natural home for a verified fast endpoint.
+  // Set FAL_MODEL_FAST only to an endpoint whose schema and price have
+  // been verified (engine roadmap, speed section); unset (the default)
+  // keeps Draft on the standard model at 480P, exactly as before.
+  modelFast: (process.env.FAL_MODEL_FAST || '').trim(),
   resolution: process.env.FAL_RESOLUTION || '768P',
   aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'],
   durations: [5, 10],                       // seconds in ONE provider call (fal H3 schema cap)
@@ -4206,6 +4213,20 @@ app.post('/api/generate/plan', auth, generateLimiter, async (req, res) => {
 
 
 // ---------- Generation (idempotent + atomic charge) ----------
+// fal queue submit URL for ASYNC generation jobs. When the app has a
+// public https base URL (production), a fal completion webhook is
+// attached so fal notifies us the moment a render finishes instead of
+// the client discovering it on a later poll (fal docs: the webhook URL
+// rides on the queue submit as the `fal_webhook` query parameter).
+// Local/test setups keep the plain URL and the poll path, unchanged.
+function falQueueSubmitUrl(model) {
+  const base = `${CONFIG.falQueueBase}/${model}`;
+  const hook = (CONFIG.publicBaseUrl || '').trim();
+  if (/^https:\/\//i.test(hook))
+    return `${base}?fal_webhook=${encodeURIComponent(`${hook}/api/fal/webhook`)}`;
+  return base;
+}
+
 app.post('/api/generate', auth, generateLimiter, async (req, res) => {
   const { prompt, duration = 5, language = 'en' } = req.body || {};
   let aspect_ratio = req.body?.aspect_ratio || '16:9';
@@ -4609,7 +4630,8 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
   if (isDraft) {
     resolution = '480P';
     model = character ? CONFIG.modelRef
-          : sourceImagePath ? CONFIG.modelI2V : CONFIG.model;
+          : sourceImagePath ? CONFIG.modelI2V
+          : (CONFIG.modelFast || CONFIG.model);
   }
   // Speaking override (Phase E): the one-step Gemini Omni route at 720p.
   // The structural gates above guarantee no character/image/draft/add-ons
@@ -4768,7 +4790,7 @@ app.post('/api/generate', auth, generateLimiter, async (req, res) => {
         enable_safety_checker: true };
   lastFalBody = falBody; // test hook (recorded only, never sent anywhere else)
   try {
-    const r = await fetch(`${CONFIG.falQueueBase}/${model}`, {
+    const r = await fetch(falQueueSubmitUrl(model), {
       method: 'POST',
       headers: { 'Authorization': `Key ${FAL_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(falBody),
@@ -5184,18 +5206,18 @@ async function ensureTwentyChain(job) {
   return db.prepare('SELECT * FROM generations WHERE id = ?').get(job.id) || job;
 }
 
-app.get('/api/generations/:id', auth, async (req, res) => {
-  const job = db.prepare(
-    `SELECT g.*, c.name AS character_name FROM generations g
-     LEFT JOIN characters c ON c.id = g.character_id
-     WHERE g.id = ? AND g.user_id = ?`)
-    .get(req.params.id, req.user.id);
-  if (!job) return res.status(404).json({ error: 'Generation not found.' });
+// Advance one generation as far as its current provider state allows and
+// return the row to present. This is the single completion path: the
+// client's status poll (GET /api/generations/:id) and the fal completion
+// webhook both drive it, so post-steps (20s chain, sound, voice, mute,
+// watermark) start the moment the provider finishes — whichever signal
+// arrives first. Every step inside is claim-guarded or idempotent, so
+// the poll and the webhook may safely race.
+async function advanceGeneration(job, base) {
   if (job.status === 'completed') {
     // Pending post steps (e.g. the completing poll was interrupted) still
     // run — sound first, then the auto voice route, then the watermark, so
     // all three can apply to one video.
-    const base = CONFIG.publicBaseUrl || `${req.protocol}://${req.get('host')}`;
     if (job.sound_status === 'pending')
       await ensureSoundApplied(job, base);
     if (job.auto_voice_status === 'pending')
@@ -5204,10 +5226,10 @@ app.get('/api/generations/:id', auth, async (req, res) => {
     // voice step and before the watermark.
     if (job.mute_status === 'pending')
       await ensureMuteApplied(job);
-    return res.json(publicGenerationRow(await ensureWatermarkApplied(job)));
+    return await ensureWatermarkApplied(job);
   }
   if (job.status === 'failed' || !job.fal_request_id)
-    return res.json(publicGenerationRow(job));
+    return job;
   // 20s chain restart-resume: the chain was claimed (chain_stage
   // 'extending') but the process died before it settled. Part 1's URL
   // is stashed on the row, so the chain finishes right here without
@@ -5217,21 +5239,20 @@ app.get('/api/generations/:id', auth, async (req, res) => {
     if (job.video_url) {
       const chained = await ensureTwentyChain(job);
       if (chained.status !== 'completed')
-        return res.json(publicGenerationRow(chained));
-      const base = CONFIG.publicBaseUrl || `${req.protocol}://${req.get('host')}`;
+        return chained;
       if (chained.sound_status === 'pending')
         await ensureSoundApplied(chained, base);
       if (chained.auto_voice_status === 'pending')
         await ensureAutoVoiceApplied(chained, base);
       if (chained.mute_status === 'pending')
         await ensureMuteApplied(chained);
-      return res.json(publicGenerationRow(await ensureWatermarkApplied(chained)));
+      return await ensureWatermarkApplied(chained);
     }
     // Claimed but part 1's URL never landed — nothing deliverable can
     // be recovered, so fail safe to a full refund (exactly once).
     failAndRefund(job.id, 'The 20-second video could not be completed.');
     const fresh = db.prepare('SELECT * FROM generations WHERE id = ?').get(job.id);
-    return res.json(publicGenerationRow(fresh || job));
+    return fresh || job;
   }
   const jobModel = job.model || CONFIG.model; // jobs remember their routed model
   try {
@@ -5260,20 +5281,19 @@ app.get('/api/generations/:id', auth, async (req, res) => {
               // A parallel poll claimed the chain first — report the
               // current state; that poll is finishing the job.
               const cur = db.prepare('SELECT * FROM generations WHERE id = ?').get(job.id);
-              return res.json(publicGenerationRow(cur || job));
+              return cur || job;
             }
             job.chain_stage = 'extending'; job.video_url = url;
             const chained = await ensureTwentyChain(job);
             if (chained.status !== 'completed')
-              return res.json(publicGenerationRow(chained));
-            const base = CONFIG.publicBaseUrl || `${req.protocol}://${req.get('host')}`;
+              return chained;
             if (chained.sound_status === 'pending')
               await ensureSoundApplied(chained, base);
             if (chained.auto_voice_status === 'pending')
               await ensureAutoVoiceApplied(chained, base);
             if (chained.mute_status === 'pending')
               await ensureMuteApplied(chained);
-            return res.json(publicGenerationRow(await ensureWatermarkApplied(chained)));
+            return await ensureWatermarkApplied(chained);
           }
           db.prepare(`UPDATE generations SET status = 'completed', video_url = ?,
                       updated_at = datetime('now') WHERE id = ?`).run(url, job.id);
@@ -5282,7 +5302,6 @@ app.get('/api/generations/:id', auth, async (req, res) => {
           // client sees the completed video: applied, or honestly marked
           // failed_refunded with the video still delivered (the add-on
           // is refunded inside ensureSoundApplied).
-          const base = CONFIG.publicBaseUrl || `${req.protocol}://${req.get('host')}`;
           if (job.sound_status === 'pending')
             await ensureSoundApplied(job, base);
           // If the confirmed auto plan routed dialogue to a voice, run
@@ -5297,19 +5316,52 @@ app.get('/api/generations/:id', auth, async (req, res) => {
           // If this job asked for a watermark, post-process BEFORE the
           // client sees the completed video (applied or honestly failed).
           if (job.watermark_text && job.watermark_status === 'pending')
-            return res.json(publicGenerationRow(await ensureWatermarkApplied(job)));
+            return await ensureWatermarkApplied(job);
           const fresh = db.prepare(
             `SELECT g.*, c.name AS character_name FROM generations g
              LEFT JOIN characters c ON c.id = g.character_id WHERE g.id = ?`)
             .get(job.id);
-          return res.json(publicGenerationRow(fresh || job));
+          return fresh || job;
         }
       }
       // fal's queue reports failures via the result payload; a non-2xx status
       // check is handled below by leaving the job in progress for the next poll.
     }
   } catch { /* network hiccup — keep last known status; frontend polls again */ }
-  res.json(publicGenerationRow(job));
+  return job;
+}
+
+app.get('/api/generations/:id', auth, async (req, res) => {
+  const job = db.prepare(
+    `SELECT g.*, c.name AS character_name FROM generations g
+     LEFT JOIN characters c ON c.id = g.character_id
+     WHERE g.id = ? AND g.user_id = ?`)
+    .get(req.params.id, req.user.id);
+  if (!job) return res.status(404).json({ error: 'Generation not found.' });
+  const base = CONFIG.publicBaseUrl || `${req.protocol}://${req.get('host')}`;
+  const row = await advanceGeneration(job, base);
+  return res.json(publicGenerationRow(row || job));
+});
+
+// fal completion webhook (speed upgrade, 2026-11-15). fal POSTs
+// { request_id, status, payload } here when an async queue job ends.
+// The payload is NEVER trusted: the job is advanced through
+// advanceGeneration, which re-fetches status and result from fal with
+// our own key — a forged call can at most trigger a status check.
+// We answer 200 immediately (fal retries slow or non-2xx responses)
+// and process in the background; the client's poll remains as the
+// fallback if a webhook is ever missed.
+app.post('/api/fal/webhook', (req, res) => {
+  res.status(200).json({ ok: true });
+  try {
+    const requestId = req.body?.request_id;
+    if (!requestId) return;
+    const job = db.prepare('SELECT * FROM generations WHERE fal_request_id = ?')
+      .get(String(requestId));
+    if (!job || job.status === 'completed' || job.status === 'failed') return;
+    advanceGeneration(job, CONFIG.publicBaseUrl || '')
+      .catch(e => console.error('fal webhook advance failed:', e.message));
+  } catch (e) { console.error('fal webhook error:', e.message); }
 });
 
 app.get('/api/history', auth, (req, res) => {
@@ -6054,8 +6106,13 @@ async function runFalQueueJob(model, body, timeoutMs = 600000) {
   const requestId = sd?.request_id;
   if (!requestId) throw new Error('fal.ai did not return a request id');
   const deadline = Date.now() + timeoutMs;
+  let firstCheck = true;
   while (Date.now() < deadline) {
-    await new Promise(r => setTimeout(r, CONFIG.falPollMs));
+    // The first status check runs immediately — fast jobs (Whisper
+    // captions, short voice renders) often finish before one poll
+    // interval has passed; later checks keep the configured interval.
+    if (!firstCheck) await new Promise(r => setTimeout(r, CONFIG.falPollMs));
+    firstCheck = false;
     const sr = await fetch(`${CONFIG.falQueueBase}/${model}/requests/${requestId}/status`,
       { headers: { 'Authorization': `Key ${FAL_KEY}` }, signal: AbortSignal.timeout(15000) });
     if (!sr.ok) continue;
@@ -7231,7 +7288,7 @@ app.post('/api/generations/:id/upgrade', auth, generateLimiter, async (req, res)
         enable_safety_checker: true };
   lastFalBody = falBody;
   try {
-    const r = await fetch(`${CONFIG.falQueueBase}/${model}`, {
+    const r = await fetch(falQueueSubmitUrl(model), {
       method: 'POST',
       headers: { 'Authorization': `Key ${FAL_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(falBody),

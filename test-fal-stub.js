@@ -118,7 +118,7 @@ http.createServer((req, res) => {
     req.on('end', () => {
       let body = null;
       try { body = JSON.parse(raw || '{}'); } catch { body = null; }
-      calls.push({ path: u.pathname, body });
+      calls.push({ path: u.pathname, query: u.search, body });
       if (TTS_PATHS.has(u.pathname)) {
         const text = String(body?.prompt || body?.text || '');
         if (text.includes('FAILME')) { res.writeHead(500); return res.end('stub TTS failure'); }

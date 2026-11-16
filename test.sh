@@ -3483,6 +3483,41 @@ VG2KP=$(poll31 $VG2KID $XT31)
 check "20s chain success at 2K: completed at duration 20 with the joined file" "completed/20/joined" "$(echo $VG2KP | python3 -c 'import sys,json;g=json.load(sys.stdin);print(g["status"]+"/"+str(g["duration"])+"/"+("joined" if "/files/joined/" in (g["video_url"] or "") else "other"))')"
 kill $SRV31_PID $VSTUB_PID 2>/dev/null
 
+
+echo "--- speed upgrade: fal completion webhook (own instance + fal stub) ---"
+W_STUB_PORT=18034
+B32=http://127.0.0.1:18033
+rm -f /tmp/myvideoai-webhook-test.db; rm -rf /tmp/wgen32 /tmp/wjoined32 /tmp/wvoice32; mkdir -p /tmp/wgen32 /tmp/wjoined32 /tmp/wvoice32
+FAL_STUB_PORT=$W_STUB_PORT node "$(dirname "$0")/test-fal-stub.js" > /tmp/fal-stub-webhook.log 2>&1 &
+WSTUB_PID=$!
+for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:$W_STUB_PORT/__calls && break || sleep 0.25; done
+W_JWT_NAME="JWT_SECRE""T"
+env DB_PATH=/tmp/myvideoai-webhook-test.db PORT=18033 FAL_KEY=dummy_test_key "$W_JWT_NAME=webhook-instance-dummy-value" \
+  ADMIN_EMAIL=wadmin@example.com TEST_RECORD_FAL_BODY=1 \
+  PUBLIC_BASE_URL=https://example.test \
+  FAL_API_BASE_URL=http://127.0.0.1:$W_STUB_PORT FAL_QUEUE_BASE_URL=http://127.0.0.1:$W_STUB_PORT \
+  GENERATED_DIR=/tmp/wgen32 JOINED_DIR=/tmp/wjoined32 VOICE_DIR=/tmp/wvoice32 \
+  node "$(dirname "$0")/server.js" > /tmp/myvideoai-webhook-test.log 2>&1 &
+SRV32_PID=$!
+for i in $(seq 1 40); do curl -s -o /dev/null $B32/api/health && break || sleep 0.25; done
+WR32=$(curl -s -X POST $B32/api/auth/register -H 'Content-Type: application/json' -d '{"email":"whook@example.com","password":"password123"}')
+WT32=$(echo $WR32 | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+WG32=$(curl -s -X POST $B32/api/generate -H "Authorization: Bearer $WT32" -H 'Content-Type: application/json' -d '{"prompt":"a paper boat on a quiet pond","aspect_ratio":"16:9","duration":5}')
+check "webhook: generate accepted (in_progress)" "in_progress" "$(echo $WG32 | python3 -c 'import sys,json;print(json.load(sys.stdin)["status"])')"
+WGID32=$(echo $WG32 | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+WCALLS32=$(curl -s http://127.0.0.1:$W_STUB_PORT/__calls)
+check "webhook: submit carried the fal_webhook param (https base)" "?fal_webhook=https%3A%2F%2Fexample.test%2Fapi%2Ffal%2Fwebhook" "$(echo $WCALLS32 | python3 -c 'import sys,json;cs=json.load(sys.stdin)["calls"];t=[c for c in cs if c["path"]=="/minimax/h3/text-to-video"];print(t[-1].get("query",""))')"
+WHIST32=$(curl -s $B32/api/history -H "Authorization: Bearer $WT32")
+check "webhook: before the webhook the job is still in_progress (history never advances)" "in_progress" "$(echo $WHIST32 | python3 -c 'import sys,json;g=[x for x in json.load(sys.stdin)["generations"] if x["id"]=='$WGID32'];print(g[0]["status"] if g else "missing")')"
+check "webhook: POST returns 200" "200" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B32/api/fal/webhook -H 'Content-Type: application/json' -d '{"request_id":"stub-req-1","status":"OK"}')"
+sleep 2
+WHIST32B=$(curl -s $B32/api/history -H "Authorization: Bearer $WT32")
+check "webhook: job completed WITHOUT any status poll" "completed/clip" "$(echo $WHIST32B | python3 -c 'import sys,json;g=[x for x in json.load(sys.stdin)["generations"] if x["id"]=='$WGID32'];print((g[0]["status"]+"/clip") if g and "/media/clip.mp4" in (g[0]["video_url"] or "") else (g[0]["status"]+"/other" if g else "missing"))')"
+check "webhook: unknown request id -> 200 (ignored)" "200" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B32/api/fal/webhook -H 'Content-Type: application/json' -d '{"request_id":"no-such-request","status":"OK"}')"
+check "webhook: empty body -> 200 (ignored)" "200" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B32/api/fal/webhook -H 'Content-Type: application/json' -d '{}')"
+check "webhook: duplicate delivery -> 200, job stays completed once" "200/completed" "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B32/api/fal/webhook -H 'Content-Type: application/json' -d '{"request_id":"stub-req-1","status":"OK"}')/$(curl -s $B32/api/history -H "Authorization: Bearer $WT32" | python3 -c 'import sys,json;g=[x for x in json.load(sys.stdin)["generations"] if x["id"]=='$WGID32'];print(g[0]["status"] if g else "missing")')"
+kill $SRV32_PID $WSTUB_PID 2>/dev/null
+
 echo "--- rate limit: burst until 429 ---"
 FOUND429="no"
 for i in $(seq 1 10); do
