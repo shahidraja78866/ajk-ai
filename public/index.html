@@ -5488,7 +5488,7 @@
               if (res.data.credits_left !== undefined) setCredits(res.data.credits_left);
               setStage("submit", "done");
               setStage("render", "active");
-              setProgress(30, "Job " + res.data.id + " accepted (" + (res.data.status || "queued") + ") — polling every 4s…");
+              setProgress(30, "Job " + res.data.id + " accepted (" + (res.data.status || "queued") + ") — polling every 2s…");
               state.pollCount = 0;
               state.pollTimer = setTimeout(pollTick, 2000);
             });
@@ -5667,7 +5667,7 @@
             if (!state.generating) return; // user stopped watching
             if (res.network) {
               setProgress(34, "Lost contact with the backend — retrying…");
-              state.pollTimer = setTimeout(pollTick, 4000);
+              state.pollTimer = setTimeout(pollTick, 2000);
               return;
             }
             if (!res.ok || !res.data) {
@@ -5723,14 +5723,14 @@
             }
             state.pollCount++;
             var pct = Math.min(88, 30 + state.pollCount * 4);
-            setProgress(pct, "Status: " + (g.status || "processing") + " — checking again in 4s…");
-            if (state.pollCount > 150) {
+            setProgress(pct, "Status: " + (g.status || "processing") + " — checking again in 2s…");
+            if (state.pollCount > 300) {
               setGenerating(false);
               showResult("warn", "Still rendering",
                 "This job is taking longer than usual. It keeps running on the server — check History in a little while for the finished video.", "Job " + id);
               return;
             }
-            state.pollTimer = setTimeout(pollTick, 4000);
+            state.pollTimer = setTimeout(pollTick, 2000);
           });
         }
         $("#generateBtn").addEventListener("click", onGenerate);
