@@ -785,30 +785,33 @@ image-to-video jobs.
 
 ## Speaking engine — one-step talking videos (Phase E, Gemini Omni)
 
-The talking-clip route is now a real engine: **Gemini Omni Flash 1.1**
-on fal (`google/gemini-omni-flash/v1.1/text-to-video`, configurable via
+The talking-clip route is now a real engine: **Gemini Omni Flash 1.2**
+on fal (`google/gemini-omni-flash/v1.2/text-to-video`, configurable via
 `FAL_MODEL_OMNI`). It generates the video **with synchronized native
 audio and dialogue in one step** from a single prompt — no separate
-TTS or lip-sync pass.
+TTS or lip-sync pass. (Migrated from v1.1 on 2026-11-24, ahead of
+Google's 2026-12-03 auto-route of v1.1 requests to 1.2; the v1.2
+schema is field-identical to v1.1.)
 
 **Why not Veo?** The plan flag is still called `can_veo`, but the Veo
 talking-clip engine was **never wired** — it existed only as an
 entitlement flag. Google is retiring Veo 3.1 (its preview model IDs
 shut down 2026-10-22 and the GA IDs are flagged for retirement from
 2026-11-17), and Omni is Google's designated successor on fal. At the
-flat 50-credit speaking price, Veo's $0.40/s would also have lost
+flat 250-credit speaking price, Veo's $0.40/s would also have lost
 money on longer clips; Omni at 720p does not (see the cost check).
 
-**Verified schema** (fal's own llms.txt for the endpoint, 2026-10-23).
+**Verified schema** (fal's own llms.txt for the v1.2 endpoint, 2026-11-24).
 The request body has exactly four fields — anything else is a bug:
 `prompt` (string, required; carries the dialogue text the user wrote),
 `aspect_ratio` (`"16:9"` | `"9:16"` only, default `"16:9"`),
 `resolution` (`"360p"` | `"720p"` | `"1080p"` | `"4k"`, default
 `"720p"` — the app routes `"720p"` and records the job as `720P`), and
-`duration` (integer 3–10, default 8 — the app sends its usual 5 or 10).
+`duration` (integer 3–15 upstream, default 8 — the app sends only its
+usual 5 or 10; 15s is deliberately not enabled on cost grounds).
 There is **no** safety-checker or audio-toggle field, so none is sent.
 Output is `{ video: File }`. Prices (fal, per second of output): 360p
-$0.03, 720p $0.10, 1080p $0.15, 4K $0.30.
+$0.0273, 720p $0.0819, 1080p $0.1229, 4K $0.2457.
 
 **How it is sold.** Flat **250 credits** per clip (5s or 10s — the
 owner's final Kling-aligned speaking rate, 2026-10-26), **Pro and

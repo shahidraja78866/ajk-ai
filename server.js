@@ -340,28 +340,35 @@ const CONFIG = {
   // config flag off; the analyzer itself remains available for the Studio.
   autoDirectorEnabled: process.env.AUTO_DIRECTOR_ENABLED !== '0',
   autoDirectorVersion: 1,
-  // --- Speaking engine (Phase E: Gemini Omni Flash 1.1) -------------------
+  // --- Speaking engine (Phase E: Gemini Omni Flash 1.2) -------------------
   // One-step talking-video engine on fal: the endpoint below generates the
   // video WITH synchronized native audio/dialogue from one prompt (fal tags
   // it "lipsync"). Schema verified against fal's own llms.txt for
-  // google/gemini-omni-flash/v1.1/text-to-video (2026-10-23): the request
+  // google/gemini-omni-flash/v1.2/text-to-video (2026-11-24): the request
   // body has exactly four fields — prompt (string, required), aspect_ratio
   // ("16:9" | "9:16", default "16:9"), resolution ("360p" | "720p" |
-  // "1080p" | "4k", default "720p") and duration (integer 3-10, default 8).
+  // "1080p" | "4k", default "720p") and duration (integer 3-15 upstream,
+  // default 8; this app still routes only 5s and 10s — 15s is deliberately
+  // NOT enabled: at $0.0819/s a 15s clip costs ≈ $1.23 ≈ Rs 341, which
+  // would eat almost the whole flat price's floor revenue).
   // There is NO safety-checker or audio-toggle field, so none is sent.
   // Output is { video: File }. Prices (fal, per second of output): 360p
-  // $0.03, 720p $0.10, 1080p $0.15, 4K $0.30 — a 10s clip at our routed
-  // 720p costs $1.00 ≈ Rs 277, safely inside the flat 250-credit price
-  // (floor revenue Rs 350 at the cheapest Rs 1.40/credit). Dialogue
+  // $0.0273, 720p $0.0819, 1080p $0.1229, 4K $0.2457 — a 10s clip at our
+  // routed 720p costs $0.82 ≈ Rs 227, safely inside the flat 250-credit
+  // price (floor revenue Rs 350 at the cheapest Rs 1.40/credit). Dialogue
   // languages are NOT stated by fal — Urdu speech on this engine is
-  // UNVERIFIED and is never promised to users. This engine REPLACES the
+  // UNVERIFIED and is never promised to users. Migrated from v1.1 ahead of
+  // Google's 2026-12-03 auto-route (v1.1 requests route to 1.2 from that
+  // date) on the owner's instruction, 2026-11-24; the v1.2 schema is
+  // field-identical to v1.1, and a real-money sample test on fal top-up
+  // day remains the production proof. This engine REPLACES the
   // Veo talking-clip route, which was never wired: Google is retiring
   // Veo 3.1 (preview IDs shut down 2026-10-22; GA IDs flagged for
   // retirement from 2026-11-17) and Omni is its designated successor on
   // fal. The plan entitlement keeps its historical flag name (can_veo);
   // it now gates THIS engine. Flat price: 250 credits (owner's final
   // Kling-aligned rate, 2026-10-26), for both our durations (5s and 10s).
-  modelOmni: (process.env.FAL_MODEL_OMNI || 'google/gemini-omni-flash/v1.1/text-to-video').trim(),
+  modelOmni: (process.env.FAL_MODEL_OMNI || 'google/gemini-omni-flash/v1.2/text-to-video').trim(),
   speakingCost: 250,
   speakingAspects: ['16:9', '9:16'],
   speakingResolution: '720p',
